@@ -130,6 +130,9 @@ export function previewEnv(
           ![
             'ULTIMATE_SUPERVISED',
             'ULTIMATE_PUBLIC_URL',
+            'ULTIMATE_HOST',
+            'ULTIMATE_ALLOWED_ORIGIN',
+            'ULTIMATE_PROXY_ORIGIN',
             'ULTIMATE_GENERATION',
             'ULTIMATE_PREVIOUS_BUILD',
             'ULTIMATE_HOME',

@@ -21,10 +21,38 @@ import { dashboard } from './dashboard.ts'
 
 const ultimateRoot = resolvePath(fileURLToPath(new URL('..', import.meta.url)))
 const { values, positionals } = parseArgs({
-  options: { port: { type: 'string' }, 'no-open': { type: 'boolean' } },
+  options: {
+    port: { type: 'string' },
+    host: { type: 'string' },
+    'allowed-origin': { type: 'string' },
+    'proxy-origin': { type: 'string' },
+    'no-open': { type: 'boolean' },
+  },
   allowPositionals: true,
 })
-if (positionals.length > 1) throw new Error('Usage: ultimate [dir] [--port N] [--no-open]')
+if (positionals.length > 1)
+  throw new Error(
+    'Usage: ultimate [dir] [--port N] [--host 127.0.0.1|0.0.0.0] [--allowed-origin URL] [--proxy-origin URL] [--no-open]',
+  )
+const host = values.host ?? process.env.ULTIMATE_HOST ?? '127.0.0.1'
+if (host !== '127.0.0.1' && host !== '0.0.0.0')
+  throw new Error('Invalid host: expected 127.0.0.1 or 0.0.0.0')
+const allowedOrigin = values['allowed-origin'] ?? process.env.ULTIMATE_ALLOWED_ORIGIN
+if (allowedOrigin !== undefined) {
+  const url = new URL(allowedOrigin)
+  if (host !== '0.0.0.0' || url.protocol !== 'http:' || url.origin !== allowedOrigin)
+    throw new Error('Allowed origin requires --host 0.0.0.0 and a full HTTP origin without a path')
+}
+const proxyOrigin = values['proxy-origin'] ?? process.env.ULTIMATE_PROXY_ORIGIN
+if (proxyOrigin !== undefined) {
+  const url = new URL(proxyOrigin)
+  // The proxy rule trusts whatever reaches the listener with that Host and Origin, so only a loopback listener keeps
+  // network clients from going around the proxy and its access control.
+  if (host !== '127.0.0.1' || url.protocol !== 'https:' || url.origin !== proxyOrigin)
+    throw new Error(
+      'Proxy origin requires the default loopback host and a full HTTPS origin without a path',
+    )
+}
 const opening = !values['no-open'] && process.env.ULTIMATE_NO_OPEN !== '1'
 const available = (name: string) =>
   process.env.PATH?.split(':').some((path) => existsSync(join(path, name)))
@@ -189,7 +217,7 @@ try {
   await new Promise<void>((resolve, reject) => {
     const listen = () => {
       proxy.once('error', failed)
-      proxy.listen(port, '127.0.0.1', () => {
+      proxy.listen(port, host, () => {
         proxy.off('error', failed)
         resolve()
       })
@@ -212,6 +240,12 @@ const publicPort = address.port
 const publicUrl = `http://127.0.0.1:${publicPort}`
 await lock.update({ pid: process.pid, port: address.port, project: projectRoot })
 display.url(publicUrl)
+if (host === '0.0.0.0')
+  display.log(
+    'warn',
+    'supervisor',
+    'Listening on all IPv4 interfaces without authentication. Only use on a trusted network; firewall this port from untrusted clients.',
+  )
 
 type Core = {
   child: ChildProcess
@@ -290,6 +324,9 @@ function boot(previousBuild?: BuildInfo): Core {
       ULTIMATE_SUPERVISED: '1',
       ULTIMATE_GENERATION: String(++generation),
       ULTIMATE_PUBLIC_URL: publicUrl,
+      ULTIMATE_HOST: host,
+      ULTIMATE_ALLOWED_ORIGIN: allowedOrigin,
+      ULTIMATE_PROXY_ORIGIN: proxyOrigin,
       ...(previousBuild ? { ULTIMATE_PREVIOUS_BUILD: JSON.stringify(previousBuild) } : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
