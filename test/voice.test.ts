@@ -21,7 +21,7 @@ async function context(key?: string, piKey?: string) {
     getAuth: async () => (piKey ? { auth: { apiKey: piKey } } : undefined),
   }
   return {
-    host: { userHome, modelRuntime },
+    host: { userHome, modelRuntime, want: () => undefined },
     signal: new AbortController().signal,
   } as unknown as ActionContext
 }
@@ -67,7 +67,11 @@ it('without a key: status disables voice and transcribe sends nothing', async ()
   vi.stubGlobal('fetch', fetch)
   const ctx = await context()
   const reason = 'Voice needs an OpenAI API key: add OPENAI_API_KEY in ⌘K → Secrets'
-  expect(await actions.status(null, ctx)).toEqual({ available: false, reason })
+  expect(await actions.status(null, ctx)).toEqual({
+    available: false,
+    reason,
+    secret: 'OPENAI_API_KEY',
+  })
   await expect(actions.transcribe(audio, ctx)).rejects.toThrow(reason)
   expect(fetch).not.toHaveBeenCalled()
 })

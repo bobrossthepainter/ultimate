@@ -170,12 +170,14 @@ it.each(['symlinked home mid-setup', 'branch creation before registration'])(
     await writeFile(
       join(bin, 'git'),
       `#!/bin/sh
+# Remove this wrapper's directory so git resolves on the caller's original PATH.
+PATH="\${PATH#*:}"
 if [ "$1 $2" = "worktree add" ]; then
-  /usr/bin/git branch "$4" "$6" || exit 1
+  git branch "$4" "$6" || exit 1
   echo branch > '${started}'
   while [ ! -f '${gate}' ]; do sleep 0.05; done
 fi
-exec /usr/bin/git "$@"
+exec git "$@"
 `,
       { mode: 0o755 },
     )

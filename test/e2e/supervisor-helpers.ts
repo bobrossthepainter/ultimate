@@ -64,13 +64,13 @@ afterEach(async () => {
   for (const home of homes.splice(0)) await removeTemp(home)
 })
 export const copies = new Map<string, string>()
-export async function launch(home: string) {
+export async function launch(home: string, args: string[] = []) {
   const ultimateRoot = copies.get(home) ?? (await sourceCopy(home))
   copies.set(home, ultimateRoot)
   model ??= await scriptedModel(answer)
   const child = spawn(
     process.execPath,
-    [join(ultimateRoot, 'bin/ultimate.ts'), ultimateRoot, '--no-open'],
+    [join(ultimateRoot, 'bin/ultimate.ts'), ultimateRoot, '--no-open', ...args],
     {
       cwd: ultimateRoot,
       env: {
@@ -94,12 +94,14 @@ export async function launch(home: string) {
   })
   return { child, ultimateRoot, output: () => output }
 }
-export async function fixture() {
+export async function fixture(args: string[] = []) {
   const home = await temp('ultimate-supervisor-')
   homes.push(home)
-  const running = await launch(home)
-  await until(() => running.output().includes('Ultimate: http://'))
-  return { ...running, home, url: /Ultimate: (http:\/\/[^\s]+)/.exec(running.output())![1] }
+  const running = await launch(home, args)
+  // The local URL, not a reachable remote origin, which the core logs as `Ultimate: <origin> (remote)`.
+  const local = /Ultimate: (http:\/\/\S+)(?! \(remote\))(?!\S)/
+  await until(() => local.test(running.output()))
+  return { ...running, home, url: local.exec(running.output())![1] }
 }
 export async function attach(url: string) {
   const stream = await attachStream(url)
