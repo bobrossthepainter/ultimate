@@ -42,7 +42,7 @@ export async function remoteOf(host: Pick<ExtensionHost, 'projectSettings'>) {
   const remote =
     setting && typeof setting === 'object' && !Array.isArray(setting) ? setting.remote : undefined
   if (remote === undefined) return 'origin'
-  if (typeof remote !== 'string' || !/^[\w.-]+$/.test(remote))
+  if (typeof remote !== 'string' || !/^\w[\w.-]*$/.test(remote))
     throw new Error(`Invalid update.remote ${JSON.stringify(remote)}: expected a remote name`)
   return remote
 }

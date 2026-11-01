@@ -54,9 +54,9 @@ it('fetches only when the last fetch is an hour old', async () => {
   // That fetch just happened: not due, origin/main stays where it was.
   expect(await fetchIfDue(run, clone, Date.now())).toBeUndefined()
   expect((await cloneState(run, clone)).behind).toBe(0)
-  // Backdate FETCH_HEAD: due now.
+  // Backdate the stamp: due now.
   const old = new Date(Date.now() - 2 * 60 * 60_000)
-  await utimes(join(clone, '.git/FETCH_HEAD'), old, old)
+  await utimes(join(clone, '.git/ultimate-update-fetched-origin'), old, old)
   expect(await fetchIfDue(run, clone, Date.now())).toBeUndefined()
   const state = await cloneState(run, clone)
   expect(state).toMatchObject({
@@ -158,7 +158,9 @@ it('compares a fork with its upstream remote, not its origin', async () => {
   await push({ 'extensions/a/web.tsx': 'x\n' })
 
   const run = gitIn(clone)
-  expect(await fetchIfDue(run, clone, Date.now(), true, 'upstream')).toBeUndefined()
+  // A recent fetch of origin does not make upstream's look recent.
+  await fetchIfDue(run, clone, Date.now())
+  expect(await fetchIfDue(run, clone, Date.now(), false, 'upstream')).toBeUndefined()
   expect(await cloneState(run, clone)).toMatchObject({ behind: 0, ahead: 0 })
   expect(await cloneState(run, clone, 'upstream')).toMatchObject({
     behind: 1,

@@ -1,5 +1,5 @@
 /** The Ultimate clone against origin: what it lacks, what that touches, and fetching it at most hourly. */
-import { stat } from 'node:fs/promises'
+import { stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import type { Git } from '../../lib/fast-forward.ts'
 import { fetchOrigin, standing } from '../../lib/fast-forward.ts'
@@ -28,9 +28,16 @@ export async function gitPath(git: Git, root: string, name: string) {
   return isAbsolute(path) ? path : join(root, path)
 }
 
-/** When origin was last fetched into the clone (`FETCH_HEAD`'s mtime), or undefined before the first fetch. */
-export async function fetchedAt(git: Git, root: string) {
-  return stat(await gitPath(git, root, 'FETCH_HEAD')).then(
+/**
+ * The stamp of the last successful update fetch of `remote`, shared by every Ultimate on the clone. Per remote, not
+ * `FETCH_HEAD`: a fetch of origin (by hand, by the lander) must not make an upstream fetch look recent.
+ */
+const stampOf = (git: Git, root: string, remote: string) =>
+  gitPath(git, root, `ultimate-update-fetched-${remote}`)
+
+/** When `remote` was last fetched by an update check (its stamp's mtime), or undefined before the first fetch. */
+export async function fetchedAt(git: Git, root: string, remote = 'origin') {
+  return stat(await stampOf(git, root, remote)).then(
     (info) => info.mtimeMs,
     () => undefined,
   )
@@ -47,10 +54,13 @@ export async function fetchIfDue(
   force = false,
   remote = 'origin',
 ) {
-  const last = await fetchedAt(git, root)
+  const last = await fetchedAt(git, root, remote)
   if (!force && last !== undefined && now - last < FETCH_EVERY) return undefined
   return fetchOrigin(git, remote).then(
-    () => undefined,
+    async () => {
+      await writeFile(await stampOf(git, root, remote), '')
+      return undefined
+    },
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
   )
 }
@@ -92,7 +102,7 @@ export async function cloneState(
   }
 > {
   const head = await git('rev-parse', 'HEAD')
-  const at = await fetchedAt(git, root)
+  const at = await fetchedAt(git, root, remote)
   const state = await standing(git, remote)
   const result = {
     head,
