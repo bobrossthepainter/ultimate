@@ -15,9 +15,10 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { ChildMessage, SupervisorMessage } from './supervisor-protocol.ts'
 
 import { alive } from './lock.ts'
+import { networkInterfaces } from 'node:os'
 import { realpath } from 'node:fs/promises'
 import { extensionModules } from './vite-extensions.ts'
-import { admit, createAccess } from './request-security.ts'
+import { admit, createAccess, proxied } from './request-security.ts'
 import { writeProject } from './project.ts'
 import { reportCore } from './supervisor-protocol.ts'
 import { viteLogger } from './vite-logger.ts'
@@ -28,6 +29,9 @@ const send = (message: ChildMessage) => process.send?.(message)
 export interface ServerOptions extends HostOptions {
   port?: number
   publicUrl?: string
+  lan?: boolean
+  allowedOrigin?: string
+  proxyOrigin?: string
 }
 export async function prepareServer(options: Partial<ServerOptions> = {}) {
   const ultimateRoot =
@@ -190,6 +194,29 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   const address = http.address()
   if (!address || typeof address === 'string') throw new Error('No listening address')
   const url = options.publicUrl ?? `http://127.0.0.1:${address.port}`
+  if (options.lan) {
+    const port = new URL(url).port || '80'
+    const origins = new Set(options.allowedOrigin ? [options.allowedOrigin] : [])
+    for (const network of Object.values(networkInterfaces()).flat()) {
+      if (!network || network.internal || network.family !== 'IPv4') continue
+      origins.add(new URL(`http://${network.address}:${port}`).origin)
+    }
+    for (const origin of origins) {
+      access.allow({
+        origin,
+        verify: ({ headers }) => (proxied(headers) ? undefined : { login: 'local-network' }),
+      })
+      notice({ level: 'info', message: `Private-network access (no authentication): ${origin}` })
+    }
+  }
+  if (options.proxyOrigin) {
+    // The listener is loopback-only, so this Host and Origin can only arrive through the local reverse proxy.
+    access.allow({ origin: options.proxyOrigin, verify: () => ({ login: 'reverse-proxy' }) })
+    notice({
+      level: 'info',
+      message: `Reverse-proxy access (authentication is the proxy's job): ${options.proxyOrigin}`,
+    })
+  }
   system = await createSystem(
     host,
     watch,
@@ -291,7 +318,13 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
   process.on('SIGTERM', shutdown)
   if (process.env.ULTIMATE_SUPERVISED === '1' && process.send) {
     try {
-      server = await prepareServer({ port: 0, publicUrl: process.env.ULTIMATE_PUBLIC_URL })
+      server = await prepareServer({
+        port: 0,
+        publicUrl: process.env.ULTIMATE_PUBLIC_URL,
+        lan: process.env.ULTIMATE_HOST === '0.0.0.0',
+        allowedOrigin: process.env.ULTIMATE_ALLOWED_ORIGIN,
+        proxyOrigin: process.env.ULTIMATE_PROXY_ORIGIN,
+      })
       process.on('message', (message: SupervisorMessage) => {
         void (async () => {
           if (message.type === 'go' || message.type === 'reacquire') {

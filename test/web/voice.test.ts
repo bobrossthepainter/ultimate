@@ -4,6 +4,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
 import { spliced } from '../../web/src/app/queued.ts'
 
+const NO_LOGIN =
+  'Voice through ChatGPT needs your subscription: log in to “OpenAI (ChatGPT Plus/Pro)” in the model picker'
+
 const status = vi.hoisted(() => ({ data: undefined as unknown }))
 vi.mock('@/sdk', () => ({
   api: {},
@@ -15,7 +18,9 @@ vi.mock('@/sdk', () => ({
   useAction: () => ({ data: status.data, loading: false, refetch: async () => undefined }),
   useConversation: () => ({ id: 7 }),
   useEvent: () => {},
+  useEvents: () => [],
   useNow: () => 0,
+  useSystem: () => undefined,
 }))
 vi.mock('@/components/ui/tooltip', () => ({
   Tooltip: ({ children }: { children: unknown }) => children,
@@ -38,10 +43,16 @@ async function button(data: unknown) {
 
 it('dims the mic and says why while no OpenAI key is set', async () => {
   const reason = 'Voice needs an OpenAI API key: add OPENAI_API_KEY in ⌘K → Secrets'
-  const html = await button({ available: false, reason })
+  const html = await button({ available: false, reason, secret: 'OPENAI_API_KEY' })
   expect(html).toContain('data-voice="blocked"')
   expect(html).toContain('aria-disabled="true"')
   expect(html).toContain(`aria-label="${reason}"`)
+})
+
+it('dims the mic and says to log in while voice-chatgpt has no subscription login', async () => {
+  const html = await button({ available: false, reason: NO_LOGIN })
+  expect(html).toContain('data-voice="blocked"')
+  expect(html).toContain(`aria-label="${NO_LOGIN}"`)
 })
 
 it('offers the mic once a key is set', async () => {
