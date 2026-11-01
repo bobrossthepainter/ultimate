@@ -306,7 +306,12 @@ function CommentedDiff({
                     )
                   : [
                       ...all.comments,
-                      { ...commentRange(meta, mine.range), text, id: crypto.randomUUID() },
+                      // randomUUID needs a secure context; plain-HTTP network access is not one.
+                      {
+                        ...commentRange(meta, mine.range),
+                        text,
+                        id: crypto.getRandomValues(new Uint32Array(4)).join('-'),
+                      },
                     ],
               }))
               if (kept) onWrite(undefined)

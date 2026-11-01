@@ -11,8 +11,11 @@ import {
   useAction,
   useConversation,
   useEvent,
+  useEvents,
   useNow,
+  useSystem,
 } from '@/sdk'
+import { LoginChanged } from '../models/ui.tsx'
 import { StatusAction, TranscribeAction } from './refs.ts'
 
 /** Recordings stop on their own here: well under the 8 MB the server takes at any browser's bitrate. */
@@ -96,6 +99,14 @@ function VoiceButton() {
   const { id } = useConversation()
   const status = useAction(StatusAction)
   useEvent('secrets:changed', () => void status.refetch())
+  // A login or an extension switched on or off (voice-chatgpt takes over transcription) changes the status too.
+  const enabled = useSystem()
+    ?.extensions.filter((extension) => extension.enabled)
+    .map((extension) => extension.name)
+    .join()
+  const login = useEvents({ events: [LoginChanged], limit: 1 })?.[0]?.id
+  const { refetch } = status
+  useEffect(() => void refetch(), [enabled, login, refetch])
   const [recording, setRecording] = useState<Recording>()
   const [transcribing, setTranscribing] = useState(false)
   const [error, setError] = useState<string>()
@@ -186,7 +197,7 @@ function VoiceButton() {
 
   const blocked =
     unsupported() ?? (status.data?.available === false ? status.data.reason : undefined)
-  const missingKey = !unsupported() && status.data?.available === false
+  const missingKey = !unsupported() && status.data?.available === false && status.data.secret
   // Keeps the editor's focus, so a phone's keyboard neither opens nor closes under the tap.
   const keepFocus = (event: React.PointerEvent) => event.preventDefault()
 
@@ -249,7 +260,7 @@ function VoiceButton() {
             onClick={() => {
               if (transcribing || status.loading) return
               // On a phone there is no tooltip: the tap says why, and a missing key opens its row in Secrets.
-              if (missingKey) events.emit('secrets:open', { name: 'OPENAI_API_KEY' })
+              if (missingKey) events.emit('secrets:open', { name: missingKey })
               else if (blocked) setError(blocked)
               // oxlint-disable-next-line typescript/no-floating-promises -- start shows its own failures beside the button.
               else void start()

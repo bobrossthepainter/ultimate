@@ -2,6 +2,8 @@ import { defineExtension } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { readSecret } from '../../lib/secrets.ts'
+import { Transcriber } from './api.ts'
+import type { TranscriberService } from './api.ts'
 import { StatusAction, TranscribeAction } from './refs.ts'
 
 const SECRET = 'OPENAI_API_KEY'
@@ -18,7 +20,7 @@ export const secrets = [
   },
 ]
 
-type VoiceHost = Pick<ExtensionHost, 'userHome' | 'modelRuntime'>
+type VoiceHost = Pick<ExtensionHost, 'userHome' | 'modelRuntime' | 'want'>
 
 /** The OpenAI API key: the `OPENAI_API_KEY` secret, else an API key Pi's `openai` provider holds (not its OAuth login). */
 async function apiKey(host: VoiceHost, signal?: AbortSignal): Promise<string | undefined> {
@@ -30,11 +32,8 @@ async function apiKey(host: VoiceHost, signal?: AbortSignal): Promise<string | u
   return (await runtime.getAuth('openai', { signal }))?.auth.apiKey
 }
 
-/**
- * OpenAI's documented transcription endpoint; the one place that knows its URL, form fields and answer. The ChatGPT
- * login's `chatgpt.com/backend-api/transcribe` is not an option: Cloudflare challenges every request from a server.
- */
-export async function openaiTranscribe(
+/** OpenAI's documented transcription endpoint; the one place that knows its URL, form fields and answer. */
+async function openaiTranscribe(
   key: string,
   audio: Blob,
   signal: AbortSignal,
@@ -76,14 +75,36 @@ function failure(status: number, detail: string | undefined) {
   return `Transcription failed (HTTP ${status})${detail ? `: ${detail}` : ''}`
 }
 
-export default defineExtension({ name: 'voice' })
+/** Transcription with the OpenAI API key: voice's own, used while no extension provides `voice.transcriber`. */
+const byKey = (host: VoiceHost): TranscriberService => ({
+  status: async (signal) =>
+    (await apiKey(host, signal))
+      ? { available: true }
+      : { available: false, reason: NO_KEY, secret: SECRET },
+  async transcribe(audio, signal) {
+    const key = await apiKey(host, signal)
+    if (!key) throw new Error(NO_KEY)
+    const answer = await openaiTranscribe(key, audio, signal).catch((error: unknown) => {
+      if (error instanceof Error && error.name === 'TimeoutError') throw error
+      throw new Error(
+        `Transcription failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    })
+    if (answer.text === undefined) throw new Error(failure(answer.status, answer.detail))
+    return answer.text
+  },
+})
+const transcriber = (host: VoiceHost) => host.want(Transcriber) ?? byKey(host)
+
+export default (host: ExtensionHost) => {
+  host.want(Transcriber)
+  return defineExtension({ name: 'voice' })
+}
 
 export const actions = {
-  /** `{ available }`, or `{ available: false, reason }` without an OpenAI API key. */
+  /** `{ available }`, or `{ available: false, reason, secret? }` when transcription is not set up. */
   status: implementAction(StatusAction, async (_args, { host, signal }) =>
-    (await apiKey(host, signal))
-      ? { available: true as const }
-      : { available: false as const, reason: NO_KEY },
+    transcriber(host).status(signal),
   ),
   /** `{ audio, mimeType }`: base64 audio as the browser recorded it (`audio/mp4` on iOS, `audio/webm` elsewhere). */
   transcribe: implementAction(TranscribeAction, async (args, { host, signal }) => {
@@ -92,20 +113,16 @@ export const actions = {
       throw new Error('Expected { audio: base64, mimeType }')
     const bytes = Buffer.from(audio, 'base64')
     if (bytes.byteLength > MAX_AUDIO_BYTES) throw new Error(failure(413, undefined))
-    const key = await apiKey(host, signal)
-    if (!key) throw new Error(NO_KEY)
-    const answer = await openaiTranscribe(
-      key,
-      new Blob([bytes], { type: mimeType }),
-      AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]),
-    ).catch((error: unknown) => {
-      if (error instanceof Error && error.name === 'TimeoutError')
-        throw new Error('Transcription timed out: try a shorter recording')
-      throw new Error(
-        `Transcription failed: ${error instanceof Error ? error.message : String(error)}`,
+    const text = await transcriber(host)
+      .transcribe(
+        new Blob([bytes], { type: mimeType }),
+        AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]),
       )
-    })
-    if (answer.text === undefined) throw new Error(failure(answer.status, answer.detail))
-    return { text: answer.text.trim() }
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name === 'TimeoutError')
+          throw new Error('Transcription timed out: try a shorter recording')
+        throw error
+      })
+    return { text: text.trim() }
   }),
 }
