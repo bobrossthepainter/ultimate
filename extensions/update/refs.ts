@@ -17,6 +17,8 @@ export type Layers = {
 export type UpdateState = {
   /** The clone Ultimate runs from. */
   root: string
+  /** The remote it is compared with: `update.remote`, else `origin`. Absent on a preview. */
+  remote?: string
   /** Its default branch, e.g. `main`. */
   branch?: string
   /** The clone's HEAD commit. Absent on a preview, which never reads the clone. */

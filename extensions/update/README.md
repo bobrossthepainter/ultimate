@@ -2,6 +2,10 @@
 
 Keeps the Ultimate clone the host runs from (`host.ultimateRoot`, the `<self>` block's "Ultimate (running host)") current with its `origin`, by fast-forward only. On by default, so everyone hears about upstream changes; `extensions.disable: ["update"]` turns it off.
 
+## Remote
+
+The clone is compared with `origin` unless the project's `.ultimate/settings.json` names another remote: `"update": { "remote": "upstream" }`. A fork whose `origin` is its own repository (the lander pushes there, so it never lags) sets it to the repository it was forked from; that remote needs a default branch (`git remote set-head upstream --auto`). Its main then always has commits of its own, so new upstream commits show as a diverged range with **Update with @ultimate**, never Update now. Below, "origin" means the configured remote.
+
 ## Checking
 
 Every running Ultimate compares the clone with `origin/<default branch>` every 5 minutes, and 30 s after start. That comparison is local and costs nothing. It fetches origin only when the clone's last fetch is older than an hour. The last fetch is read from `.git/FETCH_HEAD`'s mtime, so several Ultimates on one clone (each project's host) fetch at most once an hour between them, and a fetch by hand counts too. The fetch uses `lib/fast-forward.ts`, which retries a GitHub origin over the other transport (SSH ↔ HTTPS), and git never prompts. Fetches, summaries and updates hold a clone-wide lock (`.git/ultimate-update.lock`, the core's SQLite-held lock from `server/lock.ts`, released with its process), and the fetch's age and the summary cache are read again under it. Previews never check, and their `state` and `update` never touch the clone.
@@ -47,7 +51,7 @@ It never stashes, rebases or resets.
 
 ## Updating with @ultimate
 
-When the clone's only refusal is a diverged branch (commits of its own plus new ones on origin) and the clone is the project this Ultimate serves, the state carries `merge` and the popover offers **Update with @ultimate** instead of the refusal. The item stays brand-coloured, not amber. `merge` (user-only) checks the state again, sends @ultimate an input naming the branch, the clone and both counts, asking for a coordinator branch that merges `origin/<branch>` with a normal merge (never a rebase, reset or force push), resolves the conflicts it safely can, asks about the rest, runs the checks and lands with `workspace submit`. It then opens @ultimate's conversation. The input is deduplicated per `<head>..<origin head>`, so a second click adds nothing.
+When the clone's only refusal is a diverged branch (commits of its own plus new ones on origin) and the clone is the project this Ultimate serves, the state carries `merge` and the popover offers **Update with @ultimate** instead of the refusal. The item stays brand-coloured, not amber. `merge` (user-only) checks the state again, sends @ultimate an input naming the branch, the clone and both counts, asking for a coordinator branch that merges `origin/<branch>` with a normal merge (never a rebase, reset or force push), follows the project's merge instructions when it has any (a skill or memory about merging upstream), resolves the conflicts it safely can, asks about the rest, runs the checks and lands with `workspace submit`. It then opens @ultimate's conversation. The input is deduplicated per `<head>..<origin head>`, so a second click adds nothing.
 
 Where the clone is not the project (a project run from a separate Ultimate clone), nothing is offered: a branch lives in the project's repository and the lander lands into the project, so it cannot merge into the clone. That clone keeps the plain refusal; merge it by hand.
 

@@ -26,5 +26,6 @@
       ]
     ],
     "push": "origin"
-  }
+  },
+  "update": { "remote": "upstream" }
 }

@@ -10,8 +10,8 @@ export function projectKey(remote: string): string | undefined {
 }
 
 /** `github.com/<owner>/<repo>` of the project's `origin`, if it is on GitHub. */
-export const githubRepo = (projectRoot: string) =>
-  git(projectRoot, 'remote', 'get-url', 'origin')
+export const githubRepo = (projectRoot: string, remote = 'origin') =>
+  git(projectRoot, 'remote', 'get-url', remote)
     .then(projectKey)
     .catch(
       () =>

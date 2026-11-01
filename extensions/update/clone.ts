@@ -40,10 +40,16 @@ export async function fetchedAt(git: Git, root: string) {
  * Fetch origin when the last fetch is older than `FETCH_EVERY`, or always with `force` (Check now); the error of a
  * failed fetch, else undefined.
  */
-export async function fetchIfDue(git: Git, root: string, now: number, force = false) {
+export async function fetchIfDue(
+  git: Git,
+  root: string,
+  now: number,
+  force = false,
+  remote = 'origin',
+) {
   const last = await fetchedAt(git, root)
   if (!force && last !== undefined && now - last < FETCH_EVERY) return undefined
-  return fetchOrigin(git).then(
+  return fetchOrigin(git, remote).then(
     () => undefined,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
   )
@@ -74,6 +80,7 @@ export async function withLock<T>(lock: string, work: () => Promise<T>): Promise
 export async function cloneState(
   git: Git,
   root: string,
+  remote = 'origin',
 ): Promise<
   Pick<
     UpdateState,
@@ -86,7 +93,7 @@ export async function cloneState(
 > {
   const head = await git('rev-parse', 'HEAD')
   const at = await fetchedAt(git, root)
-  const state = await standing(git)
+  const state = await standing(git, remote)
   const result = {
     head,
     branch: state.branch,

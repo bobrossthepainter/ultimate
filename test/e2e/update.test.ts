@@ -143,6 +143,31 @@ it('refuses a dirty, switched or diverged clone and leaves it alone', async () =
   expect((await cloneState(run, clone)).refused).toBe('main has diverged from origin/main')
 })
 
+it('compares a fork with its upstream remote, not its origin', async () => {
+  // The clone's origin is a fork that keeps up with the clone; upstream is the repository it was forked from.
+  const fork = join(await temp('ultimate-update-fork-'), 'fork.git')
+  await git(clone, 'remote', 'rename', 'origin', 'upstream')
+  await git(process.cwd(), 'clone', '-q', '--bare', clone, fork)
+  await git(clone, 'remote', 'add', 'origin', fork)
+  await git(clone, 'fetch', '-q', 'origin')
+  await git(clone, 'remote', 'set-head', 'origin', '--auto')
+  await writeFile(join(clone, 'local.txt'), 'mine\n')
+  await git(clone, 'add', '-A')
+  await git(clone, 'commit', '-q', '-m', 'local')
+  await git(clone, 'push', '-q', 'origin', 'main')
+  await push({ 'extensions/a/web.tsx': 'x\n' })
+
+  const run = gitIn(clone)
+  expect(await fetchIfDue(run, clone, Date.now(), true, 'upstream')).toBeUndefined()
+  expect(await cloneState(run, clone)).toMatchObject({ behind: 0, ahead: 0 })
+  expect(await cloneState(run, clone, 'upstream')).toMatchObject({
+    behind: 1,
+    ahead: 1,
+    diverged: true,
+    refused: 'main has diverged from upstream/main',
+  })
+})
+
 it('admits one holder of the clone lock among simultaneous ones, and recovers a stale sidecar', async () => {
   const lock = join(clone, '.git/ultimate-update.lock')
   let inside = 0
