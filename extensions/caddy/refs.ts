@@ -22,11 +22,11 @@ export type Status = {
 
 /** `caddy` in `~/.ultimate/settings.json`, without the token (the `CADDY_DNS_API_TOKEN` secret). */
 export type Config = {
-  /** Every project is `<name>.<domain>`; the certificate is the wildcard `*.<domain>`. */
+  /** Every project is `https://<domain>:<its port>`; the certificate is for `<domain>`. */
   domain?: string
-  /** The HTTPS port Caddy listens on; 9443 by default. */
+  /** The first HTTPS port Caddy gives a ticked project; each next one takes the next free port. 9443 by default. */
   port: number
-  /** A caddy-dns provider (`cloudflare`) for DNS-01; or `cert` and `key` for a wildcard certificate of your own. */
+  /** A caddy-dns provider (`cloudflare`) for DNS-01; or `cert` and `key` for a certificate of your own. */
   dns?: string
   cert?: string
   key?: string
@@ -38,8 +38,8 @@ export type Project = {
   current: boolean
   /** Its loopback URL while it runs. */
   running?: string
-  /** Its subdomain label while Caddy serves it (ticked). */
-  subdomain?: string
+  /** Its HTTPS port on the domain while Caddy serves it (ticked). */
+  port?: number
   /** Its Caddy address while ticked, live or not. */
   url?: string
   /** Whether its route is in Caddy now (its server runs and registered it). */
@@ -70,8 +70,11 @@ export const ConfigureAction = actionRef<
   { domain: string; port?: number; dns?: string; cert?: string; key?: string },
   Config
 >('caddy', 'configure')
-/** User-only. `{ root, on }` → ticks or unticks "serve by Caddy" for that project; its server applies it. */
-export const ServeAction = actionRef<{ root: string; on: boolean }, { subdomain?: string }>(
+/**
+ * User-only. `{ root, on }` → ticks or unticks "serve by Caddy" for that project, keeping the port it had, else taking
+ * the first free one from the setup's port; its server applies it.
+ */
+export const ServeAction = actionRef<{ root: string; on: boolean }, { port?: number }>(
   'caddy',
   'serve',
 )

@@ -53,7 +53,7 @@ else process.exit(1);
       caddy: {
         domain: 'ultimate.example.com',
         dns: 'cloudflare',
-        serve: { '/project/a': { subdomain: 'a' } },
+        serve: { '/project/a': { port: 9443 } },
       },
     }),
   )
@@ -106,22 +106,48 @@ it('routes a ticked project through Caddy and admits its origin, without the tok
   const server = await instance(home)
 
   expect(server.notices).toEqual([])
-  expect(server.status()).toEqual({ state: 'ready', url: 'https://a.ultimate.example.com:9443' })
-  expect(server.access.origins()).toEqual(['https://a.ultimate.example.com:9443'])
+  expect(server.status()).toEqual({ state: 'ready', url: 'https://ultimate.example.com:9443' })
+  expect(server.access.origins()).toEqual(['https://ultimate.example.com:9443'])
   const written = await readFile(caddyfilePath(home), 'utf8')
-  expect(written).toContain('*.ultimate.example.com:9443 {')
+  expect(written).toContain('ultimate.example.com:9443 {')
   expect(written).toContain('dns cloudflare {env.CADDY_DNS_API_TOKEN}')
-  expect(written).toContain('@a host a.ultimate.example.com')
   expect(written).toContain('reverse_proxy 127.0.0.1:4801')
   expect(loads.at(-1)).toBe(written)
   expect([written, ...loads].join('\n')).not.toContain('secret-token')
 
   await server.close()
   expect(server.access.origins()).toEqual([])
-  expect(loads.at(-1)).not.toContain('@a host')
+  expect(loads.at(-1)).not.toContain(':9443 {')
 })
 
-it('refuses a subdomain another live project holds', async () => {
+it('gives each ticked project the next free port, and keeps it when ticked again', async () => {
+  const { home } = await fixture()
+  const server = await instance(home)
+  const projects = async () => [
+    { root: '/project/a', name: 'a' },
+    { root: '/project/b', name: 'b' },
+  ]
+  const ctx = { host: { ...server.host, userHome: home, projects } } as Parameters<
+    typeof actions.serve
+  >[1]
+  expect(await actions.serve({ root: '/project/b', on: true }, ctx)).toEqual({ port: 9444 })
+  expect(await actions.serve({ root: '/project/a', on: true }, ctx)).toEqual({ port: 9443 })
+  expect(await actions.serve({ root: '/project/b', on: false }, ctx)).toEqual({})
+  // A project whose entry predates ports (a subdomain) gets one.
+  await writeFile(
+    join(home, '.ultimate/settings.json'),
+    JSON.stringify({
+      caddy: {
+        domain: 'ultimate.example.com',
+        dns: 'cloudflare',
+        serve: { '/project/b': { subdomain: 'b' } },
+      },
+    }),
+  )
+  expect(await actions.serve({ root: '/project/b', on: true }, ctx)).toEqual({ port: 9443 })
+})
+
+it('refuses a port another live project holds', async () => {
   const { home } = await fixture()
   await instance(home)
   await writeFile(
@@ -130,14 +156,14 @@ it('refuses a subdomain another live project holds', async () => {
       caddy: {
         domain: 'ultimate.example.com',
         dns: 'cloudflare',
-        serve: { '/project/a': { subdomain: 'a' }, '/project/b': { subdomain: 'a' } },
+        serve: { '/project/a': { port: 9443 }, '/project/b': { port: 9443 } },
       },
     }),
   )
   const other = await instance(home, '/project/b', 4802)
   expect(other.status()).toMatchObject({
     state: 'error',
-    hint: 'a.ultimate.example.com is served for /project/a',
+    hint: 'Port 9443 is served for /project/a',
   })
   expect(other.access.origins()).toEqual([])
 })

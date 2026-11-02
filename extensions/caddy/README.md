@@ -1,17 +1,17 @@
-Serve this machine's Ultimates over HTTPS on your own domain through one Caddy, ticked per project in the Hosting panel, with a wildcard certificate from DNS-01 or your own files.
+Serve this machine's Ultimates over HTTPS on your own domain through one Caddy, ticked per project in the Hosting panel: each project gets its own port on the one domain (`https://ultimate.example.com:9443`, `:9444`, …), with a certificate from DNS-01 or your own files.
 
-**There is no login.** Anyone who reaches a served address can run commands. Publish `*.<domain>` only in LAN or VPN
-DNS, never in public DNS, and keep the port closed to the internet. For access from outside, use `tailscale`.
+**There is no login.** Anyone who reaches a served address can run commands. Publish `<domain>` only in LAN or VPN
+DNS, never in public DNS, and keep its ports closed to the internet. For access from outside, use `tailscale`.
 
 ## Hosting panel
 
 ⌘K **Hosting (Caddy)…** opens it; the status line's `caddy` item does too while this Ultimate is served (green) or
 needs a fix (amber).
 
-- **Setup:** the domain (`ultimate.example.com`; each project is `<name>.ultimate.example.com`), the HTTPS port
-  (9443 by default, so it never competes with another proxy on 443), and the certificate: **DNS-01** with a
-  [caddy-dns](https://github.com/caddy-dns) provider name and its API token, or **Own files** for a wildcard
-  certificate and key you keep up to date yourself.
+- **Setup:** the domain (`ultimate.example.com`), the first HTTPS port (9443 by default, so it never competes with
+  another proxy on 443; each next ticked project takes the next free one), and the certificate: **DNS-01** with a
+  [caddy-dns](https://github.com/caddy-dns) provider name and its API token, or **Own files** for a certificate and
+  key for the domain that you keep up to date yourself.
 - **Caddy:** **Install** downloads Caddy with the provider's module from caddyserver.com into `~/.ultimate/caddy/`.
   A binary without the module shows "lacks <provider>"; install again after changing providers.
 - **Ultimates on this machine:** every project with a home in `~/.ultimate/projects/` (`host.projects()`): its
@@ -34,10 +34,13 @@ User settings only (`~/.ultimate/settings.json`), shared by every project:
     "domain": "ultimate.example.com",
     "port": 9443,
     "dns": "cloudflare",
-    "serve": { "/home/me/code/my-app": { "subdomain": "my-app" } }
+    "serve": { "/home/me/code/my-app": { "port": 9443 } }
   }
 }
 ```
+
+A ticked project keeps its port across unticking the others and Caddy restarts; unticked, it gives the port up. An
+entry from before ports (`{ "subdomain": … }`) is not served until the project is ticked again.
 
 `cert` and `key` (absolute paths) replace `dns`. The token is the `CADDY_DNS_API_TOKEN` secret (⌘K → Secrets), declared
 while `dns` is set. Caddy reads it as `{env.CADDY_DNS_API_TOKEN}` from its own environment, so neither the written
@@ -49,13 +52,13 @@ restarts Caddy with the new one at the next apply (a settings change, a server s
 The extension reloads on every settings change, in every running Ultimate. Each server applies only its own
 project, without a restart:
 
-1. It claims its subdomain in `~/.ultimate/caddy/routes.json`, under a pid-owned lock, with its loopback URL and an
-   owner token. Entries of dead servers drop out; a subdomain held by another root is refused.
-2. It writes `~/.ultimate/caddy/Caddyfile` (one wildcard site, a `host` route per subdomain, everything else
-   aborted) and loads it through Caddy's admin API on the owner-only socket `~/.ultimate/caddy/admin.sock`,
+1. It claims its port in `~/.ultimate/caddy/routes.json`, under a pid-owned lock, with its loopback URL and an
+   owner token. Entries of dead servers drop out; a port held by another root is refused.
+2. It writes `~/.ultimate/caddy/Caddyfile` (one site `<domain>:<port>` per routed project, proxying to its
+   supervisor) and loads it through Caddy's admin API on the owner-only socket `~/.ultimate/caddy/admin.sock`,
    starting Caddy in the background (`caddy start`) when none runs. Caddy outlives the Ultimates; it stops on
    reboot and the first ticked server to start brings it back.
-3. It registers `https://<subdomain>.<domain>:<port>` as an allowed origin (`host.access.allow`), the runtime form of
+3. It registers `https://<domain>:<port>` as an allowed origin (`host.access.allow`), the runtime form of
    `--proxy-origin`. Cloud backups register it as the project's address when Tailscale publishes none.
 
 Unticking, or the server closing, removes its route and its origin. A server listening on every interface
@@ -68,7 +71,7 @@ homes are never served.
 - `status` → this server's `{ state, url?, hint? }`; states `off`, `unconfigured`, `not-installed`, `missing-module`,
   `not-loopback`, `starting`, `ready`, `error`.
 - `retry` → applies again and returns the status.
-- User-only: `configure { domain, port?, dns? | cert, key }`, `serve { root, on }`, `install`,
+- User-only: `configure { domain, port?, dns? | cert, key }`, `serve { root, on }` → `{ port? }`, `install`,
   `service { root, run: 'start' | 'stop' | 'install' }`.
 
 `CADDY_COMMAND` names another binary; tests point it at a stub.

@@ -29,9 +29,9 @@ import {
 import type { Config, Overview, Project, Status } from './refs.ts'
 
 export const TOKEN = 'CADDY_DNS_API_TOKEN'
-/** `caddy` in user settings: the setup, and the projects ticked "serve by Caddy" by root, with their subdomain. */
-type Settings = Partial<Config> & { serve?: Record<string, { subdomain: string }> }
-/** One routed subdomain: the project's root, its loopback target, and the server that owns the route. */
+/** `caddy` in user settings: the setup, and the projects ticked "serve by Caddy" by root, with their HTTPS port. */
+type Settings = Partial<Config> & { serve?: Record<string, { port: number }> }
+/** One routed port (the registry's key): the project's root, its loopback target, and the server that owns the route. */
 type Route = { root: string; target: string; owner: string }
 type Registry = { routes: Record<string, Route>; token?: string }
 
@@ -56,7 +56,8 @@ async function settingsOf(userHome: string): Promise<Settings> {
 }
 const DOMAIN = /^(?=.{1,200}$)([a-z0-9-]+\.)+[a-z]{2,}$/
 const PROVIDER = /^[a-z0-9_]+$/
-export const SUBDOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+const PORT = (value: unknown): value is number =>
+  Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 65535
 const file = (value: unknown) =>
   typeof value === 'string' && isAbsolute(value) && !/["\\\n\r{}]/.test(value)
 
@@ -70,7 +71,7 @@ export function configOf(settings: Settings): Config {
     new Error(`Invalid caddy.${field} in ~/.ultimate/settings.json`)
   if (domain !== undefined && (typeof domain !== 'string' || !DOMAIN.test(domain)))
     throw invalid('domain')
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw invalid('port')
+  if (!PORT(port)) throw invalid('port')
   if (dns !== undefined && (typeof dns !== 'string' || !PROVIDER.test(dns))) throw invalid('dns')
   if (cert !== undefined && !file(cert)) throw invalid('cert')
   if (key !== undefined && !file(key)) throw invalid('key')
@@ -81,27 +82,27 @@ export function configOf(settings: Settings): Config {
     ...(!dns && cert && key && { cert, key }),
   }
 }
-/** The origin Caddy serves `subdomain` on; a default port drops out, as browsers send it. */
-const originOf = (subdomain: string, config: Config) =>
-  new URL(`https://${subdomain}.${config.domain}:${config.port}`).origin
+/** The origin Caddy serves a project on: the domain at the project's port; 443 drops out, as browsers send it. */
+const originOf = (port: number, config: Config) =>
+  new URL(`https://${config.domain}:${port}`).origin
 
 /** The admin endpoint, owner-only on a socket so no other user's process can reconfigure Caddy. */
 const globals = (files: Paths) =>
   [`\tadmin "unix/${files.socket}|0600"`, '\tpersist_config off'].join('\n')
 
 /**
- * The whole Caddyfile: one wildcard site on `port`, a route per subdomain, everything else aborted. The DNS token is
- * a placeholder Caddy fills from its own environment, so neither this file nor Caddy's loaded config holds it.
+ * The whole Caddyfile: one site per routed port on the domain, each proxying to its project. The DNS token is a
+ * placeholder Caddy fills from its own environment, so neither this file nor Caddy's loaded config holds it.
  */
 export function caddyfile(config: Config, routes: Record<string, Route>, files: Paths) {
   const tls = config.dns
     ? `\ttls {\n\t\tdns ${config.dns} {env.${TOKEN}}\n\t}`
     : `\ttls "${config.cert}" "${config.key}"`
-  const handlers = Object.keys(routes)
-    .toSorted()
+  const sites = Object.keys(routes)
+    .toSorted((a, b) => Number(a) - Number(b))
     .map(
-      (name) =>
-        `\t@${name} host ${name}.${config.domain}\n\thandle @${name} {\n\t\treverse_proxy ${new URL(routes[name].target).host}\n\t}`,
+      (port) =>
+        `${config.domain}:${port} {\n${tls}\n\treverse_proxy ${new URL(routes[port].target).host}\n}\n`,
     )
   return `{
 ${globals(files)}
@@ -110,10 +111,7 @@ ${globals(files)}
 \t\toutput file "${files.log}"
 \t}
 }
-*.${config.domain}:${config.port} {
-${[tls, ...handlers, '\thandle {\n\t\tabort\n\t}'].join('\n')}
-}
-`
+${sites.join('')}`
 }
 
 /** A request to Caddy's admin socket: its status and body. */
@@ -190,9 +188,10 @@ async function withRegistry<T>(files: Paths, use: (registry: Registry) => Promis
   const lock = await acquireLock(`${files.registry}.lock`, { pid: process.pid }, 120000)
   try {
     const registry = await readJson<Registry>(files.registry, { routes: {} })
-    // A route outlives a server only while its owner runs.
+    // A route outlives a server only while its owner runs; one keyed by a subdomain predates ports.
     for (const [name, route] of Object.entries(registry.routes))
-      if (!alive(Number(route.owner.split(':')[0]))) delete registry.routes[name]
+      if (!alive(Number(route.owner.split(':')[0])) || !PORT(Number(name)))
+        delete registry.routes[name]
     const result = await use(registry)
     await writeJson(files.registry, registry, { mode: 0o600 })
     return result
@@ -287,17 +286,12 @@ async function services(homes: string[]): Promise<Map<string, NonNullable<Projec
   )
 }
 
-/** A DNS label for a project: its folder name, made safe, with `-2`, `-3`… on a clash. */
-function label(root: string, taken: Set<string>) {
-  const base =
-    basename(root)
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 50) || 'ultimate'
-  let name = base
-  for (let n = 2; taken.has(name); n++) name = `${base}-${n}`
-  return name
+/** The first port from `base` up that no other served project has. */
+function nextPort(base: number, taken: Set<number>) {
+  let port = base
+  while (taken.has(port)) port++
+  if (port > 65535) throw new Error(`No free port from ${base} up`)
+  return port
 }
 
 const statuses = new WeakMap<ExtensionHost, Status>()
@@ -310,7 +304,7 @@ export async function secrets(host: ExtensionHost) {
     ? [
         {
           name: TOKEN,
-          description: 'DNS provider API token for the Caddy wildcard certificate (DNS-01)',
+          description: 'DNS provider API token for the Caddy certificate (DNS-01)',
         },
       ]
     : []
@@ -364,7 +358,7 @@ export const actions: Record<string, ExtensionAction> = {
       status: statuses.get(host) ?? { state: 'off' },
       projects: projects.flatMap((project) => {
         if (!project.root) return []
-        const subdomain = settings.serve?.[project.root]?.subdomain
+        const served = settings.serve?.[project.root]?.port
         const port = ports.ports?.[project.root]?.port
         const current = project.current
         // This server runs whatever its lock says: a preview's home holds none.
@@ -376,8 +370,8 @@ export const actions: Record<string, ExtensionAction> = {
             name: project.name,
             current,
             ...(url && { running: url }),
-            ...(subdomain && { subdomain }),
-            ...(subdomain && config.domain && { url: originOf(subdomain, config) }),
+            ...(served && { port: served }),
+            ...(served && config.domain && { url: originOf(served, config) }),
             routed: routed.has(project.root),
             ...(tailnet && port && { tailnet: `https://${new URL(tailnet).hostname}:${port}` }),
             ...(service && { service }),
@@ -391,37 +385,38 @@ export const actions: Record<string, ExtensionAction> = {
     const { domain, port = 9443, dns, cert, key } = input as Record<string, unknown>
     if (typeof domain !== 'string' || !DOMAIN.test(domain))
       throw new Error('domain must be a DNS name such as ultimate.example.com')
-    if (!Number.isInteger(port) || (port as number) < 1 || (port as number) > 65535)
-      throw new Error('port must be between 1 and 65535')
+    if (!PORT(port)) throw new Error('port must be between 1 and 65535')
     if (dns !== undefined && (typeof dns !== 'string' || !PROVIDER.test(dns)))
       throw new Error('dns must be a caddy-dns provider name such as cloudflare')
     if (!dns && (!file(cert) || !file(key)))
-      throw new Error('Give a DNS provider, or absolute paths to a wildcard certificate and key')
+      throw new Error('Give a DNS provider, or absolute paths to a certificate and key')
     await updateCaddy(host.userHome, (previous) => ({
       domain,
-      port: port as number,
+      port,
       ...(dns ? { dns } : { cert: cert as string, key: key as string }),
       ...(previous.serve && { serve: previous.serve }),
     }))
     return configOf(await settingsOf(host.userHome))
   }),
-  serve: implementAction(ServeAction, async (args, { host }): Promise<{ subdomain?: string }> => {
+  serve: implementAction(ServeAction, async (args, { host }): Promise<{ port?: number }> => {
     const { root, on } = (args ?? {}) as { root?: unknown; on?: unknown }
     if (typeof root !== 'string' || typeof on !== 'boolean') throw new Error('Give { root, on }')
     if (!(await host.projects()).some((project) => project.root === root))
       throw new Error(`No Ultimate project at ${root}`)
-    let subdomain: string | undefined
+    let port: number | undefined
     await updateCaddy(host.userHome, (previous) => {
       const serve = { ...previous.serve }
       if (on) {
-        subdomain =
-          serve[root]?.subdomain ??
-          label(root, new Set(Object.values(serve).map((entry) => entry.subdomain)))
-        serve[root] = { subdomain }
+        const taken = new Set(
+          Object.entries(serve).flatMap(([other, entry]) => (other === root ? [] : [entry.port])),
+        )
+        const kept = serve[root]?.port
+        port = PORT(kept) && !taken.has(kept) ? kept : nextPort(configOf(previous).port, taken)
+        serve[root] = { port }
       } else delete serve[root]
       return { ...previous, serve }
     })
-    return subdomain ? { subdomain } : {}
+    return port ? { port } : {}
   }),
   service: implementAction(ServiceAction, async (args, { host }): Promise<{ next?: string }> => {
     const { root, run } = (args ?? {}) as { root?: unknown; run?: unknown }
@@ -535,8 +530,8 @@ export default function caddy(host: ExtensionHost) {
       const settings = await settingsOf(host.userHome)
       const config = configOf(settings)
       const token = config.dns ? await readSecret(host.userHome, TOKEN) : undefined
-      const subdomain = settings.serve?.[host.projectRoot]?.subdomain
-      if (!subdomain) {
+      const entry = settings.serve?.[host.projectRoot]
+      if (!entry) {
         await unroute(config, token)
         return set({ state: 'off' })
       }
@@ -557,19 +552,23 @@ export default function caddy(host: ExtensionHost) {
           state: 'missing-module',
           hint: `This Caddy lacks caddy-dns/${config.dns}; install it again in Hosting.`,
         })
-      if (!SUBDOMAIN.test(subdomain))
-        throw new Error(`Invalid subdomain ${JSON.stringify(subdomain)} in caddy.serve`)
+      // An entry from before ports (a subdomain) is not served; ticking it again gives it a port.
+      if (!PORT(entry.port)) {
+        await unroute(config, token)
+        return set({ state: 'off', hint: 'Tick this project again in Hosting to give it a port.' })
+      }
       set({ state: 'starting' })
-      const url = originOf(subdomain, config)
+      const port = String(entry.port)
+      const url = originOf(entry.port, config)
       const target = host.system().process.url
       await withRegistry(files, async (registry) => {
-        const holder = registry.routes[subdomain]
+        const holder = registry.routes[port]
         if (holder && holder.root !== host.projectRoot)
-          throw new Error(`${subdomain}.${config.domain} is served for ${holder.root}`)
-        if (routed && routed !== subdomain) delete registry.routes[routed]
-        registry.routes[subdomain] = { root: host.projectRoot, target, owner }
+          throw new Error(`Port ${port} is served for ${holder.root}`)
+        if (routed && routed !== port) delete registry.routes[routed]
+        registry.routes[port] = { root: host.projectRoot, target, owner }
         await apply(files, config, registry, token)
-        routed = subdomain
+        routed = port
       })
       remove?.()
       // The listener is loopback-only, so this Host and Origin can only arrive through the local Caddy.

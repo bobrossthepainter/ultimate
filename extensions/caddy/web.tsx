@@ -132,13 +132,17 @@ function Setup({ data, refetch }: { data: Overview; refetch: () => Promise<unkno
         />,
       )}
       {row(
-        'Port',
-        <input
-          className={cn(field, 'max-w-20 flex-none')}
-          inputMode="numeric"
-          onChange={(event) => setPort(event.target.value)}
-          value={port}
-        />,
+        'Ports',
+        <>
+          <input
+            className={cn(field, 'max-w-20 flex-none')}
+            inputMode="numeric"
+            onChange={(event) => setPort(event.target.value)}
+            title="The first project's HTTPS port; each next one takes the next free port"
+            value={port}
+          />
+          <span className="text-[11.5px] text-muted-foreground">and up, one per project</span>
+        </>,
       )}
       {row(
         'Certificate',
@@ -200,7 +204,7 @@ function Setup({ data, refetch }: { data: Overview; refetch: () => Promise<unkno
             <input
               className={field}
               onChange={(event) => setCert(event.target.value)}
-              placeholder="/etc/ssl/wildcard.crt"
+              placeholder="/etc/ssl/ultimate.crt"
               spellCheck={false}
               value={cert}
             />,
@@ -210,7 +214,7 @@ function Setup({ data, refetch }: { data: Overview; refetch: () => Promise<unkno
             <input
               className={field}
               onChange={(event) => setKey(event.target.value)}
-              placeholder="/etc/ssl/wildcard.key"
+              placeholder="/etc/ssl/ultimate.key"
               spellCheck={false}
               value={key}
             />,
@@ -301,7 +305,7 @@ function Row({
   const { busy, error, run } = useRun(refetch)
   const service = useRun(refetch)
   const [output, setOutput] = useState<string>()
-  const on = !!project.subdomain
+  const on = !!project.port
   const link = href(project)
   // Install a missing service, stop one systemd runs or keeps restarting (never this server's own), start a stopped one.
   const act = !project.service
@@ -422,7 +426,7 @@ function Row({
 function HostingPanel() {
   const { data, error, loading, refetch } = useOverview()
   const [checking, setChecking] = useState(false)
-  const served = data?.projects.filter((project) => project.subdomain).length ?? 0
+  const served = data?.projects.filter((project) => project.port).length ?? 0
   const meta =
     loading && !data ? (
       <LoaderCircleIcon className="size-3 animate-spin" />
@@ -478,8 +482,8 @@ function HostingPanel() {
           </div>
           <p className="mx-3 mt-3 text-[11.5px] leading-snug text-muted-foreground/80">
             No login: anyone who reaches these addresses can run commands. Publish{' '}
-            <span className="font-mono">*.{data.config.domain ?? 'your-domain'}</span> only in LAN
-            or VPN DNS.
+            <span className="font-mono">{data.config.domain ?? 'your-domain'}</span> only in LAN or
+            VPN DNS, and keep these ports closed to the internet.
           </p>
         </>
       )}
