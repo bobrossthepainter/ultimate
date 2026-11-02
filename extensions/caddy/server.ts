@@ -399,19 +399,26 @@ export const actions: Record<string, ExtensionAction> = {
     const temporary = `${files.binary}.${process.pid}.tmp`
     await writeFile(temporary, new Uint8Array(await response.arrayBuffer()))
     await chmod(temporary, 0o755)
-    const token = dns ? await readSecret(host.userHome, TOKEN) : undefined
     // Under the registry lock, so no server routes meanwhile: a running Caddy keeps the old binary until it stops, then
-    // the new one starts with every live route, whichever project asked for the install.
+    // the new one starts with every live route, whichever project asked for the install. The setup is read again here,
+    // since it may have changed during the download.
     await withRegistry(files, async (registry) => {
+      const current = configOf(await settingsOf(host.userHome))
+      if (current.dns !== dns) {
+        await rm(temporary, { force: true })
+        throw new Error('The DNS provider changed during the download; install again.')
+      }
+      const token = dns ? await readSecret(host.userHome, TOKEN) : undefined
       const live = await running(files)
       if (live) await stop(files)
       await rename(temporary, files.binary).catch(async (error: unknown) => {
         await rm(temporary, { force: true })
         throw error
       })
-      if (live && config.domain && (!dns || token)) await apply(files, config, registry, token)
+      if (live && current.domain && (!dns || token)) await apply(files, current, registry, token)
     })
     const version = (await probe(files))?.version ?? 'unknown'
+    // This project's own route, when it waited for a binary; a reloaded facet has already run with the new one.
     await retries.get(host)?.()
     return { version }
   }),
