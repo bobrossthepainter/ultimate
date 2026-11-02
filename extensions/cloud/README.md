@@ -62,7 +62,7 @@ needs `Authorization: Bearer <ULTIMATE_CLOUD_TOKEN>`; `<p>` is the SHA-256 hex o
 **Back up now** (`backup { force? }`, also callable by agents) uploads an encrypted snapshot of the open database and the `ultimate/*`
 branches, then commits it with this home's **parent**: the backup it last uploaded or restored, kept in
 `<home>/cloud-backup.json` (`{ key, parent, last }`). The commit names the machine, the project's folder name, the key, the chapter's name and number,
-and the tailnet address (from `tailscale`, when published). On 200 the new backup
+and the tailnet address (from `tailscale`, when published; else an HTTPS access origin such as a reverse proxy's). On 200 the new backup
 becomes the parent. On 409 another machine backed up after this home's parent: the parent stays, the uploaded chunks
 stay for the Worker's retention, and `state` reports `conflict { error, latest }`. Two 409s are this machine's own and
 not conflicts: one whose `latest` is this very backup (a retried commit already made) counts as done, and one whose

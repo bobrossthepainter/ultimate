@@ -38,6 +38,10 @@ it('publishes optional status and non-forced backup services for the active chap
     harness: () => ({ commit: async (run: (tx: unknown) => unknown) => run({}) }),
     emit: () => {},
     notice: () => {},
+    // Without Tailscale, a reverse proxy's HTTPS origin is where other machines reach this one.
+    system: () => ({
+      access: { origins: ['http://192.168.1.2:4747', 'https://my-app.example.com'] },
+    }),
   } as unknown as ExtensionHost
   cloud(host)
   const service = host.want(CloudApi)!
@@ -67,6 +71,7 @@ it('publishes optional status and non-forced backup services for the active chap
         key: 'github.com/user/project@fresh-roots',
         dir: '/home/chapters/fresh-roots',
         projectRoot: '/project',
+        tailnet: 'https://my-app.example.com',
       }),
     )
   } finally {

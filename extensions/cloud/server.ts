@@ -106,7 +106,11 @@ async function upload(
     const secret = process.env[SNAPSHOT_KEY] ?? (await readSecret(host.userHome, SNAPSHOT_KEY))
     if (!secret)
       throw new Error(`Missing ${SNAPSHOT_KEY}. Add it in the Secrets panel (⌘K → Secrets).`)
-    const tailnet = host.want(TailscaleApi)?.status().url
+    // Where other machines reach this one: the tailnet address, else an HTTPS origin such as a --proxy-origin.
+    // The register's field keeps its name, `tailnet`.
+    const tailnet =
+      host.want(TailscaleApi)?.status().url ??
+      host.system().access.origins.find((origin) => origin.startsWith('https://'))
     const done = await backUp({
       ...ready.config,
       secret,
