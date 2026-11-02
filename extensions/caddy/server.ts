@@ -187,7 +187,7 @@ const digest = (token: string | undefined) =>
  * A route lives while its owner runs and its root is still ticked with that port: unticking frees a port at once, for
  * the next project to take, even before the old server removes its route; a route from before ports matches no port.
  */
-const live = (port: string, route: Route, settings: Settings) =>
+const holds = (port: string, route: Route, settings: Settings) =>
   alive(Number(route.owner.split(':')[0])) && String(settings.serve?.[route.root]?.port) === port
 
 async function withRegistry<T>(
@@ -201,7 +201,7 @@ async function withRegistry<T>(
     const registry = await readJson<Registry>(files.registry, { routes: {} })
     const settings = await settingsOf(userHome)
     for (const [port, route] of Object.entries(registry.routes))
-      if (!live(port, route, settings)) delete registry.routes[port]
+      if (!holds(port, route, settings)) delete registry.routes[port]
     const result = await use(registry)
     await writeJson(files.registry, registry, { mode: 0o600 })
     return result
@@ -353,7 +353,7 @@ export const actions: Record<string, ExtensionAction> = {
     const tailnet = host.want(TailscaleApi)?.status().url
     const routed = new Set(
       Object.entries(registry.routes)
-        .filter(([port, route]) => live(port, route, settings))
+        .filter(([port, route]) => holds(port, route, settings))
         .map(([, route]) => route.root),
     )
     return {
