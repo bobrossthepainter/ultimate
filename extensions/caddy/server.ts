@@ -95,8 +95,10 @@ const globals = (files: Paths) =>
  * placeholder Caddy fills from its own environment, so neither this file nor Caddy's loaded config holds it.
  */
 export function caddyfile(config: Config, routes: Record<string, Route>, files: Paths) {
+  // Public resolvers for the challenge: LAN DNS that overrides the domain locally often fails `_acme-challenge` lookups
+  // (SERVFAIL), and Caddy then cannot find the zone to write the TXT record to.
   const tls = config.dns
-    ? `\ttls {\n\t\tdns ${config.dns} {env.${TOKEN}}\n\t}`
+    ? `\ttls {\n\t\tdns ${config.dns} {env.${TOKEN}}\n\t\tresolvers 1.1.1.1 8.8.8.8\n\t}`
     : `\ttls "${config.cert}" "${config.key}"`
   const sites = Object.keys(routes)
     .toSorted((a, b) => Number(a) - Number(b))

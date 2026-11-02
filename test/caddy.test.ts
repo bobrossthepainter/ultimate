@@ -111,6 +111,8 @@ it('routes a ticked project through Caddy and admits its origin, without the tok
   const written = await readFile(caddyfilePath(home), 'utf8')
   expect(written).toContain('ultimate.example.com:9443 {')
   expect(written).toContain('dns cloudflare {env.CADDY_DNS_API_TOKEN}')
+  // The LAN resolver answered SERVFAIL for _acme-challenge, so no certificate was ever issued.
+  expect(written).toContain('resolvers 1.1.1.1 8.8.8.8')
   expect(written).toContain('reverse_proxy 127.0.0.1:4801')
   expect(loads.at(-1)).toBe(written)
   expect([written, ...loads].join('\n')).not.toContain('secret-token')
