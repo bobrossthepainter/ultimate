@@ -18,7 +18,8 @@ afterEach(async () => {
 
 /** A user home with a stub Caddy binary, a fake admin socket recording each loaded config, and the DNS-01 setup. */
 async function fixture() {
-  const home = await temp()
+  // Directly under /tmp: a Unix socket path is limited to 107 bytes, which a nested test temp dir can exceed.
+  const home = await temp('caddy-', '/tmp')
   const dir = join(home, '.ultimate/caddy')
   await mkdir(dir, { recursive: true })
   const binary = join(home, 'caddy')
