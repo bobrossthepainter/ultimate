@@ -281,7 +281,9 @@ function Binary({ data, refetch }: { data: Overview; refetch: () => Promise<unkn
 function href(project: Project) {
   if (project.url && project.routed) return project.url
   if (!project.running) return undefined
-  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)
+  const local =
+    ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname) ||
+    location.hostname.endsWith('.localhost')
   if (local) return project.running
   return project.tailnet
 }

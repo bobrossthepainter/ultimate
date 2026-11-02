@@ -28,6 +28,8 @@ async function fixture() {
 const args = process.argv.slice(2);
 if (args[0] === 'version') console.log('v2.0.0-test h1:stub');
 else if (args[0] === 'list-modules') console.log('http.handlers.reverse_proxy\\ndns.providers.cloudflare');
+// The fake admin socket below stands in for the started Caddy.
+else if (args[0] === 'start') require('node:fs').appendFileSync(${JSON.stringify(join(dir, 'starts'))}, 'start\\n');
 else process.exit(1);
 `,
   )

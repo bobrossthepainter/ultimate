@@ -53,12 +53,36 @@ async function settingsOf(userHome: string): Promise<Settings> {
   const value = (await readSettings(userSettingsPath(userHome))).caddy
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
-const configOf = (settings: Settings): Config => ({
-  port: settings.port ?? 9443,
-  ...(settings.domain && { domain: settings.domain }),
-  ...(settings.dns && { dns: settings.dns }),
-  ...(settings.cert && settings.key && { cert: settings.cert, key: settings.key }),
-})
+const DOMAIN = /^(?=.{1,200}$)([a-z0-9-]+\.)+[a-z]{2,}$/
+const PROVIDER = /^[a-z0-9_]+$/
+export const SUBDOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+const file = (value: unknown) =>
+  typeof value === 'string' && isAbsolute(value) && !/["\\\n\r{}]/.test(value)
+
+/**
+ * The setup as Caddy gets it, every value checked where it enters the Caddyfile: settings are a hand-editable file, so
+ * a value the panel would refuse fails here too instead of reaching Caddy as a directive.
+ */
+export function configOf(settings: Settings): Config {
+  const { domain, port = 9443, dns, cert, key } = settings
+  const invalid = (field: string) =>
+    new Error(`Invalid caddy.${field} in ~/.ultimate/settings.json`)
+  if (domain !== undefined && (typeof domain !== 'string' || !DOMAIN.test(domain)))
+    throw invalid('domain')
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw invalid('port')
+  if (dns !== undefined && (typeof dns !== 'string' || !PROVIDER.test(dns))) throw invalid('dns')
+  if (cert !== undefined && !file(cert)) throw invalid('cert')
+  if (key !== undefined && !file(key)) throw invalid('key')
+  return {
+    port,
+    ...(domain && { domain }),
+    ...(dns && { dns }),
+    ...(!dns && cert && key && { cert, key }),
+  }
+}
+/** The origin Caddy serves `subdomain` on; a default port drops out, as browsers send it. */
+const originOf = (subdomain: string, config: Config) =>
+  new URL(`https://${subdomain}.${config.domain}:${config.port}`).origin
 
 /** The admin endpoint, owner-only on a socket so no other user's process can reconfigure Caddy. */
 const globals = (files: Paths) =>
@@ -149,6 +173,14 @@ async function start(files: Paths, token: string | undefined) {
   if (code !== 0) throw new Error(`caddy start exited with ${code}; see ${files.log}`)
 }
 
+const stop = (files: Paths) =>
+  admin(files.socket, 'POST', '/stop').then(
+    () => undefined,
+    () => {
+      // It may close the socket before answering; the next check finds it stopped either way.
+    },
+  )
+
 const digest = (token: string | undefined) =>
   token ? createHash('sha256').update(token).digest('hex').slice(0, 16) : undefined
 
@@ -176,12 +208,11 @@ async function apply(files: Paths, config: Config, registry: Registry, token: st
   const text = caddyfile(config, registry.routes, files)
   await writeFile(files.caddyfile, text)
   const live = await running(files)
-  const hash = digest(token)
-  if (live && registry.token && registry.token !== hash)
-    await admin(files.socket, 'POST', '/stop').catch(() => {
-      // It may close the socket before answering; the next check finds it stopped either way.
-    })
-  if (!live || (registry.token && registry.token !== hash)) {
+  // Any change of token, also from none (own certificate) to one, needs a Caddy started with the new environment.
+  const hash = digest(token) ?? 'none'
+  const stale = live && registry.token !== hash
+  if (stale) await stop(files)
+  if (!live || stale) {
     if (!Object.keys(registry.routes).length) return
     await start(files, token)
     registry.token = hash
@@ -195,6 +226,23 @@ async function apply(files: Paths, config: Config, registry: Registry, token: st
       // Not Caddy's JSON error: the status below says enough.
     }
     throw new Error(message ?? `Caddy refused the config (${loaded.status})`)
+  }
+}
+
+/**
+ * Changes `caddy` in user settings under a machine-wide lock: every Ultimate's panel writes it, and settings files
+ * serialize writes only within one process.
+ */
+async function updateCaddy(userHome: string, change: (previous: Settings) => Settings) {
+  const files = paths(userHome)
+  await mkdir(files.dir, { recursive: true, mode: 0o700 })
+  const lock = await acquireLock(join(files.dir, 'settings.lock'), { pid: process.pid }, 30000)
+  try {
+    await updateSettings(userSettingsPath(userHome), (settings) => {
+      settings.caddy = change((settings.caddy ?? {}) as Settings)
+    })
+  } finally {
+    await lock.close()
   }
 }
 
@@ -284,8 +332,7 @@ export const actions: Record<string, ExtensionAction> = {
             current,
             ...(url && { running: url }),
             ...(subdomain && { subdomain }),
-            ...(subdomain &&
-              config.domain && { url: `https://${subdomain}.${config.domain}:${config.port}` }),
+            ...(subdomain && config.domain && { url: originOf(subdomain, config) }),
             routed: routed.has(project.root),
             ...(tailnet && port && { tailnet: `https://${new URL(tailnet).hostname}:${port}` }),
           },
@@ -296,25 +343,20 @@ export const actions: Record<string, ExtensionAction> = {
   configure: implementAction(ConfigureAction, async (args, { host }) => {
     const input = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
     const { domain, port = 9443, dns, cert, key } = input as Record<string, unknown>
-    if (typeof domain !== 'string' || !/^(?=.{1,200}$)([a-z0-9-]+\.)+[a-z]{2,}$/.test(domain))
+    if (typeof domain !== 'string' || !DOMAIN.test(domain))
       throw new Error('domain must be a DNS name such as ultimate.example.com')
     if (!Number.isInteger(port) || (port as number) < 1 || (port as number) > 65535)
       throw new Error('port must be between 1 and 65535')
-    const file = (value: unknown) =>
-      typeof value === 'string' && isAbsolute(value) && !/["\n\r]/.test(value)
-    if (dns !== undefined && (typeof dns !== 'string' || !/^[a-z0-9_]+$/.test(dns)))
+    if (dns !== undefined && (typeof dns !== 'string' || !PROVIDER.test(dns)))
       throw new Error('dns must be a caddy-dns provider name such as cloudflare')
     if (!dns && (!file(cert) || !file(key)))
       throw new Error('Give a DNS provider, or absolute paths to a wildcard certificate and key')
-    await updateSettings(userSettingsPath(host.userHome), (settings) => {
-      const previous = (settings.caddy ?? {}) as Settings
-      settings.caddy = {
-        domain,
-        port: port as number,
-        ...(dns ? { dns } : { cert: cert as string, key: key as string }),
-        ...(previous.serve && { serve: previous.serve }),
-      }
-    })
+    await updateCaddy(host.userHome, (previous) => ({
+      domain,
+      port: port as number,
+      ...(dns ? { dns } : { cert: cert as string, key: key as string }),
+      ...(previous.serve && { serve: previous.serve }),
+    }))
     return configOf(await settingsOf(host.userHome))
   }),
   serve: implementAction(ServeAction, async (args, { host }): Promise<{ subdomain?: string }> => {
@@ -323,8 +365,7 @@ export const actions: Record<string, ExtensionAction> = {
     if (!(await host.projects()).some((project) => project.root === root))
       throw new Error(`No Ultimate project at ${root}`)
     let subdomain: string | undefined
-    await updateSettings(userSettingsPath(host.userHome), (settings) => {
-      const previous = (settings.caddy ?? {}) as Settings
+    await updateCaddy(host.userHome, (previous) => {
       const serve = { ...previous.serve }
       if (on) {
         subdomain =
@@ -332,13 +373,14 @@ export const actions: Record<string, ExtensionAction> = {
           label(root, new Set(Object.values(serve).map((entry) => entry.subdomain)))
         serve[root] = { subdomain }
       } else delete serve[root]
-      settings.caddy = { ...previous, serve }
+      return { ...previous, serve }
     })
     return subdomain ? { subdomain } : {}
   }),
   install: implementAction(InstallAction, async (_args, { host }) => {
     const files = paths(host.userHome)
-    const { dns } = await settingsOf(host.userHome)
+    const config = configOf(await settingsOf(host.userHome))
+    const { dns } = config
     const os = { linux: 'linux', darwin: 'darwin' }[process.platform as string]
     const arch = { x64: 'amd64', arm64: 'arm64' }[process.arch as string]
     if (!os || !arch) throw new Error(`No Caddy download for ${process.platform}/${process.arch}`)
@@ -357,14 +399,17 @@ export const actions: Record<string, ExtensionAction> = {
     const temporary = `${files.binary}.${process.pid}.tmp`
     await writeFile(temporary, new Uint8Array(await response.arrayBuffer()))
     await chmod(temporary, 0o755)
-    // A running Caddy keeps the old binary until it stops; the next apply starts the new one with every route.
-    if (await running(files))
-      await admin(files.socket, 'POST', '/stop').catch(() => {
-        // It may close the socket before answering; the apply below finds it stopped either way.
+    const token = dns ? await readSecret(host.userHome, TOKEN) : undefined
+    // Under the registry lock, so no server routes meanwhile: a running Caddy keeps the old binary until it stops, then
+    // the new one starts with every live route, whichever project asked for the install.
+    await withRegistry(files, async (registry) => {
+      const live = await running(files)
+      if (live) await stop(files)
+      await rename(temporary, files.binary).catch(async (error: unknown) => {
+        await rm(temporary, { force: true })
+        throw error
       })
-    await rename(temporary, files.binary).catch(async (error: unknown) => {
-      await rm(temporary, { force: true })
-      throw error
+      if (live && config.domain && (!dns || token)) await apply(files, config, registry, token)
     })
     const version = (await probe(files))?.version ?? 'unknown'
     await retries.get(host)?.()
@@ -405,11 +450,11 @@ export default function caddy(host: ExtensionHost) {
   }
   async function run() {
     if (closed) return
-    const settings = await settingsOf(host.userHome)
-    const config = configOf(settings)
-    const token = config.dns ? await readSecret(host.userHome, TOKEN) : undefined
-    const subdomain = settings.serve?.[host.projectRoot]?.subdomain
     try {
+      const settings = await settingsOf(host.userHome)
+      const config = configOf(settings)
+      const token = config.dns ? await readSecret(host.userHome, TOKEN) : undefined
+      const subdomain = settings.serve?.[host.projectRoot]?.subdomain
       if (!subdomain) {
         await unroute(config, token)
         return set({ state: 'off' })
@@ -431,8 +476,10 @@ export default function caddy(host: ExtensionHost) {
           state: 'missing-module',
           hint: `This Caddy lacks caddy-dns/${config.dns}; install it again in Hosting.`,
         })
+      if (!SUBDOMAIN.test(subdomain))
+        throw new Error(`Invalid subdomain ${JSON.stringify(subdomain)} in caddy.serve`)
       set({ state: 'starting' })
-      const url = `https://${subdomain}.${config.domain}:${config.port}`
+      const url = originOf(subdomain, config)
       const target = host.system().process.url
       await withRegistry(files, async (registry) => {
         const holder = registry.routes[subdomain]
