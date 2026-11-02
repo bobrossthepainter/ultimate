@@ -46,6 +46,11 @@ export type Project = {
   routed: boolean
   /** Its tailnet address, when the tailscale extension gave it a port. */
   tailnet?: string
+  /**
+   * Its systemd user service `ultimate@<home>.service`, on Linux with a reachable user systemd: whether it is
+   * installed, and whether systemd runs it now (a project started by hand runs without it).
+   */
+  service?: { installed: boolean; active: boolean }
 }
 
 export type Overview = {
@@ -72,5 +77,13 @@ export const ServeAction = actionRef<{ root: string; on: boolean }, { subdomain?
 )
 /** User-only. Downloads Caddy with the configured DNS provider's module into `~/.ultimate/caddy/`. */
 export const InstallAction = actionRef<null, { version: string }>('caddy', 'install')
+/**
+ * User-only. `{ root, run }` → starts or stops that project's service, or installs it (`pnpm setup:machine --project
+ * <root>`). This project's own server is never stopped from here.
+ */
+export const ServiceAction = actionRef<
+  { root: string; run: 'start' | 'stop' | 'install' },
+  { output?: string }
+>('caddy', 'service')
 /** No arguments → applies the setup again (after a token change or a fix) and returns this server's status. */
 export const RetryAction = actionRef<null, Status>('caddy', 'retry')

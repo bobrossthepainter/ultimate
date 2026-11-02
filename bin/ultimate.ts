@@ -106,13 +106,15 @@ const lock = await acquireLock(lockPath, {
   project: projectRoot,
 }).catch(async (error) => {
   // Starting a running project again opens its window.
+  const running = String(error).includes('already running')
   const owner = opening && (await readOwner(lockPath))
-  if (owner && owner.port !== undefined && String(error).includes('already running')) {
+  if (owner && owner.port !== undefined && running) {
     openWindow(owner.port)
     process.exit(0)
   }
   console.error(String(error))
-  process.exit(1)
+  // Exit 3 tells a service manager not to retry: the project already runs elsewhere (RestartPreventExitStatus=3).
+  process.exit(running ? 3 : 1)
 })
 // An interrupted `pnpm reset` or `pnpm restore` left the home half moved; storage must not open until it is finished.
 if (existsSync(join(home, 'reset.json'))) {

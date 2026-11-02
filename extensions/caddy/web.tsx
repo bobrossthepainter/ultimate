@@ -20,6 +20,7 @@ import {
   OverviewAction,
   RetryAction,
   ServeAction,
+  ServiceAction,
   StatusAction,
 } from './refs.ts'
 import type { Overview, Project, Status } from './refs.ts'
@@ -298,8 +299,20 @@ function Row({
   refetch: () => Promise<unknown>
 }) {
   const { busy, error, run } = useRun(refetch)
+  const service = useRun(refetch)
+  const [output, setOutput] = useState<string>()
   const on = !!project.subdomain
   const link = href(project)
+  // Start a stopped service, stop one systemd runs (never this server's own), install one that is missing.
+  const act = !project.service
+    ? undefined
+    : !project.service.installed
+      ? ({ run: 'install', label: 'Install as service' } as const)
+      : !project.running
+        ? ({ run: 'start', label: 'Start' } as const)
+        : project.service.active && !project.current
+          ? ({ run: 'stop', label: 'Stop' } as const)
+          : undefined
   const state = project.current
     ? status.state === 'ready'
       ? { tone: 'bg-success', text: 'served' }
@@ -335,6 +348,31 @@ function Row({
           {dot(project.running ? 'bg-success' : 'bg-muted-foreground/40')}
           {project.running ? `:${new URL(project.running).port}` : 'stopped'}
         </span>
+        {act && (
+          <Button
+            className={cn(small, 'text-muted-foreground')}
+            disabled={service.busy}
+            onClick={() =>
+              void service.run(async () => {
+                setOutput(undefined)
+                setOutput(
+                  (await api.action(ServiceAction, { root: project.root, run: act.run })).output,
+                )
+              })
+            }
+            size="sm"
+            title={
+              act.run === 'install'
+                ? 'Run it as a systemd user service (pnpm setup:machine --project …)'
+                : `systemctl --user ${act.run} ultimate@…`
+            }
+            type="button"
+            variant="ghost"
+          >
+            {service.busy && <LoaderCircleIcon className="size-3.5 animate-spin" />}
+            {act.label}
+          </Button>
+        )}
         {link && !project.current ? (
           <a
             aria-label={`Open ${project.name}`}
@@ -367,7 +405,16 @@ function Row({
           <span className="min-w-0 break-words">{state.text}</span>
         </p>
       )}
-      {error && <p className="mt-1 pl-6 font-mono text-[11px] leading-snug text-error">{error}</p>}
+      {(error ?? service.error) && (
+        <p className="mt-1 pl-6 font-mono text-[11px] leading-snug text-error">
+          {error ?? service.error}
+        </p>
+      )}
+      {output && (
+        <pre className="mt-1 ml-6 max-h-32 overflow-auto font-mono text-[11px] leading-snug whitespace-pre-wrap text-muted-foreground">
+          {output}
+        </pre>
+      )}
     </li>
   )
 }

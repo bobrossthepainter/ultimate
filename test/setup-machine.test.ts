@@ -1,11 +1,17 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import {
   type AgentState,
+  legacyProject,
   loadAgents,
   loginPath,
   renderAgents,
+  renderServiceEnv,
   renderUnits,
   selfUnits,
+  servicePorts,
 } from '../scripts/setup-machine.ts'
 
 const options = {
@@ -24,19 +30,43 @@ function line(content: string, key: string) {
   return content.split('\n').filter((entry) => entry.startsWith(`${key}=`))
 }
 
-it("renders the project's ultimate unit with absolute paths", () => {
+it("renders the ultimate@ template, which reads each instance's project and port from its home", () => {
   const units = renderUnits(options)
-  expect(units.map((unit) => unit.name)).toEqual(['ultimate.service'])
+  expect(units.map((unit) => unit.name)).toEqual(['ultimate@.service'])
   const ultimate = units[0].content
-  expect(line(ultimate, 'WorkingDirectory')).toEqual(['WorkingDirectory=/home/u/work/app'])
-  expect(line(ultimate, 'ExecStart')).toEqual([
-    'ExecStart=/opt/node/bin/node /home/u/ultimate/bin/ultimate.ts',
+  expect(line(ultimate, 'WorkingDirectory')).toEqual(['WorkingDirectory=/home/u/ultimate'])
+  expect(line(ultimate, 'EnvironmentFile')).toEqual([
+    'EnvironmentFile=/home/u/.ultimate/projects/%i/service.env',
   ])
+  expect(line(ultimate, 'ExecStart')).toEqual([
+    'ExecStart=/opt/node/bin/node /home/u/ultimate/bin/ultimate.ts ${ULTIMATE_PROJECT}',
+  ])
+  // An instance whose project already runs (by hand) exits 3 and must not restart every 5 s forever.
+  expect(line(ultimate, 'RestartPreventExitStatus')).toEqual(['RestartPreventExitStatus=3'])
   expect(line(ultimate, 'Environment')).toContain('Environment=ULTIMATE_NO_OPEN=1')
   expect(line(ultimate, 'Environment').filter((entry) => entry.includes('PATH='))).toEqual([
     'Environment=PATH=/opt/node/bin:/opt/mise/shims:/home/u/.local/bin:/usr/bin:/usr/local/bin:/bin',
   ])
   expect(line(ultimate, 'WantedBy')).toEqual(['WantedBy=default.target'])
+  expect(renderServiceEnv('/home/u/work/app', 4748)).toBe(
+    'ULTIMATE_PROJECT=/home/u/work/app\nULTIMATE_PORT=4748\n',
+  )
+  expect(legacyProject('[Service]\nWorkingDirectory=/home/u/work/app\n')).toBe('/home/u/work/app')
+})
+
+it("keeps each project's port: its service's, else the one it runs on, else the first free one", () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ports-'))
+  const home = (name: string, files: Record<string, string> = {}) => {
+    mkdirSync(join(dir, name))
+    for (const [file, text] of Object.entries(files)) writeFileSync(join(dir, name, file), text)
+    return join(dir, name)
+  }
+  const service = home('service-1', { 'service.env': 'ULTIMATE_PROJECT=/a\nULTIMATE_PORT=4800\n' })
+  const running = home('running-2', { 'ultimate.lock': '{"pid":1,"port":4747}' })
+  home('other-3', { 'ultimate.lock': '{"pid":1,"port":4748}' })
+  const fresh = home('fresh-4')
+  const second = home('fresh-5')
+  expect(servicePorts([service, running, fresh, second], dir)).toEqual([4800, 4747, 4749, 4750])
 })
 
 it("puts the login shell's PATH first, so a bare service PATH still finds claude, gh and pnpm", () => {
@@ -78,11 +108,13 @@ it('refuses paths systemd would read differently, naming the path', () => {
     ['project', '/home/u/$HOME/app'],
     ['project', '/home/u/tab\there'],
   ] as const)
-    expect(() => renderUnits({ ...options, [field]: path })).toThrow(
-      `${field} path ${JSON.stringify(path)} contains whitespace`,
-    )
+    expect(() =>
+      field === 'project'
+        ? renderServiceEnv(path, 4747)
+        : renderUnits({ ...options, [field]: path }),
+    ).toThrow(`${field} path ${JSON.stringify(path)} contains whitespace`)
   // Ordinary punctuation in paths stays allowed.
-  expect(() => renderUnits({ ...options, project: '/home/u/work/my-app_2.0+x@y' })).not.toThrow()
+  expect(() => renderServiceEnv('/home/u/work/my-app_2.0+x@y', 4747)).not.toThrow()
 })
 
 /** The text of each top-level <key> in a rendered plist, keyed by name; the value is the raw XML after it. */
@@ -216,4 +248,9 @@ it('never restarts the unit it runs inside: by InvocationID, and ultimate.servic
     'ultimate.service',
   ])
   expect(selfUnits([], { ULTIMATE_SUPERVISED: '1' }, invocation)).toEqual([])
+  // Under the supervisor of a project's instance, that instance; never another project's.
+  const env = { ULTIMATE_SUPERVISED: '1', ULTIMATE_HOME: '/home/u/.ultimate/projects/app-1a2b3c4d' }
+  expect(
+    selfUnits(['ultimate@app-1a2b3c4d.service', 'ultimate@web-9f8e7d6c.service'], env, invocation),
+  ).toEqual(['ultimate@app-1a2b3c4d.service'])
 })

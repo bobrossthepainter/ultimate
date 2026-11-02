@@ -1,17 +1,21 @@
-// Installs Ultimate as a service: on Linux a systemd user unit with linger, so it starts at boot without a login; on
-// macOS a launchd agent in ~/Library/LaunchAgents, which runs while the user is logged in.
-// Usage: pnpm setup:machine [--project <dir>] [--dry-run]. See "Cloud backups" in extensions/cloud/README.md.
+// Installs Ultimate as a service. On Linux each project is an instance of the systemd user template ultimate@.service,
+// named after its home in ~/.ultimate/projects/, with linger, so it starts at boot without a login; on macOS one
+// project is a launchd agent in ~/Library/LaunchAgents, which runs while the user is logged in.
+// Usage: pnpm setup:machine [--project <dir>]... [--dry-run]. See "Cloud backups" in extensions/cloud/README.md.
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+import { alive } from '../server/lock.ts'
+import { projectHome } from '../server/project.ts'
 
 export interface UnitOptions {
   /** The Ultimate clone that holds bin/ultimate.ts. */
   clone: string
-  /** The project ultimate.service opens. */
+  /** The project the launchd agent opens. */
   project: string
   home: string
   node: string
@@ -19,16 +23,23 @@ export interface UnitOptions {
   path: string
 }
 
+/** The template every project's service is an instance of. */
+export const TEMPLATE = 'ultimate@.service'
+/** The single-project unit of earlier versions, replaced by the project's instance. */
+export const LEGACY = 'ultimate.service'
+/** A project's instance: named after its home folder, `ultimate@my-app-1a2b3c4d.service`. */
+export const instanceOf = (home: string) => `ultimate@${basename(home)}.service`
+/** Exit code of bin/ultimate.ts when the project already runs; the unit does not retry it. */
+export const ALREADY_RUNNING = 3
+
 export interface Unit {
   name: string
   content: string
 }
 
-/** One service, as both the systemd unit and the launchd agent run it. */
+/** The launchd agent's service. */
 interface Service {
-  unit: string
   label: string
-  description: string
   cwd: string
   env: Record<string, string>
   args: string[]
@@ -68,19 +79,67 @@ export function checkPaths(paths: Record<string, string>) {
 }
 
 /**
- * The changed units this script runs inside, which it must not restart: the one whose InvocationID is the
- * process's INVOCATION_ID, and under Ultimate's supervisor ultimate.service.
+ * The units this script runs inside, which it must not restart or stop: the one whose InvocationID is the process's
+ * INVOCATION_ID, and under Ultimate's supervisor the legacy unit and its own project's instance.
  */
 export function selfUnits(
-  changed: string[],
-  env: { INVOCATION_ID?: string; ULTIMATE_SUPERVISED?: string },
+  units: string[],
+  env: { INVOCATION_ID?: string; ULTIMATE_SUPERVISED?: string; ULTIMATE_HOME?: string },
   invocation: (unit: string) => string,
 ) {
-  return changed.filter(
+  const supervised = env.ULTIMATE_SUPERVISED === '1'
+  return units.filter(
     (name) =>
-      (env.ULTIMATE_SUPERVISED === '1' && name === 'ultimate.service') ||
+      (supervised &&
+        (name === LEGACY || (!!env.ULTIMATE_HOME && name === instanceOf(env.ULTIMATE_HOME)))) ||
       (!!env.INVOCATION_ID && invocation(name) === env.INVOCATION_ID),
   )
+}
+
+/** Characters systemd allows in a unit's instance name without escaping. */
+const INSTANCE = /^[A-Za-z0-9_.:-]+$/
+
+/** A project's `service.env`, the instance's EnvironmentFile: which project it opens, and on which fixed port. */
+export function renderServiceEnv(project: string, port: number) {
+  checkPaths({ project })
+  return `ULTIMATE_PROJECT=${project}\nULTIMATE_PORT=${port}\n`
+}
+
+/** The port in a `service.env` or `ultimate.lock`, when it names one. */
+function portIn(file: string) {
+  if (!existsSync(file)) return undefined
+  const text = readFileSync(file, 'utf8')
+  const port = Number(
+    file.endsWith('.env')
+      ? /^ULTIMATE_PORT=(\d+)$/m.exec(text)?.[1]
+      : (JSON.parse(text) as { port?: number }).port,
+  )
+  return Number.isInteger(port) && port > 0 ? port : undefined
+}
+
+/**
+ * Each project's fixed port: the one its service already has, else the one it runs on now, else the first port from
+ * 4747 up that no other project of this machine has or runs on.
+ */
+export function servicePorts(homes: string[], projectsDir: string) {
+  const others = existsSync(projectsDir)
+    ? readdirSync(projectsDir).map((name) => join(projectsDir, name))
+    : []
+  const taken = new Set(
+    others.flatMap((home) =>
+      [portIn(join(home, 'service.env')), portIn(join(home, 'ultimate.lock'))].filter(
+        (port) => port !== undefined,
+      ),
+    ),
+  )
+  return homes.map((home) => {
+    const own = portIn(join(home, 'service.env')) ?? portIn(join(home, 'ultimate.lock'))
+    if (own !== undefined) return own
+    let port = 4747
+    while (taken.has(port)) port++
+    taken.add(port)
+    return port
+  })
 }
 
 const marker = '__ULTIMATE_PATH__'
@@ -137,9 +196,7 @@ function services(options: UnitOptions, path: string): Service[] {
   const { clone, project, node } = options
   return [
     {
-      unit: 'ultimate.service',
       label: 'com.ultimate.app',
-      description: `Ultimate (${project})`,
       cwd: project,
       env: { PATH: path, ULTIMATE_NO_OPEN: '1' },
       args: [node, join(clone, 'bin/ultimate.ts')],
@@ -147,21 +204,33 @@ function services(options: UnitOptions, path: string): Service[] {
   ]
 }
 
-/** Renders the unit files; pure, so the side effects stay in main. Throws for a path systemd would misread. */
-export function renderUnits(options: UnitOptions): Unit[] {
-  const { clone, project, home, node } = options
-  checkPaths({ clone, project, home, node })
+/**
+ * Renders the template unit; pure, so the side effects stay in main. Throws for a path systemd would misread. Each
+ * instance reads its project and port from `<home>/.ultimate/projects/<instance>/service.env`. Exit 3 means the project
+ * already runs (by hand, or another instance): retrying it would loop every RestartSec forever.
+ */
+export function renderUnits(options: Omit<UnitOptions, 'project'>): Unit[] {
+  const { clone, home, node } = options
+  checkPaths({ clone, home, node })
   // An entry systemd would misread is left out rather than escaped.
   const path = servicePath(node, options.path, special)
-  return services(options, path).map((service) => ({
-    name: service.unit,
-    content: unit(service.description, [
-      `WorkingDirectory=${service.cwd}`,
-      ...Object.entries(service.env).map(([key, value]) => `Environment=${key}=${value}`),
-      `ExecStart=${service.args.join(' ')}`,
-    ]),
-  }))
+  return [
+    {
+      name: TEMPLATE,
+      content: unit('Ultimate (%i)', [
+        `WorkingDirectory=${clone}`,
+        `EnvironmentFile=${join(home, '.ultimate/projects/%i/service.env')}`,
+        `Environment=PATH=${path}`,
+        'Environment=ULTIMATE_NO_OPEN=1',
+        `ExecStart=${node} ${join(clone, 'bin/ultimate.ts')} \${ULTIMATE_PROJECT}`,
+        `RestartPreventExitStatus=${ALREADY_RUNNING}`,
+      ]),
+    },
+  ]
 }
+
+/** The project the legacy unit opens: its WorkingDirectory. */
+export const legacyProject = (content: string) => /^WorkingDirectory=(.+)$/m.exec(content)?.[1]
 
 export interface Agent {
   label: string
@@ -285,16 +354,18 @@ function main() {
   }
   const { values } = parseArgs({
     options: {
-      project: { type: 'string' },
+      project: { type: 'string', multiple: true },
       'dry-run': { type: 'boolean' },
     },
   })
   const dry = values['dry-run'] === true
   const home = homedir()
   const clone = resolve(fileURLToPath(new URL('..', import.meta.url)))
+  // The real path, as bin/ultimate.ts opens it and projectHome hashes it.
+  const projects = (values.project ?? [clone]).map((project) => realpathSync(resolve(project)))
   const options = {
     clone,
-    project: resolve(values.project ?? clone),
+    project: projects[0],
     home,
     node: process.execPath,
     path: loginPath(process.env.PATH ?? ''),
@@ -322,6 +393,7 @@ function main() {
     })
 
   if (process.platform === 'darwin') {
+    if (projects.length > 1) throw new Error('On macOS one project runs as a launchd agent.')
     const agents = renderAgents(options)
     const dir = join(home, 'Library/LaunchAgents')
     mkdir(dir)
@@ -346,26 +418,56 @@ function main() {
     return
   }
 
-  const units = renderUnits(options)
   const run = (command: string, args: string[]) => {
     console.log(`$ ${command} ${args.join(' ')}`)
     if (!dry) execFileSync(command, args, { stdio: 'inherit' })
   }
   const dir = join(home, '.config/systemd/user')
+  const legacy = join(dir, LEGACY)
+  // The legacy unit's project becomes an instance too, so the migration keeps it running as a service.
+  const migrated = existsSync(legacy) && legacyProject(readFileSync(legacy, 'utf8'))
+  if (migrated && !projects.includes(migrated)) projects.push(migrated)
+  const homes = projects.map((project) => projectHome(project, home))
+  for (const project of homes)
+    if (!INSTANCE.test(basename(project)))
+      throw new Error(`${project} needs escaping as a systemd instance name; rename its folder.`)
+  const ports = servicePorts(homes, join(home, '.ultimate/projects'))
   mkdir(dir)
-  const changed = write(dir, units)
-    .filter(({ state }) => state === 'replaced')
-    .map(({ name }) => name)
-  run('systemctl', ['--user', 'daemon-reload'])
-  run('systemctl', ['--user', 'enable', '--now', ...units.map(({ name }) => name)])
-  // Restarting the unit this script runs inside would kill the script with it.
-  const inside = selfUnits(changed, process.env, (name) =>
+  const [template] = write(dir, renderUnits(options))
+  const envs = homes.map((project, index) => {
+    mkdir(project)
+    return write(project, [
+      { name: 'service.env', content: renderServiceEnv(projects[index], ports[index]) },
+    ])[0]
+  })
+  const instances = homes.map(instanceOf)
+  // Stopping or restarting the unit this script runs inside would kill the script with it.
+  const inside = selfUnits([LEGACY, ...instances], process.env, (name) =>
     query(['show', name, '-p', 'InvocationID']),
   )
-  for (const name of changed) {
-    if (inside.includes(name)) console.log(`${name} changed: restart ${name} yourself.`)
-    else run('systemctl', ['--user', 'restart', name])
+  if (migrated) {
+    if (inside.includes(LEGACY))
+      console.log(
+        `${LEGACY} is replaced by ${instanceOf(projectHome(migrated, home))}; switch yourself: systemctl --user stop ${LEGACY}, then systemctl --user start ${instanceOf(projectHome(migrated, home))}.`,
+      )
+    else run('systemctl', ['--user', 'stop', LEGACY])
+    run('systemctl', ['--user', 'disable', LEGACY])
+    console.log(`$ rm ${legacy}`)
+    if (!dry) rmSync(legacy)
   }
+  run('systemctl', ['--user', 'daemon-reload'])
+  run('systemctl', ['--user', 'enable', ...instances])
+  instances.forEach((name, index) => {
+    const changed = template.state === 'replaced' || envs[index].state === 'replaced'
+    // A project running by hand holds its lock: the instance would exit 3 at once.
+    if (!active(name) && runsByHand(homes[index]))
+      console.log(
+        `${projects[index]} runs outside systemd now: stop it, then systemctl --user start ${name}.`,
+      )
+    else if (inside.includes(name)) {
+      if (changed) console.log(`${name} changed: systemctl --user restart ${name} yourself.`)
+    } else run('systemctl', ['--user', changed ? 'restart' : 'start', name])
+  })
   const user = userInfo().username
   const linger = execFileSync('loginctl', ['show-user', user, '-p', 'Linger', '--value'], {
     encoding: 'utf8',
@@ -377,6 +479,15 @@ function main() {
 
 function query(args: string[]) {
   return execFileSync('systemctl', ['--user', ...args, '--value'], { encoding: 'utf8' }).trim()
+}
+
+const active = (name: string) =>
+  spawnSync('systemctl', ['--user', 'is-active', '--quiet', name]).status === 0
+
+/** Whether a live process holds the project's lock (`ultimate.lock` names its pid). */
+function runsByHand(home: string) {
+  const lock = join(home, 'ultimate.lock')
+  return existsSync(lock) && alive((JSON.parse(readFileSync(lock, 'utf8')) as { pid: number }).pid)
 }
 
 if (import.meta.main) main()

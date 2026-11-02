@@ -145,7 +145,8 @@ process.on('message',(message:{type:string})=>{ if(message.type==='go')process.s
     const first = await fixture()
     const second = await launch(first.home)
     const [code] = await once(second.child, 'exit')
-    expect(code).not.toBe(0)
+    // 3, which the service unit's RestartPreventExitStatus does not retry.
+    expect(code).toBe(3)
     expect(second.output()).toContain(
       `Ultimate is already running (pid ${first.child.pid}) at ${first.url}`,
     )

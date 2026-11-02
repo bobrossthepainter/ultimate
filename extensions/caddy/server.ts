@@ -23,9 +23,10 @@ import {
   OverviewAction,
   RetryAction,
   ServeAction,
+  ServiceAction,
   StatusAction,
 } from './refs.ts'
-import type { Config, Overview, Status } from './refs.ts'
+import type { Config, Overview, Project, Status } from './refs.ts'
 
 export const TOKEN = 'CADDY_DNS_API_TOKEN'
 /** `caddy` in user settings: the setup, and the projects ticked "serve by Caddy" by root, with their subdomain. */
@@ -246,6 +247,46 @@ async function updateCaddy(userHome: string, change: (previous: Settings) => Set
   }
 }
 
+/** A preview or scratch home: it neither routes through Caddy nor touches the machine's services. */
+const scratch = (host: ExtensionHost) => host.home !== projectHome(host.projectRoot, host.userHome)
+
+/** A project's systemd user service, an instance of `ultimate@.service` (scripts/setup-machine.ts) named after its home. */
+const unitOf = (home: string) => `ultimate@${basename(home)}.service`
+
+/**
+ * Each home's service, by home: installed once setup-machine wrote its `service.env` and systemd loads the template,
+ * active while systemd runs it. Empty off Linux or without a reachable user systemd, so the panel offers none.
+ */
+async function services(homes: string[]): Promise<Map<string, NonNullable<Project['service']>>> {
+  if (process.platform !== 'linux' || !homes.length) return new Map()
+  const { stdout } = await exec(
+    'systemctl',
+    ['--user', 'show', '-p', 'LoadState,ActiveState', ...homes.map(unitOf)],
+    { timeout: 10000 },
+  ).catch(() => {
+    // No user systemd (a container, no session bus): there are no services to show.
+    return { stdout: '' }
+  })
+  const blocks = stdout.trim() ? stdout.trim().split('\n\n') : []
+  return new Map(
+    blocks.flatMap((block, index) => {
+      const home = homes[index]
+      const field = (name: string) => new RegExp(`^${name}=(.*)$`, 'm').exec(block)?.[1]
+      return home
+        ? [
+            [
+              home,
+              {
+                installed: field('LoadState') === 'loaded' && existsSync(join(home, 'service.env')),
+                active: ['active', 'activating', 'reloading'].includes(field('ActiveState') ?? ''),
+              },
+            ],
+          ]
+        : []
+    }),
+  )
+}
+
 /** A DNS label for a project: its folder name, made safe, with `-2`, `-3`… on a clash. */
 function label(root: string, taken: Set<string>) {
   const base =
@@ -302,6 +343,9 @@ export const actions: Record<string, ExtensionAction> = {
       ),
       host.projects(),
     ])
+    const units = await services(
+      scratch(host) ? [] : projects.flatMap((project) => (project.root ? [project.home] : [])),
+    )
     const tailnet = host.want(TailscaleApi)?.status().url
     const routed = new Set(
       Object.values(registry.routes)
@@ -325,6 +369,7 @@ export const actions: Record<string, ExtensionAction> = {
         const current = project.current
         // This server runs whatever its lock says: a preview's home holds none.
         const url = current ? host.system().process.url : project.running?.url
+        const service = units.get(project.home)
         return [
           {
             root: project.root,
@@ -335,6 +380,7 @@ export const actions: Record<string, ExtensionAction> = {
             ...(subdomain && config.domain && { url: originOf(subdomain, config) }),
             routed: routed.has(project.root),
             ...(tailnet && port && { tailnet: `https://${new URL(tailnet).hostname}:${port}` }),
+            ...(service && { service }),
           },
         ]
       }),
@@ -376,6 +422,33 @@ export const actions: Record<string, ExtensionAction> = {
       return { ...previous, serve }
     })
     return subdomain ? { subdomain } : {}
+  }),
+  service: implementAction(ServiceAction, async (args, { host }): Promise<{ output?: string }> => {
+    const { root, run } = (args ?? {}) as { root?: unknown; run?: unknown }
+    if (typeof root !== 'string' || (run !== 'start' && run !== 'stop' && run !== 'install'))
+      throw new Error("Give { root, run: 'start' | 'stop' | 'install' }")
+    if (scratch(host)) throw new Error('Previews do not start or stop services.')
+    const project = (await host.projects()).find((entry) => entry.root === root)
+    if (!project) throw new Error(`No Ultimate project at ${root}`)
+    if (run === 'install') {
+      // The script writes the template for this clone and node, the project's service.env, and starts it unless the
+      // project runs by hand; its own output says what it did.
+      const { stdout, stderr } = await exec(
+        process.execPath,
+        [join(host.ultimateRoot, 'scripts/setup-machine.ts'), '--project', root],
+        { timeout: 60000 },
+      )
+      return { output: (stdout + stderr).trim().slice(-2000) }
+    }
+    if (run === 'stop' && project.current)
+      throw new Error('Stop this Ultimate from another one, or with systemctl.')
+    if (run === 'start' && (project.current || project.running))
+      throw new Error(`${project.name} already runs; stop it first.`)
+    // --no-block: systemctl returns once the job is queued, so a stop never waits on the server it stops.
+    await exec('systemctl', ['--user', run, '--no-block', unitOf(project.home)], {
+      timeout: 10000,
+    })
+    return {}
   }),
   install: implementAction(InstallAction, async (_args, { host }) => {
     const files = paths(host.userHome)
@@ -423,8 +496,8 @@ export const actions: Record<string, ExtensionAction> = {
     return { version }
   }),
 }
-/** Only the user ticks projects, changes the setup or downloads a binary. */
-export const userActions = ['configure', 'serve', 'install']
+/** Only the user ticks projects, changes the setup, downloads a binary or starts and stops services. */
+export const userActions = ['configure', 'serve', 'install', 'service']
 /** The panel polls the overview while open. */
 export const pollActions = ['overview', 'status']
 
@@ -432,7 +505,7 @@ export default function caddy(host: ExtensionHost) {
   const files = paths(host.userHome)
   const owner = `${process.pid}:${randomUUID()}`
   // Only the project's own server, on its default home, is served; previews and scratch homes never are.
-  const temporary = host.home !== projectHome(host.projectRoot, host.userHome)
+  const temporary = scratch(host)
   let status: Status = { state: 'off' }
   let routed: string | undefined
   let remove: (() => void) | undefined
