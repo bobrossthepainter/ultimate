@@ -303,15 +303,17 @@ function Row({
   const [output, setOutput] = useState<string>()
   const on = !!project.subdomain
   const link = href(project)
-  // Start a stopped service, stop one systemd runs (never this server's own), install one that is missing.
+  // Install a missing service, stop one systemd runs or keeps restarting (never this server's own), start a stopped one.
   const act = !project.service
     ? undefined
     : !project.service.installed
       ? ({ run: 'install', label: 'Install as service' } as const)
-      : !project.running
-        ? ({ run: 'start', label: 'Start' } as const)
-        : project.service.active && !project.current
-          ? ({ run: 'stop', label: 'Stop' } as const)
+      : project.service.active
+        ? project.current
+          ? undefined
+          : ({ run: 'stop', label: 'Stop' } as const)
+        : !project.running
+          ? ({ run: 'start', label: 'Start' } as const)
           : undefined
   const state = project.current
     ? status.state === 'ready'
@@ -356,7 +358,7 @@ function Row({
               void service.run(async () => {
                 setOutput(undefined)
                 setOutput(
-                  (await api.action(ServiceAction, { root: project.root, run: act.run })).output,
+                  (await api.action(ServiceAction, { root: project.root, run: act.run })).next,
                 )
               })
             }
@@ -411,9 +413,7 @@ function Row({
         </p>
       )}
       {output && (
-        <pre className="mt-1 ml-6 max-h-32 overflow-auto font-mono text-[11px] leading-snug whitespace-pre-wrap text-muted-foreground">
-          {output}
-        </pre>
+        <p className="mt-1 pl-6 text-[11.5px] leading-snug break-words text-warning">{output}</p>
       )}
     </li>
   )

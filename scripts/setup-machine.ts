@@ -6,6 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { rmSync, writeFileSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
+import { createServer } from 'node:net'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -80,18 +81,19 @@ export function checkPaths(paths: Record<string, string>) {
 
 /**
  * The units this script runs inside, which it must not restart or stop: the one whose InvocationID is the process's
- * INVOCATION_ID, and under Ultimate's supervisor the legacy unit and its own project's instance.
+ * INVOCATION_ID, and under Ultimate's supervisor its own project's instance, and the legacy unit when that runs the
+ * same project (`legacyHome`, the home of the legacy unit's project).
  */
 export function selfUnits(
   units: string[],
   env: { INVOCATION_ID?: string; ULTIMATE_SUPERVISED?: string; ULTIMATE_HOME?: string },
   invocation: (unit: string) => string,
+  legacyHome?: string,
 ) {
-  const supervised = env.ULTIMATE_SUPERVISED === '1'
+  const own = env.ULTIMATE_SUPERVISED === '1' ? env.ULTIMATE_HOME : undefined
   return units.filter(
     (name) =>
-      (supervised &&
-        (name === LEGACY || (!!env.ULTIMATE_HOME && name === instanceOf(env.ULTIMATE_HOME)))) ||
+      (!!own && (name === instanceOf(own) || (name === LEGACY && legacyHome === own))) ||
       (!!env.INVOCATION_ID && invocation(name) === env.INVOCATION_ID),
   )
 }
@@ -119,9 +121,13 @@ function portIn(file: string) {
 
 /**
  * Each project's fixed port: the one its service already has, else the one it runs on now, else the first port from
- * 4747 up that no other project of this machine has or runs on.
+ * 4747 up that no other project of this machine has or runs on and that is `free` (nothing listens on it).
  */
-export function servicePorts(homes: string[], projectsDir: string) {
+export async function servicePorts(
+  homes: string[],
+  projectsDir: string,
+  free: (port: number) => Promise<boolean>,
+) {
   const others = existsSync(projectsDir)
     ? readdirSync(projectsDir).map((name) => join(projectsDir, name))
     : []
@@ -132,15 +138,26 @@ export function servicePorts(homes: string[], projectsDir: string) {
       ),
     ),
   )
-  return homes.map((home) => {
-    const own = portIn(join(home, 'service.env')) ?? portIn(join(home, 'ultimate.lock'))
-    if (own !== undefined) return own
-    let port = 4747
-    while (taken.has(port)) port++
-    taken.add(port)
-    return port
-  })
+  const ports: number[] = []
+  for (const home of homes) {
+    let port = portIn(join(home, 'service.env')) ?? portIn(join(home, 'ultimate.lock'))
+    if (port === undefined) {
+      port = 4747
+      while (taken.has(port) || !(await free(port))) port++
+      taken.add(port)
+    }
+    ports.push(port)
+  }
+  return ports
 }
+
+/** Whether nothing listens on `port` on loopback: a listen there succeeds. */
+export const portFree = (port: number) =>
+  new Promise<boolean>((done) => {
+    const server = createServer()
+    server.once('error', () => done(false))
+    server.listen(port, '127.0.0.1', () => server.close(() => done(true)))
+  })
 
 const marker = '__ULTIMATE_PATH__'
 
@@ -345,7 +362,7 @@ export function loadAgents(
   }
 }
 
-function main() {
+async function main() {
   if (process.platform !== 'linux' && process.platform !== 'darwin') {
     console.error(
       `pnpm setup:machine supports Linux (systemd) and macOS (launchd), not ${process.platform}.`,
@@ -425,13 +442,15 @@ function main() {
   const dir = join(home, '.config/systemd/user')
   const legacy = join(dir, LEGACY)
   // The legacy unit's project becomes an instance too, so the migration keeps it running as a service.
-  const migrated = existsSync(legacy) && legacyProject(readFileSync(legacy, 'utf8'))
+  const written = existsSync(legacy) && legacyProject(readFileSync(legacy, 'utf8'))
+  // Its real path, the identity its supervisor hashes into the home.
+  const migrated = written && realpathSync(written)
   if (migrated && !projects.includes(migrated)) projects.push(migrated)
   const homes = projects.map((project) => projectHome(project, home))
   for (const project of homes)
     if (!INSTANCE.test(basename(project)))
       throw new Error(`${project} needs escaping as a systemd instance name; rename its folder.`)
-  const ports = servicePorts(homes, join(home, '.ultimate/projects'))
+  const ports = await servicePorts(homes, join(home, '.ultimate/projects'), portFree)
   mkdir(dir)
   const [template] = write(dir, renderUnits(options))
   const envs = homes.map((project, index) => {
@@ -442,8 +461,11 @@ function main() {
   })
   const instances = homes.map(instanceOf)
   // Stopping or restarting the unit this script runs inside would kill the script with it.
-  const inside = selfUnits([LEGACY, ...instances], process.env, (name) =>
-    query(['show', name, '-p', 'InvocationID']),
+  const inside = selfUnits(
+    [LEGACY, ...instances],
+    process.env,
+    (name) => query(['show', name, '-p', 'InvocationID']),
+    migrated ? projectHome(migrated, home) : undefined,
   )
   if (migrated) {
     if (inside.includes(LEGACY))
@@ -490,4 +512,4 @@ function runsByHand(home: string) {
   return existsSync(lock) && alive((JSON.parse(readFileSync(lock, 'utf8')) as { pid: number }).pid)
 }
 
-if (import.meta.main) main()
+if (import.meta.main) await main()

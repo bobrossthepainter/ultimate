@@ -79,11 +79,12 @@ export const ServeAction = actionRef<{ root: string; on: boolean }, { subdomain?
 export const InstallAction = actionRef<null, { version: string }>('caddy', 'install')
 /**
  * User-only. `{ root, run }` → starts or stops that project's service, or installs it (`pnpm setup:machine --project
- * <root>`). This project's own server is never stopped from here.
+ * <root>`), with `next` naming what the user still has to do (the project runs by hand, so the service waits for it to
+ * stop). This project's own server is never stopped from here.
  */
 export const ServiceAction = actionRef<
   { root: string; run: 'start' | 'stop' | 'install' },
-  { output?: string }
+  { next?: string }
 >('caddy', 'service')
 /** No arguments → applies the setup again (after a token change or a fix) and returns this server's status. */
 export const RetryAction = actionRef<null, Status>('caddy', 'retry')

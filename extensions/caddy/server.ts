@@ -423,7 +423,7 @@ export const actions: Record<string, ExtensionAction> = {
     })
     return subdomain ? { subdomain } : {}
   }),
-  service: implementAction(ServiceAction, async (args, { host }): Promise<{ output?: string }> => {
+  service: implementAction(ServiceAction, async (args, { host }): Promise<{ next?: string }> => {
     const { root, run } = (args ?? {}) as { root?: unknown; run?: unknown }
     if (typeof root !== 'string' || (run !== 'start' && run !== 'stop' && run !== 'install'))
       throw new Error("Give { root, run: 'start' | 'stop' | 'install' }")
@@ -432,13 +432,14 @@ export const actions: Record<string, ExtensionAction> = {
     if (!project) throw new Error(`No Ultimate project at ${root}`)
     if (run === 'install') {
       // The script writes the template for this clone and node, the project's service.env, and starts it unless the
-      // project runs by hand; its own output says what it did.
-      const { stdout, stderr } = await exec(
+      // project runs by hand, which its output then names as the step left to the user.
+      const { stdout } = await exec(
         process.execPath,
         [join(host.ultimateRoot, 'scripts/setup-machine.ts'), '--project', root],
         { timeout: 60000 },
       )
-      return { output: (stdout + stderr).trim().slice(-2000) }
+      const next = stdout.split('\n').find((line) => line.includes('runs outside systemd'))
+      return next ? { next } : {}
     }
     if (run === 'stop' && project.current)
       throw new Error('Stop this Ultimate from another one, or with systemctl.')

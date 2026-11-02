@@ -54,7 +54,7 @@ it("renders the ultimate@ template, which reads each instance's project and port
   expect(legacyProject('[Service]\nWorkingDirectory=/home/u/work/app\n')).toBe('/home/u/work/app')
 })
 
-it("keeps each project's port: its service's, else the one it runs on, else the first free one", () => {
+it("keeps each project's port: its service's, else the one it runs on, else the first free one", async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ports-'))
   const home = (name: string, files: Record<string, string> = {}) => {
     mkdirSync(join(dir, name))
@@ -66,7 +66,10 @@ it("keeps each project's port: its service's, else the one it runs on, else the 
   home('other-3', { 'ultimate.lock': '{"pid":1,"port":4748}' })
   const fresh = home('fresh-4')
   const second = home('fresh-5')
-  expect(servicePorts([service, running, fresh, second], dir)).toEqual([4800, 4747, 4749, 4750])
+  // 4749 has a listener of no Ultimate project, so the fresh ones skip it.
+  expect(
+    await servicePorts([service, running, fresh, second], dir, async (port) => port !== 4749),
+  ).toEqual([4800, 4747, 4750, 4751])
 })
 
 it("puts the login shell's PATH first, so a bare service PATH still finds claude, gh and pnpm", () => {
@@ -227,7 +230,7 @@ it('reloads new and changed agents, loads unloaded unchanged ones and never rest
   ).toThrow('launchctl bootstrap gui/501 /L/app.plist failed.')
 })
 
-it('never restarts the unit it runs inside: by InvocationID, and ultimate.service when supervised', () => {
+it("never restarts the unit it runs inside: by InvocationID, and its own project's units when supervised", () => {
   const changed = ['ultimate.service', 'other.service']
   const ids: Record<string, string> = {
     'ultimate.service': 'aaa',
@@ -238,19 +241,24 @@ it('never restarts the unit it runs inside: by InvocationID, and ultimate.servic
   expect(selfUnits(changed, {}, invocation)).toEqual([])
   // Inside another unit, found by its InvocationID.
   expect(selfUnits(changed, { INVOCATION_ID: 'bbb' }, invocation)).toEqual(['other.service'])
-  // Under Ultimate's supervisor, ultimate.service is left alone.
-  expect(selfUnits(changed, { ULTIMATE_SUPERVISED: '1' }, invocation)).toEqual(['ultimate.service'])
   // An unknown INVOCATION_ID matches nothing; an empty one never matches a unit without an id.
   expect(selfUnits(changed, { INVOCATION_ID: 'zzz' }, invocation)).toEqual([])
   expect(selfUnits(['other.service'], { INVOCATION_ID: '' }, () => '')).toEqual([])
-  // Only changed units are considered.
-  expect(selfUnits(['ultimate.service'], { ULTIMATE_SUPERVISED: '1' }, invocation)).toEqual([
+  // Under a project's supervisor: its instance, never another project's, and ultimate.service only when that runs
+  // the same project; another project's legacy unit is stopped and migrated as usual.
+  const own = '/home/u/.ultimate/projects/app-1a2b3c4d'
+  const env = { ULTIMATE_SUPERVISED: '1', ULTIMATE_HOME: own }
+  const units = [
     'ultimate.service',
+    'ultimate@app-1a2b3c4d.service',
+    'ultimate@web-9f8e7d6c.service',
+  ]
+  expect(selfUnits(units, env, invocation, own)).toEqual([
+    'ultimate.service',
+    'ultimate@app-1a2b3c4d.service',
   ])
-  expect(selfUnits([], { ULTIMATE_SUPERVISED: '1' }, invocation)).toEqual([])
-  // Under the supervisor of a project's instance, that instance; never another project's.
-  const env = { ULTIMATE_SUPERVISED: '1', ULTIMATE_HOME: '/home/u/.ultimate/projects/app-1a2b3c4d' }
-  expect(
-    selfUnits(['ultimate@app-1a2b3c4d.service', 'ultimate@web-9f8e7d6c.service'], env, invocation),
-  ).toEqual(['ultimate@app-1a2b3c4d.service'])
+  expect(selfUnits(units, env, invocation, '/home/u/.ultimate/projects/web-9f8e7d6c')).toEqual([
+    'ultimate@app-1a2b3c4d.service',
+  ])
+  expect(selfUnits(units, { ULTIMATE_SUPERVISED: '1' }, invocation, own)).toEqual([])
 })
