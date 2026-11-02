@@ -1,5 +1,9 @@
 # Ultimate over HTTPS on the local network
 
+**Prefer the `caddy` extension** (⌘K → Hosting (Caddy)…, `extensions/caddy/README.md`): it installs and runs Caddy,
+gets the wildcard certificate by DNS-01, and serves each ticked Ultimate without `--port` or `--proxy-origin` or a
+restart. The manual setup below remains for a Caddy you run yourself.
+
 Serve Ultimates on this network under your own domain with a wildcard certificate: Caddy terminates TLS and routes
 one subdomain per project to that project's supervisor, which stays on loopback. Machines outside the network use the
 `tailscale` extension instead.
