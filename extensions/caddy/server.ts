@@ -183,15 +183,25 @@ const stop = (files: Paths) =>
 const digest = (token: string | undefined) =>
   token ? createHash('sha256').update(token).digest('hex').slice(0, 16) : undefined
 
-async function withRegistry<T>(files: Paths, use: (registry: Registry) => Promise<T>) {
+/**
+ * A route lives while its owner runs and its root is still ticked with that port: unticking frees a port at once, for
+ * the next project to take, even before the old server removes its route; a route from before ports matches no port.
+ */
+const live = (port: string, route: Route, settings: Settings) =>
+  alive(Number(route.owner.split(':')[0])) && String(settings.serve?.[route.root]?.port) === port
+
+async function withRegistry<T>(
+  files: Paths,
+  userHome: string,
+  use: (registry: Registry) => Promise<T>,
+) {
   await mkdir(files.dir, { recursive: true, mode: 0o700 })
   const lock = await acquireLock(`${files.registry}.lock`, { pid: process.pid }, 120000)
   try {
     const registry = await readJson<Registry>(files.registry, { routes: {} })
-    // A route outlives a server only while its owner runs; one keyed by a subdomain predates ports.
-    for (const [name, route] of Object.entries(registry.routes))
-      if (!alive(Number(route.owner.split(':')[0])) || !PORT(Number(name)))
-        delete registry.routes[name]
+    const settings = await settingsOf(userHome)
+    for (const [port, route] of Object.entries(registry.routes))
+      if (!live(port, route, settings)) delete registry.routes[port]
     const result = await use(registry)
     await writeJson(files.registry, registry, { mode: 0o600 })
     return result
@@ -342,9 +352,9 @@ export const actions: Record<string, ExtensionAction> = {
     )
     const tailnet = host.want(TailscaleApi)?.status().url
     const routed = new Set(
-      Object.values(registry.routes)
-        .filter((route) => alive(Number(route.owner.split(':')[0])))
-        .map((route) => route.root),
+      Object.entries(registry.routes)
+        .filter(([port, route]) => live(port, route, settings))
+        .map(([, route]) => route.root),
     )
     return {
       config,
@@ -471,7 +481,7 @@ export const actions: Record<string, ExtensionAction> = {
     // Under the registry lock, so no server routes meanwhile: a running Caddy keeps the old binary until it stops, then
     // the new one starts with every live route, whichever project asked for the install. The setup is read again here,
     // since it may have changed during the download.
-    await withRegistry(files, async (registry) => {
+    await withRegistry(files, host.userHome, async (registry) => {
       const current = configOf(await settingsOf(host.userHome))
       if (current.dns !== dns) {
         await rm(temporary, { force: true })
@@ -518,9 +528,9 @@ export default function caddy(host: ExtensionHost) {
     if (!routed) return
     const name = routed
     routed = undefined
-    await withRegistry(files, async (registry) => {
-      if (registry.routes[name]?.owner !== owner) return
-      delete registry.routes[name]
+    await withRegistry(files, host.userHome, async (registry) => {
+      // Already dropped when another project took the port; Caddy still serves it until this apply.
+      if (registry.routes[name]?.owner === owner) delete registry.routes[name]
       if (config.domain && (await running(files))) await apply(files, config, registry, token)
     })
   }
@@ -561,7 +571,7 @@ export default function caddy(host: ExtensionHost) {
       const port = String(entry.port)
       const url = originOf(entry.port, config)
       const target = host.system().process.url
-      await withRegistry(files, async (registry) => {
+      await withRegistry(files, host.userHome, async (registry) => {
         const holder = registry.routes[port]
         if (holder && holder.root !== host.projectRoot)
           throw new Error(`Port ${port} is served for ${holder.root}`)

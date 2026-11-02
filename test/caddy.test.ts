@@ -133,18 +133,26 @@ it('gives each ticked project the next free port, and keeps it when ticked again
   expect(await actions.serve({ root: '/project/b', on: true }, ctx)).toEqual({ port: 9444 })
   expect(await actions.serve({ root: '/project/a', on: true }, ctx)).toEqual({ port: 9443 })
   expect(await actions.serve({ root: '/project/b', on: false }, ctx)).toEqual({})
-  // A project whose entry predates ports (a subdomain) gets one.
+  expect(await actions.serve({ root: '/project/b', on: true }, ctx)).toEqual({ port: 9444 })
+})
+
+it('routes a port at once to the project that took it, while the unticked one still runs', async () => {
+  const { home } = await fixture()
+  await instance(home)
+  // a is unticked and b takes 9443 before a's server has removed its route.
   await writeFile(
     join(home, '.ultimate/settings.json'),
     JSON.stringify({
       caddy: {
         domain: 'ultimate.example.com',
         dns: 'cloudflare',
-        serve: { '/project/b': { subdomain: 'b' } },
+        serve: { '/project/b': { port: 9443 } },
       },
     }),
   )
-  expect(await actions.serve({ root: '/project/b', on: true }, ctx)).toEqual({ port: 9443 })
+  const other = await instance(home, '/project/b', 4802)
+  expect(other.status()).toEqual({ state: 'ready', url: 'https://ultimate.example.com:9443' })
+  expect(await readFile(caddyfilePath(home), 'utf8')).toContain('reverse_proxy 127.0.0.1:4802')
 })
 
 it('refuses a port another live project holds', async () => {
