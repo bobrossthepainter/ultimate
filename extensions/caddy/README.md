@@ -18,6 +18,11 @@ needs a fix (amber).
   checkbox (serve by Caddy), its loopback port or "stopped", its Caddy address, and a link that opens it in a new tab:
   the Caddy address while it is served, else its tailnet address when this page came over the tailnet, else its
   loopback URL when this page is on loopback. Ultimates of another clone or another user's home are not listed.
+- **Services (Linux):** each project can run in the background as the systemd user service
+  `ultimate@<home folder>.service` (`pnpm setup:machine --project <dir>`). A row shows **Start** while its service is
+  stopped, **Stop** while systemd runs it, and **Install as service** while it has none; this Ultimate's own row
+  never offers Stop. Stop and Start queue the job (`--no-block`) and return; the overview shows the change within 5 s.
+  Without a reachable user systemd, and in previews, no row offers them.
 
 ## Settings and the token
 
@@ -63,6 +68,7 @@ homes are never served.
 - `status` → this server's `{ state, url?, hint? }`; states `off`, `unconfigured`, `not-installed`, `missing-module`,
   `not-loopback`, `starting`, `ready`, `error`.
 - `retry` → applies again and returns the status.
-- User-only: `configure { domain, port?, dns? | cert, key }`, `serve { root, on }`, `install`.
+- User-only: `configure { domain, port?, dns? | cert, key }`, `serve { root, on }`, `install`,
+  `service { root, run: 'start' | 'stop' | 'install' }`.
 
 `CADDY_COMMAND` names another binary; tests point it at a stub.
