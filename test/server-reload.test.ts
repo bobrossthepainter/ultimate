@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { prepareFauxServer as prepareServer, until, post, attach } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import type { ServerEvents } from '../shared/protocol.ts'
-import { fixture, orderedSource } from './server-fixture.ts'
+import { fixture, orderedSource, servers } from './server-fixture.ts'
 
 describe('server reload', () => {
   it('tracks extension and web builds and stores positional prompt changes', async () => {
@@ -216,5 +216,21 @@ describe('server reload', () => {
     await rm(folder, { recursive: true })
     await until(() => !server.extensions.info().some((extension) => extension.name === 'added'))
     expect(server.host.registry.snapshot().extension('added')).toBeUndefined()
+  })
+
+  // #5488: a lander sweep or catch-up seed drained at shutdown calls the exec service, provided by a facet disposed earlier.
+  it('keeps every service provided until each facet has cleaned up on close', async () => {
+    const { server } = await fixture(false, {
+      'a-service': `export default (host) => { host.implement({ name: 'a-service' }, { ping: () => 'pong' }); return { name: 'a-service' } }`,
+      'b-user': `import { writeFileSync } from 'node:fs'
+export default (host) => {
+  const service = host.need({ name: 'a-service' })
+  host.onClose(async () => writeFileSync(host.home + '/closed.txt', service.ping()))
+  return { name: 'b-user' }
+}`,
+    })
+    servers.splice(servers.indexOf(server), 1)
+    await server.close()
+    expect(await readFile(join(server.host.home, 'closed.txt'), 'utf8')).toBe('pong')
   })
 })

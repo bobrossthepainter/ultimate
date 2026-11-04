@@ -4,12 +4,28 @@ import { exec } from './exec.ts'
 /** Where and how long a git command runs; defaults: 30 seconds, 1 MiB of output. `timeout: 0` waits indefinitely. */
 export type GitOptions = { cwd: string; timeout?: number; maxBuffer?: number; signal?: AbortSignal }
 
+/** Runs a program to its end in `options.cwd`, like `exec`; the exec extension passes one that routes by directory. */
+export type Run = (
+  file: string,
+  args: string[],
+  options: GitOptions & { maxBuffer: number; timeout: number },
+) => Promise<{ stdout: string }>
+
+/** `git` over `run`. */
+export const gitWith =
+  (run: Run) =>
+  async (cwd: string | GitOptions, ...args: string[]) => {
+    const options = typeof cwd === 'string' ? { cwd } : cwd
+    const { stdout } = await run('git', args, {
+      timeout: 30000,
+      maxBuffer: 1024 * 1024,
+      ...options,
+    })
+    return stdout.trim()
+  }
+
 /** Run git in `cwd` and return its trimmed stdout; a failure rejects with execFile's error, stderr in its message. */
-export async function git(cwd: string | GitOptions, ...args: string[]) {
-  const options = typeof cwd === 'string' ? { cwd } : cwd
-  const { stdout } = await exec('git', args, { timeout: 30000, maxBuffer: 1024 * 1024, ...options })
-  return stdout.trim()
-}
+export const git = gitWith(exec)
 
 export const noRepository = 'Isolation needs a Git repository'
 export const noCommit = 'Isolation needs a first commit'

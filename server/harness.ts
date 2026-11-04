@@ -36,6 +36,7 @@ import type {
   SubmissionRecord,
 } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { createBuild } from './build.ts'
 import { spawn } from '../lib/spawn.ts'
@@ -142,12 +143,14 @@ export async function prepareHarness(options: HostOptions) {
   const registry = createRegistry()
   const extensionOrders = new Map<string, number>()
   const extensionSources = new Map<string, Source>()
-  const envs = new Map<string, NodeExecutionEnv>()
+  const envs = new Map<string, ExecutionEnv>()
+  // Agents' commands start from the process helper (the patched spawn option), never by forking this process. The exec
+  // extension replaces this with its service's, which runs a directory where it lives.
+  let build = (cwd: string): ExecutionEnv => new NodeExecutionEnv({ cwd, spawn })
   const env = ({ cwd = projectRoot }: EnvTarget) => {
     let found = envs.get(cwd)
     if (!found) {
-      // Agents' commands start from the process helper (the patched spawn option), never by forking this process.
-      found = new NodeExecutionEnv({ cwd, spawn })
+      found = build(cwd)
       envs.set(cwd, found)
     }
     return found
@@ -192,6 +195,10 @@ export async function prepareHarness(options: HostOptions) {
     ): Promise<Page<SubmissionRecord, Cursor>> {
       if (!active) throw new Error('Harness is not open')
       return active.storage.scanSubmissions(query, limit, cursor, caller)
+    },
+    /** Build the agent's environment in a directory with `next` from now on; environments built before stay. */
+    executionEnv(next: (cwd: string) => ExecutionEnv) {
+      build = next
     },
     models: async () => (await listModels(modelRuntime)).models,
     model: (ref: ModelRef) => modelRuntime.getModel(ref.provider, ref.modelId),

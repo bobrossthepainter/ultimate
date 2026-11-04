@@ -47,6 +47,7 @@ export type ExtensionHost = Pick<
   | 'skills'
   | 'restart'
   | 'chapter'
+  | 'executionEnv'
 > & {
   access: Pick<Access, 'allow'>
   notice(message: string): void
@@ -146,6 +147,16 @@ export async function loadExtensions(
     trace.run,
   )
   let missingApis = new Set<string>()
+  const cleanUp = async (facetHost: ExtensionHost) => {
+    for (const cleanup of facetCleanups.get(facetHost) ?? []) {
+      try {
+        await cleanup()
+      } catch (error) {
+        notice(`Extension cleanup failed: ${String(error)}`)
+      }
+    }
+    facetCleanups.get(facetHost)?.clear()
+  }
   const dispose = async (facetHost: ExtensionHost | undefined) => {
     if (!facetHost) return
     apis.dispose(facetHost)
@@ -157,13 +168,7 @@ export async function loadExtensions(
     facetOpeners.delete(facetHost)
     for (const callback of facetReleasers.get(facetHost) ?? []) releasers.delete(callback)
     facetReleasers.delete(facetHost)
-    for (const cleanup of facetCleanups.get(facetHost) ?? []) {
-      try {
-        await cleanup()
-      } catch (error) {
-        notice(`Extension cleanup failed: ${String(error)}`)
-      }
-    }
+    await cleanUp(facetHost)
     facetCleanups.delete(facetHost)
     facetNotices.delete(facetHost)
   }
@@ -371,6 +376,7 @@ export async function loadExtensions(
     models: () => host.models(),
     skills: (cwd) => host.skills(cwd),
     restart: (approved) => host.restart(approved),
+    executionEnv: (build) => host.executionEnv(build),
     get chapter() {
       return host.chapter
     },
@@ -791,6 +797,8 @@ export async function loadExtensions(
       closed = true
       unwatch()
       await chain
+      // Every facet's cleanup runs before any provider goes, so work it drains can still call the services it needs.
+      for (const facetHost of subscriptions.keys()) await cleanUp(facetHost)
       for (const facetHost of subscriptions.keys()) await dispose(facetHost)
       const results = await Promise.allSettled([...cleanups].map(async (cleanup) => cleanup()))
       for (const result of results)
