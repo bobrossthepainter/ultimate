@@ -19,10 +19,6 @@ function status(url: string, headers: Record<string, string>, method = 'GET') {
       response.destroy()
     })
     req.on('error', reject)
-    req.on('upgrade', (_response, socket) => {
-      resolve(101)
-      socket.destroy()
-    })
     req.end()
   })
 }
@@ -40,7 +36,7 @@ it('serves direct IPv4 network access only when opted in, retaining host and ori
   const lan = networkUrl(running.url)
   expect(running.output()).toContain('Listening on all IPv4 interfaces without authentication')
   expect(running.output()).toContain(lan)
-  for (const path of ['/', '/@vite/client', '/api/models', '/api/events']) {
+  for (const path of ['/', '/api/models', '/api/events']) {
     const response = await fetch(lan + path, { headers: { origin: lan } })
     expect(response.status).toBe(200)
     await response.body?.cancel()
@@ -66,26 +62,14 @@ it('serves direct IPv4 network access only when opted in, retaining host and ori
   expect(await status(running.url + '/api/models', {})).toBe(200)
 }, 60000)
 
-it('admits an explicitly allowed hostname for HTTP and HMR, preserving origin checks across a core swap', async () => {
+it('admits an explicitly allowed hostname, preserving origin checks across a core swap', async () => {
   const origin = 'http://tais.bb-1.cosmick8s.cc:4747'
   const running = await fixture(['--host', '0.0.0.0', '--allowed-origin', origin])
   const lan = networkUrl(running.url)
   // Connect locally but send the browser's real Host and Origin, without relying on external DNS.
   const headers = { host: new URL(origin).host, origin }
-  for (const path of ['/', '/@vite/client', '/api/models', '/api/events'])
+  for (const path of ['/', '/api/models', '/api/events'])
     expect(await status(lan + path, headers)).toBe(200)
-  const client = await (await fetch(running.url + '/@vite/client')).text()
-  const token = /const wsToken = "([^"]+)"/.exec(client)?.[1]
-  expect(token).toBeDefined()
-  const upgrade = {
-    ...headers,
-    connection: 'Upgrade',
-    upgrade: 'websocket',
-    'sec-websocket-version': '13',
-    'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
-    'sec-websocket-protocol': 'vite-hmr',
-  }
-  expect(await status(lan + '/?token=' + token, upgrade)).toBe(101)
   const rejected: Record<string, string>[] = [
     { ...headers, host: 'other.example:4747' },
     { ...headers, host: 'tais.bb-1.cosmick8s.cc:4748' },
@@ -94,10 +78,7 @@ it('admits an explicitly allowed hostname for HTTP and HMR, preserving origin ch
     { ...headers, 'x-forwarded-for': '192.168.1.2' },
     { ...headers, 'sec-fetch-site': 'cross-site' },
   ]
-  for (const denied of rejected) {
-    expect(await status(lan + '/api/models', denied)).toBe(403)
-    expect(await status(lan + '/?token=' + token, { ...upgrade, ...denied })).toBe(403)
-  }
+  for (const denied of rejected) expect(await status(lan + '/api/models', denied)).toBe(403)
   const stream = await attach(running.url)
   expect(await status(lan + '/api/restart', headers, 'POST')).toBe(202)
   await until(() => stream.system().process.generation === 2)
@@ -110,7 +91,7 @@ it('admits an explicitly allowed hostname for HTTP and HMR, preserving origin ch
   )
 }, 60000)
 
-it('admits a TLS reverse proxy origin on the loopback listener for HTTP, SSE, HMR and a core swap', async () => {
+it('admits a TLS reverse proxy origin on the loopback listener for HTTP, SSE and a core swap', async () => {
   const origin = 'https://tais.bb-1.cosmick8s.cc:8443'
   const running = await fixture(['--proxy-origin', origin])
   // What nginx sends with `proxy_set_header Host $http_host` and the browser's own Origin.
@@ -122,20 +103,8 @@ it('admits a TLS reverse proxy origin on the loopback listener for HTTP, SSE, HM
     'x-forwarded-for': '192.168.1.2',
   }
   expect(running.output()).toContain(`Reverse-proxy access`)
-  for (const path of ['/', '/@vite/client', '/api/models', '/api/events'])
+  for (const path of ['/', '/api/models', '/api/events'])
     expect(await status(running.url + path, headers)).toBe(200)
-  const client = await (await fetch(running.url + '/@vite/client')).text()
-  const token = /const wsToken = "([^"]+)"/.exec(client)?.[1]
-  expect(token).toBeDefined()
-  const upgrade = {
-    ...headers,
-    connection: 'Upgrade',
-    upgrade: 'websocket',
-    'sec-websocket-version': '13',
-    'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
-    'sec-websocket-protocol': 'vite-hmr',
-  }
-  expect(await status(running.url + '/?token=' + token, upgrade)).toBe(101)
   const rejected: Record<string, string>[] = [
     { ...headers, host: 'other.example:8443' },
     { ...headers, host: 'tais.bb-1.cosmick8s.cc:8444' },
@@ -143,10 +112,7 @@ it('admits a TLS reverse proxy origin on the loopback listener for HTTP, SSE, HM
     { ...headers, origin: 'https://tais.bb-1.cosmick8s.cc:8444' },
     { ...headers, 'sec-fetch-site': 'cross-site' },
   ]
-  for (const denied of rejected) {
-    expect(await status(running.url + '/api/models', denied)).toBe(403)
-    expect(await status(running.url + '/?token=' + token, { ...upgrade, ...denied })).toBe(403)
-  }
+  for (const denied of rejected) expect(await status(running.url + '/api/models', denied)).toBe(403)
   const stream = await attach(running.url)
   expect(await status(running.url + '/api/restart', headers, 'POST')).toBe(202)
   await until(() => stream.system().process.generation === 2)

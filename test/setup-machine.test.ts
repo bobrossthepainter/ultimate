@@ -72,6 +72,13 @@ it("keeps each project's port: its service's, else the one it runs on, else the 
   ).toEqual([4800, 4747, 4750, 4751])
 })
 
+it('lets the supervisor stop its children before systemd force-kills the group', () => {
+  const [unit] = renderUnits(options)
+  expect(line(unit.content, 'KillMode')).toEqual(['KillMode=mixed'])
+  expect(line(unit.content, 'KillSignal')).toEqual(['KillSignal=SIGTERM'])
+  expect(line(unit.content, 'TimeoutStopSec')).toEqual(['TimeoutStopSec=30'])
+})
+
 it("puts the login shell's PATH first, so a bare service PATH still finds claude, gh and pnpm", () => {
   const calls: [string, string[]][] = []
   const login =

@@ -47,7 +47,7 @@ pnpm start ~/code/other-app --port 4802 --proxy-origin https://other-app.ultimat
 }
 ```
 
-Caddy keeps the `Host` header, adds `X-Forwarded-*` and proxies WebSockets (HMR) by default, which is what the
+Caddy keeps the `Host` header, adds `X-Forwarded-*` and streams server-sent events by default, which is what the
 proxy origin expects. Ultimate admits a request only when its `Host` and `Origin` match the proxy origin exactly, so a
 project added to Caddy also needs its own `--proxy-origin`.
 
