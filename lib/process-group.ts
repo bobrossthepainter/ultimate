@@ -267,7 +267,7 @@ export async function closeOutput(group: Pick<Group, 'child' | 'closed'>, ms = 1
 /**
  * Run `program` as a recorded process group to its end and resolve its exit code (128 + signal number when a signal
  * ended it). A `signal` aborted before the start runs nothing; an abort later stops the group. Nothing of the group
- * outlives the run, and the pid file goes with it.
+ * outlives the run, and the pid file goes with it. `start` starts the group, like `spawnGroup` with `cwd` first.
  */
 export async function runGroup(
   program: string,
@@ -279,12 +279,18 @@ export async function runGroup(
     signal?: AbortSignal
     grace?: number
     onOutput: (text: string) => void
+    start: (
+      cwd: string,
+      program: string,
+      args: string[],
+      options: Omit<Parameters<typeof spawnGroup>[2], 'cwd'>,
+    ) => Group
   },
 ) {
-  const { signal, grace, onOutput, ...spawnOptions } = options
+  const { cwd, signal, grace, onOutput, start, ...spawnOptions } = options
   await mkdir(dirname(options.pidFile), { recursive: true })
   signal?.throwIfAborted()
-  const group = spawnGroup(program, args, { ...spawnOptions, grace })
+  const group = start(cwd, program, args, { ...spawnOptions, grace })
   const { child } = group
   const exited = new Promise<number>((resolve, reject) => {
     child.once('error', reject)

@@ -6,8 +6,7 @@ import { realpath, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import type { JsonObject } from '@earendil-works/pi-durable'
-import { exec } from '../../lib/exec.ts'
-import { git } from '../../lib/git.ts'
+import type { ExecService } from '../exec/api.ts'
 
 /** A configured command may fetch, build or register the tree: allow it more than git's 30 seconds. */
 const commandTimeout = 300_000
@@ -58,6 +57,7 @@ const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
 
 /** Run the configured `isolates.worktree.<key>` in `source`, with `{name}` and `{path}` filled in as shell words. */
 async function command(
+  exec: ExecService,
   key: 'add' | 'remove',
   template: string,
   source: string,
@@ -65,23 +65,24 @@ async function command(
   path: string,
 ) {
   const line = template.replaceAll('{name}', quote(name)).replaceAll('{path}', quote(path))
-  await exec('sh', ['-c', line], {
-    cwd: source,
-    timeout: commandTimeout,
-    maxBuffer: 1024 * 1024,
-  }).catch((error: Error & { stdout?: string; stderr?: string }) => {
-    throw new Error(
-      `isolates.worktree.${key} failed: ${`${error.stdout ?? ''}${error.stderr ?? ''}${error.message}`.slice(-4000)}`,
-      { cause: error },
-    )
-  })
+  await exec
+    .run(source, 'sh', ['-c', line], {
+      timeout: commandTimeout,
+      maxBuffer: 1024 * 1024,
+    })
+    .catch((error: Error & { stdout?: string; stderr?: string }) => {
+      throw new Error(
+        `isolates.worktree.${key} failed: ${`${error.stdout ?? ''}${error.stderr ?? ''}${error.message}`.slice(-4000)}`,
+        { cause: error },
+      )
+    })
 }
 
 /** Whether the project creates checkouts with its own `isolates.worktree.add` command. */
 export const hasAddCommand = (settings: JsonObject) => layout(settings).add !== undefined
 
-async function listed(source: string, path: string) {
-  return (await git(source, 'worktree', 'list', '--porcelain'))
+async function listed(exec: ExecService, source: string, path: string) {
+  return (await exec.git(source, 'worktree', 'list', '--porcelain'))
     .split('\n\n')
     .some((entry) => entry.split('\n').includes(`worktree ${path}`))
 }
@@ -94,6 +95,7 @@ async function listed(source: string, path: string) {
  * command can run again: callers create only at a path they found free.
  */
 export async function addCheckout(
+  exec: ExecService,
   settings: JsonObject,
   source: string,
   path: string,
@@ -103,16 +105,16 @@ export async function addCheckout(
   const { add } = layout(settings)
   if (add === undefined) {
     // `git worktree add` takes the same flags and commit-ish as `git checkout`, with the path between them.
-    await git(source, 'worktree', 'add', ...checkout.slice(0, -1), path, checkout.at(-1)!)
+    await exec.git(source, 'worktree', 'add', ...checkout.slice(0, -1), path, checkout.at(-1)!)
     return
   }
   try {
-    await command('add', add, source, name, path)
-    if (!(await listed(source, path)))
+    await command(exec, 'add', add, source, name, path)
+    if (!(await listed(exec, source, path)))
       throw new Error(`isolates.worktree.add left no worktree of ${source} at ${path}`)
-    await git({ cwd: path, timeout: commandTimeout }, 'checkout', '-q', ...checkout)
+    await exec.git({ cwd: path, timeout: commandTimeout }, 'checkout', '-q', ...checkout)
   } catch (error) {
-    await clearCheckout(source, path).catch(
+    await clearCheckout(exec, source, path).catch(
       // The failure being reported matters more; a leftover is cleared again before the next attempt.
       () => undefined,
     )
@@ -124,11 +126,11 @@ export async function addCheckout(
  * Clear a checkout Ultimate was creating at `path` and did not finish: unregister it, delete the folder and prune.
  * Only for a path its creation found free, never for a checkout that was handed out.
  */
-export async function clearCheckout(source: string, path: string) {
-  if (await listed(source, path))
-    await git(source, 'worktree', 'remove', '--force', '--force', path)
+export async function clearCheckout(exec: ExecService, source: string, path: string) {
+  if (await listed(exec, source, path))
+    await exec.git(source, 'worktree', 'remove', '--force', '--force', path)
   await rm(path, { recursive: true, force: true })
-  await git(source, 'worktree', 'prune')
+  await exec.git(source, 'worktree', 'prune')
 }
 
 /**
@@ -136,6 +138,7 @@ export async function clearCheckout(source: string, path: string) {
  * `isolates.worktree.remove`, run only after the same check and required to leave `path` unregistered.
  */
 export async function removeCheckout(
+  exec: ExecService,
   settings: JsonObject,
   source: string,
   path: string,
@@ -143,14 +146,14 @@ export async function removeCheckout(
 ) {
   const { remove } = layout(settings)
   if (remove === undefined) {
-    await git(source, 'worktree', 'remove', path)
+    await exec.git(source, 'worktree', 'remove', path)
     return
   }
-  if (await git(path, 'status', '--porcelain', '--untracked-files=all'))
+  if (await exec.git(path, 'status', '--porcelain', '--untracked-files=all'))
     throw new Error(
       `'${path}' contains modified or untracked files; isolates.worktree.remove was not run`,
     )
-  await command('remove', remove, source, name, path)
-  if (await listed(source, path))
+  await command(exec, 'remove', remove, source, name, path)
+  if (await listed(exec, source, path))
     throw new Error(`isolates.worktree.remove left ${path} registered as a worktree of ${source}`)
 }

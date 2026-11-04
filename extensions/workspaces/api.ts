@@ -5,7 +5,7 @@
 import type { Context } from '@earendil-works/chord'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
-import type { git } from '../../lib/git.ts'
+import type { ExecService } from '../exec/api.ts'
 import type { Workspaces, workspaces } from './workspaces.ts'
 
 type Implementation = ReturnType<typeof workspaces>
@@ -22,7 +22,7 @@ export type WorkspaceService = {
   /** Free the worktrees of concluded conversations `ids` and their descendants; returns the ones kept (busy, unlanded). */
   release: Implementation['release']
   /** Run `git` with `args` in a directory; rejects with Git's message. Use it instead of spawning Git yourself. */
-  git: typeof git
+  git: ExecService['git']
   /** The worktree index document (`ultimate.workspaces` on the root), for reads inside a transaction. */
   doc: typeof Workspaces
   /** Make the project folder a Git repository with a first commit, so worktrees and landing work. */

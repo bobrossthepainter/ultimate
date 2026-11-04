@@ -18,7 +18,6 @@ import {
 import type { ContextEdit, ConversationId, Cursor, EntryId, Tx } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import type { ActionInput } from '../../lib/actions.ts'
-import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { defineEvent } from '../../shared/events.ts'
 import { Committed } from '../coding-tools/api.ts'
@@ -28,9 +27,10 @@ import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Started } from '../subagents/api.ts'
 import { isAbsolute, relative } from 'node:path'
 import { getOrThrow } from '@earendil-works/pi-durable/env'
-import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { JsonValue } from '@earendil-works/chord'
 import type { EventData, EventRecord, EventToken } from '../../shared/events.ts'
+import { Exec } from '../exec/api.ts'
+import type { ExecService } from '../exec/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { Roots } from './api.ts'
 import { RewindAction, RewindPreviewAction, Rewound } from './refs.ts'
@@ -126,12 +126,13 @@ function normalizeToolPath(path: string) {
  * leading `@`, `file://`): relative to `top` inside the checkout, absolute in `outside` otherwise.
  */
 export async function editedPaths(
+  exec: ExecService,
   messages: readonly Message[],
   cwd: string,
   top: string,
   ctx: Context,
 ) {
-  const env = new NodeExecutionEnv({ cwd })
+  const env = exec.env(cwd)
   const inside = new Set<string>()
   const outside = new Set<string>()
   for (const message of messages)
@@ -156,24 +157,29 @@ export async function editedPaths(
  * `paths` (relative to the checkout `top`) as they are now: lines added and removed since `base` (HEAD without one;
  * none in a repository without a commit), new and untracked, or neither when Git shows no difference to count.
  */
-async function fileStates(top: string, paths: ReadonlySet<string>, base: string | undefined) {
+async function fileStates(
+  exec: ExecService,
+  top: string,
+  paths: ReadonlySet<string>,
+  base: string | undefined,
+) {
   if (!paths.size) return []
   const listed = [...paths]
-  const head = await git(top, 'rev-parse', '--verify', '--quiet', 'HEAD').catch(
+  const head = await exec.git(top, 'rev-parse', '--verify', '--quiet', 'HEAD').catch(
     // A repository before its first commit has no HEAD to count lines against.
     () => undefined,
   )
   const counts = new Map<string, { added: number; removed: number }>()
   if (head)
     for (const line of rows(
-      await git(top, 'diff', '--numstat', '--no-renames', base ?? 'HEAD', '--', ...listed),
+      await exec.git(top, 'diff', '--numstat', '--no-renames', base ?? 'HEAD', '--', ...listed),
     )) {
       // Binary files count `-` lines.
       const [added, removed, path] = line.split('\t')
       counts.set(path, { added: Number(added) || 0, removed: Number(removed) || 0 })
     }
   const untracked = new Set(
-    rows(await git(top, 'ls-files', '--others', '--exclude-standard', '--', ...listed)),
+    rows(await exec.git(top, 'ls-files', '--others', '--exclude-standard', '--', ...listed)),
   )
   return listed.map((path): RewindFile => {
     if (untracked.has(path)) return { path, untracked: true }
@@ -189,6 +195,7 @@ async function fileStates(top: string, paths: ReadonlySet<string>, base: string 
  * conversations it started or messaged since.
  */
 async function facts(host: ExtensionHost, id: ConversationId, at: number, ctx: Context) {
+  const exec = host.need(Exec)
   /** Every event of `token` after entry `at`, oldest first: the log pages by id, so no window cuts it short. */
   const since = async <D extends JsonValue>(token: EventToken<D>) => {
     const found: EventRecord<D>[] = []
@@ -207,7 +214,7 @@ async function facts(host: ExtensionHost, id: ConversationId, at: number, ctx: C
   const own = (data: { conversation?: number; parent?: number }) =>
     data.conversation === id || data.parent === id
   const cwd = (await host.harness().snapshot(AgentDoc, id, ctx))?.cwd ?? host.projectRoot
-  const top = await git(cwd, 'rev-parse', '--show-toplevel').catch(
+  const top = await exec.git(cwd, 'rev-parse', '--show-toplevel').catch(
     // Outside a repository no commit is this checkout's.
     () => undefined,
   )
@@ -241,30 +248,32 @@ async function facts(host: ExtensionHost, id: ConversationId, at: number, ctx: C
     cursor = page.next
   } while (cursor)
   const edited = top
-    ? await editedPaths(written, cwd, top, ctx)
+    ? await editedPaths(exec, written, cwd, top, ctx)
     : { inside: new Set<string>(), outside: new Set<string>() }
   const paths = edited.inside
   if (top)
     for (const { data } of after)
       for (const path of rows(
         // A merge lists its changes against its first parent; a root commit against nothing.
-        await git(
-          top,
-          'diff-tree',
-          '-r',
-          '--no-commit-id',
-          '--name-only',
-          '--root',
-          '--diff-merges=first-parent',
-          data.sha,
-        ).catch(
-          // A commit an amend or rebase dropped may be gone; its files show through the other commits and edits.
-          () => '',
-        ),
+        await exec
+          .git(
+            top,
+            'diff-tree',
+            '-r',
+            '--no-commit-id',
+            '--name-only',
+            '--root',
+            '--diff-merges=first-parent',
+            data.sha,
+          )
+          .catch(
+            // A commit an amend or rebase dropped may be gone; its files show through the other commits and edits.
+            () => '',
+          ),
       ))
         paths.add(path)
   const files = [
-    ...(top ? await fileStates(top, paths, base) : []),
+    ...(top ? await fileStates(exec, top, paths, base) : []),
     // Git cannot count a file outside the checkout: it is listed as changed.
     ...[...edited.outside].map((path): RewindFile => ({ path, outside: true })),
   ]

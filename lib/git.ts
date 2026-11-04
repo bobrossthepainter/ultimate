@@ -26,32 +26,35 @@ export const gitWith =
 
 /** Run git in `cwd` and return its trimmed stdout; a failure rejects with execFile's error, stderr in its message. */
 export const git = gitWith(exec)
+/** A `git` function: this one, or the exec service's that runs where the directory lives. */
+export type Git = typeof git
 
 export const noRepository = 'Isolation needs a Git repository'
 export const noCommit = 'Isolation needs a first commit'
 
-/** Whether the repository holding `cwd` (or `cwd` itself, outside Git) has nothing in it but `.git`. */
-export async function empty(cwd: string) {
-  const top = await git(cwd, 'rev-parse', '--show-toplevel').catch(
+/** Whether the repository holding `cwd` (or `cwd` itself, outside Git) has nothing in it but `.git`; `gitIn` runs Git. */
+export async function empty(cwd: string, gitIn: Git) {
+  const top = await gitIn(cwd, 'rev-parse', '--show-toplevel').catch(
     // Outside Git the folder itself is what a new repository would hold.
     () => cwd,
   )
   return (await readdir(top)).every((name) => name === '.git')
 }
 
-/** The checkout and branch an isolate of `cwd` would branch from, or why there is none. */
+/** The checkout and branch an isolate of `cwd` would branch from, or why there is none; `gitIn` runs Git. */
 export async function isolatable(
   cwd: string,
+  gitIn: Git,
 ): Promise<{ source: string; target: string } | { reason: string }> {
-  const top = await git(cwd, 'rev-parse', '--show-toplevel').catch(
+  const top = await gitIn(cwd, 'rev-parse', '--show-toplevel').catch(
     // Outside Git there is nothing to branch from; the reason says so.
     () => undefined,
   )
   if (!top) return { reason: noRepository }
   const source = await realpath(top)
-  const target = await git(source, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '')
+  const target = await gitIn(source, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '')
   if (!target) return { reason: 'Isolation needs a checked-out branch' }
-  if (!(await git(source, 'rev-parse', '--verify', '--quiet', 'HEAD').catch(() => '')))
+  if (!(await gitIn(source, 'rev-parse', '--verify', '--quiet', 'HEAD').catch(() => '')))
     return { reason: noCommit }
   // A preview lands on its own branch, never on the branch of the checkout it previews.
   const preview = process.env.ULTIMATE_PREVIEW_BRANCH
@@ -59,7 +62,7 @@ export async function isolatable(
   if (
     preview &&
     project &&
-    source === (await realpath(await git(project, 'rev-parse', '--show-toplevel')))
+    source === (await realpath(await gitIn(project, 'rev-parse', '--show-toplevel')))
   )
     return { source, target: preview }
   return { source, target }

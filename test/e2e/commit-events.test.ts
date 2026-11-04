@@ -10,7 +10,7 @@ import type { EventToken } from '../../shared/events.ts'
 import codingTools from '../../extensions/coding-tools/server.ts'
 import { Committed } from '../../extensions/coding-tools/refs.ts'
 import { context } from '../../server/harness.ts'
-import { removeTemp, temp } from '../helpers.ts'
+import { apis, removeTemp, temp } from '../helpers.ts'
 
 const run = promisify(execFile)
 type Event = typeof Committed extends EventToken<infer D> ? D : never
@@ -34,6 +34,7 @@ afterEach(async () => {
 /** The extension's bash tool, run as one call of conversation 7 in `dir`. */
 async function bash(command: string, dir = cwd) {
   const extension = codingTools({
+    ...apis(),
     emit: async (_tx, event, data) => {
       expect(event).toBe(Committed)
       emitted.push(data as Event)

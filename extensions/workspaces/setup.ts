@@ -1,8 +1,9 @@
 import type { JsonObject } from '@earendil-works/pi-durable'
-import { exec } from '../../lib/exec.ts'
+import type { ExecService } from '../exec/api.ts'
 
 /** Run the project's `isolates.worktree.setup` commands in a new worktree at `path`, branched from `source`. */
 export async function setup(
+  exec: ExecService,
   source: string,
   path: string,
   settings: JsonObject,
@@ -16,8 +17,7 @@ export async function setup(
     signal.throwIfAborted()
     try {
       // exec closes the command's input, so one that reads it gets EOF.
-      await exec('sh', ['-c', command], {
-        cwd: path,
+      await exec.run(path, 'sh', ['-c', command], {
         env: { ...process.env, ULTIMATE_SOURCE: source },
         signal,
         timeout: 120000,

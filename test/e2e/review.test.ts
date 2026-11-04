@@ -4,11 +4,11 @@ import { parsePatchFiles } from '@pierre/diffs'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { git } from '../../lib/git.ts'
 import { FILE_CAP, reviewDiff } from '../../extensions/review/diff.ts'
-import { temp } from '../helpers.ts'
+import { localExec, temp } from '../helpers.ts'
 
 let repo: string
 const sha: Record<string, string> = {}
-const options = { target: async () => 'main' }
+const options = { target: async () => 'main', exec: localExec }
 const diff = (spec: string) => reviewDiff(repo, spec, options)
 const commit = async (name: string, message: string) => {
   await git(repo, 'add', '-A')

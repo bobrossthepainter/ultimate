@@ -16,8 +16,9 @@ import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationSummary } from '../../shared/protocol.ts'
 import { discoverAgents } from '../../lib/agents.ts'
-import { git } from '../../lib/git.ts'
+import type { Git } from '../../lib/git.ts'
 import { shortTitle } from '../../lib/title.ts'
+import { Exec } from '../exec/api.ts'
 import { Standing } from '../subagents/api.ts'
 import type { BuildNote, Landing } from './refs.ts'
 
@@ -65,6 +66,7 @@ export function buildNote(
  * subagent's commit counts for the branch that owns it. A commit made outside Ultimate is a row of its own.
  */
 export async function landings(
+  git: Git,
   cwd: string,
   from: string,
   to: string,
@@ -224,10 +226,12 @@ export default function prompt(host: ExtensionHost) {
           const built = previous !== undefined && previous !== build.id
           let landed: Landing[] = []
           if (seen.head === undefined || built) {
+            const { git } = host.need(Exec)
             // Outside Git the build changes without commits: no landings to name.
             const head = await git(host.ultimateRoot, 'rev-parse', 'HEAD').catch(() => undefined)
             if (built && head && seen.head && head !== seen.head)
               landed = await landings(
+                git,
                 host.ultimateRoot,
                 seen.head,
                 head,

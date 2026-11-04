@@ -10,7 +10,7 @@ import {
   stopGroup,
   sweepPidFiles,
 } from '../../lib/process-group.ts'
-import { removeTemp, temp, until } from '../helpers.ts'
+import { localExec, removeTemp, temp, until } from '../helpers.ts'
 import { running } from './process-helpers.ts'
 
 const bootId = async () => (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()
@@ -228,6 +228,7 @@ it('runs a group to its exit code and stops it on abort; an aborted signal runs 
     const code = await runGroup('/bin/sh', ['-c', 'echo out; exit 3'], {
       cwd: directory,
       pidFile: join(directory, 'pids', 'a.pid'),
+      start: localExec.start,
       onOutput: (text) => (output += text),
     })
     expect({ code, output }).toEqual({ code: 3, output: 'out\n' })
@@ -236,6 +237,7 @@ it('runs a group to its exit code and stops it on abort; an aborted signal runs 
     const aborted = runGroup('/bin/sh', ['-c', 'echo go; sleep 60'], {
       cwd: directory,
       pidFile: join(directory, 'pids', 'b.pid'),
+      start: localExec.start,
       signal: controller.signal,
       onOutput: () => controller.abort(),
     })
@@ -247,6 +249,7 @@ it('runs a group to its exit code and stops it on abort; an aborted signal runs 
       runGroup('/bin/sh', ['-c', `touch '${marker}'`], {
         cwd: directory,
         pidFile: join(directory, 'pids', 'c.pid'),
+        start: localExec.start,
         signal: AbortSignal.abort(),
         onOutput: () => {},
       }),
@@ -276,6 +279,7 @@ it('returns when a process outside the group keeps its output open', async () =>
       {
         cwd: directory,
         pidFile: join(directory, 'pids', 'a.pid'),
+        start: localExec.start,
         onOutput: () => {},
       },
     )

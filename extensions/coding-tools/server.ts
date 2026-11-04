@@ -25,8 +25,9 @@ import {
   createWriteTool,
 } from '@earendil-works/pi-durable/tools'
 import { createNodePhotonImages } from '@earendil-works/pi-durable/images/node'
-import { git } from '../../lib/git.ts'
+import type { Git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { Exec } from '../exec/api.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { CancelAction, CancelledDoc, Committed } from './refs.ts'
 
@@ -217,7 +218,7 @@ type Made = {
  * line for a real merge commit (first parent the HEAD before it, not a fast-forward), records a commit; a rewrite line
  * only adds `rewrittenFrom` to one, since a resumed rebase also lists commits an earlier call made.
  */
-async function madeCommits(path: string, conversation: number) {
+async function madeCommits(git: Git, path: string, conversation: number) {
   const log = await readFile(path, 'utf8').catch(() => '')
   await rm(path, { force: true })
   const made = new Map<string, Made>()
@@ -277,7 +278,8 @@ async function madeCommits(path: string, conversation: number) {
   return events
 }
 
-export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
+export default function codingTools(host: Pick<ExtensionHost, 'emit' | 'need'>) {
+  const exec = host.need(Exec)
   const shell = createBashTool()
   const parameters = obj({
     command: str({ description: 'Bash command to execute' }),
@@ -314,7 +316,12 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
         return await untilStopped(run, api, interruptible, context)
       } finally {
         // A failed or stopped command may still have committed, so record what it made either way.
-        const commits = await madeCommits(log, api.conversationId)
+        // Git is looked up only for commits made: a call stopped by shutdown may finish after the service is gone.
+        const commits = await madeCommits(
+          async (...gitArgs) => exec.git(...gitArgs),
+          log,
+          api.conversationId,
+        )
         if (commits.length)
           await api
             .commit(async (tx) => {

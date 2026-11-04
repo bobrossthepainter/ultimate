@@ -2,6 +2,7 @@
 import { basename, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { httpBase } from '../../lib/cloud.ts'
+import type { Git } from '../../lib/git.ts'
 import { readJson, writeJson } from '../../lib/json-file.ts'
 import { uploadSnapshot } from './snapshot.ts'
 import type { LastBackup } from './types.ts'
@@ -58,6 +59,8 @@ export interface BackupOptions {
   chapter: { name: string; number: number }
   /** The active chapter's folder: its `state.sqlite` and `cloud-backup.json`. */
   dir: string
+  /** Runs git in the project checkout. */
+  git: Git
   projectRoot: string
   /** Replace the latest backup even when it is not this home's parent. */
   force?: boolean
@@ -86,6 +89,7 @@ export async function backUp(o: BackupOptions): Promise<LastBackup> {
     machine: o.machine,
     database: join(o.dir, 'state.sqlite'),
     repo: o.projectRoot,
+    git: o.git,
     root: o.projectRoot,
     signal: o.signal,
     progress: o.progress,

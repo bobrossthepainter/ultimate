@@ -1,8 +1,7 @@
 /** Local Git diffs for review: a spec's two sides, its patch split per file with counts and status, capped in size. */
 import { lstat, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { exec } from '../../lib/exec.ts'
-import { git } from '../../lib/git.ts'
+import type { ExecService } from '../exec/api.ts'
 import type { ReviewDiff, ReviewFile, ReviewKind } from './refs.ts'
 
 /** Patches over this many bytes per file are listed without their hunks. */
@@ -18,6 +17,7 @@ type Sides = { kind: ReviewKind; title: string; base: string; head?: string }
 type Options = {
   /** The branch `branch:<name>` is compared against: where it lands. */
   target: (branch: string) => Promise<string>
+  exec: ExecService
   signal?: AbortSignal
 }
 
@@ -28,60 +28,66 @@ function plain(part: string, spec: string) {
 }
 
 /** The full sha of the commit `ref` names; throws when it names none. */
-async function commit(cwd: string, ref: string, signal?: AbortSignal) {
-  const sha = await git(
-    { cwd, signal },
-    'rev-parse',
-    '--verify',
-    '--quiet',
-    '--end-of-options',
-    `${ref}^{commit}`,
-  ).catch(
-    // `--quiet` exits 1 without a message for an unknown ref: say which one.
-    () => '',
-  )
+async function commit(exec: ExecService, cwd: string, ref: string, signal?: AbortSignal) {
+  const sha = await exec
+    .git({ cwd, signal }, 'rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`)
+    .catch(
+      // `--quiet` exits 1 without a message for an unknown ref: say which one.
+      () => '',
+    )
   if (!sha) throw new Error(`Not a commit: ${ref}`)
   return sha
 }
 
 /** The empty tree's id in this repository's hash, the base of a root commit. */
-const emptyTree = (cwd: string) => git(cwd, 'hash-object', '-t', 'tree', '/dev/null')
+const emptyTree = (exec: ExecService, cwd: string) =>
+  exec.git(cwd, 'hash-object', '-t', 'tree', '/dev/null')
 
 async function sides(cwd: string, spec: string, options: Options): Promise<Sides> {
-  const { signal } = options
+  const { signal, exec } = options
   if (spec === 'uncommitted') {
-    const head = await commit(cwd, 'HEAD', signal).catch(
+    const head = await commit(exec, cwd, 'HEAD', signal).catch(
       // No commit yet: everything is new against the empty tree.
       () => undefined,
     )
     return {
       kind: 'uncommitted',
       title: 'Uncommitted changes',
-      base: head ?? (await emptyTree(cwd)),
+      base: head ?? (await emptyTree(exec, cwd)),
     }
   }
   if (spec.startsWith('branch:')) {
     const branch = plain(spec.slice('branch:'.length), spec)
     const target = plain(await options.target(branch), spec)
-    const head = await commit(cwd, branch, signal)
-    const base = await git({ cwd, signal }, 'merge-base', await commit(cwd, target, signal), head)
+    const head = await commit(exec, cwd, branch, signal)
+    const base = await exec.git(
+      { cwd, signal },
+      'merge-base',
+      await commit(exec, cwd, target, signal),
+      head,
+    )
     return { kind: 'branch', title: `${target}...${branch}`, base, head }
   }
   if (spec.includes('...')) {
     const parts = spec.split('...')
     if (parts.length !== 2) throw new Error(`Invalid spec: ${spec}`)
     const [from, to] = parts.map((part) => plain(part, spec))
-    const head = await commit(cwd, to, signal)
-    const base = await git({ cwd, signal }, 'merge-base', await commit(cwd, from, signal), head)
+    const head = await commit(exec, cwd, to, signal)
+    const base = await exec.git(
+      { cwd, signal },
+      'merge-base',
+      await commit(exec, cwd, from, signal),
+      head,
+    )
     return { kind: 'range', title: spec, base, head }
   }
-  const head = await commit(cwd, plain(spec, spec), signal)
-  const parent = await commit(cwd, `${head}^1`, signal).catch(
+  const head = await commit(exec, cwd, plain(spec, spec), signal)
+  const parent = await commit(exec, cwd, `${head}^1`, signal).catch(
     // A root commit has no parent: it is compared with the empty tree.
     () => undefined,
   )
-  const title = await git({ cwd, signal }, 'log', '-1', '--format=%s', head)
-  return { kind: 'commit', title, base: parent ?? (await emptyTree(cwd)), head }
+  const title = await exec.git({ cwd, signal }, 'log', '-1', '--format=%s', head)
+  return { kind: 'commit', title, base: parent ?? (await emptyTree(exec, cwd)), head }
 }
 
 /** NUL-separated `--name-status` and `--numstat` output of one diff, as files in Git's order. */
@@ -175,15 +181,22 @@ const tooBig = (error: unknown) =>
   (error as { code?: string }).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
 
 /** The tracked changes between `base` and `head` (the work tree without `head`). */
-async function tracked(cwd: string, base: string, head: string | undefined, signal?: AbortSignal) {
+async function tracked(
+  exec: ExecService,
+  cwd: string,
+  base: string,
+  head: string | undefined,
+  signal?: AbortSignal,
+) {
   const range = head ? [base, head] : [base]
   const run = (...args: string[]) =>
-    exec('git', ['diff', ...DIFF, ...args, ...range, '--'], {
-      cwd,
-      signal,
-      timeout: 30000,
-      maxBuffer: BUFFER,
-    }).then(({ stdout }) => stdout)
+    exec
+      .run(cwd, 'git', ['diff', ...DIFF, ...args, ...range, '--'], {
+        signal,
+        timeout: 30000,
+        maxBuffer: BUFFER,
+      })
+      .then(({ stdout }) => stdout)
   const [names, numbers] = await Promise.all([run('--name-status', '-z'), run('--numstat', '-z')])
   const files = listFiles(names, numbers)
   const patch = await run().catch((error: unknown) => {
@@ -200,15 +213,23 @@ async function tracked(cwd: string, base: string, head: string | undefined, sign
 }
 
 /** `git diff --no-index` of a new file, which exits 1 because there is a difference. */
-async function untrackedDiff(top: string, path: string, args: string[], signal?: AbortSignal) {
-  const result = await exec(
-    'git',
-    ['diff', '--no-index', ...DIFF, ...args, '--', '/dev/null', path],
-    { cwd: top, signal, timeout: 30000, maxBuffer: BUFFER },
-  ).catch((error: { code?: unknown; stdout?: string }) => {
-    if (error.code === 1 && typeof error.stdout === 'string') return { stdout: error.stdout }
-    throw error
-  })
+async function untrackedDiff(
+  exec: ExecService,
+  top: string,
+  path: string,
+  args: string[],
+  signal?: AbortSignal,
+) {
+  const result = await exec
+    .run(top, 'git', ['diff', '--no-index', ...DIFF, ...args, '--', '/dev/null', path], {
+      signal,
+      timeout: 30000,
+      maxBuffer: BUFFER,
+    })
+    .catch((error: { code?: unknown; stdout?: string }) => {
+      if (error.code === 1 && typeof error.stdout === 'string') return { stdout: error.stdout }
+      throw error
+    })
   return result.stdout
 }
 
@@ -223,9 +244,8 @@ const linkPatch = (path: string, target: string) =>
     : `diff --git a/${path} b/${path}\nnew file mode 120000\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+${target}\n\\ No newline at end of file\n`
 
 /** Files Git does not track and does not ignore, each as an added file with its patch; a symlink as its target. */
-async function untracked(top: string, signal?: AbortSignal) {
-  const list = await exec('git', ['ls-files', '--others', '--exclude-standard', '-z'], {
-    cwd: top,
+async function untracked(exec: ExecService, top: string, signal?: AbortSignal) {
+  const list = await exec.run(top, 'git', ['ls-files', '--others', '--exclude-standard', '-z'], {
     signal,
     timeout: 30000,
     maxBuffer: BUFFER,
@@ -247,13 +267,13 @@ async function untracked(top: string, signal?: AbortSignal) {
       continue
     }
     const size = info.size
-    const [added] = (await untrackedDiff(top, path, ['--numstat'], signal)).split('\t')
+    const [added] = (await untrackedDiff(exec, top, path, ['--numstat'], signal)).split('\t')
     const file: ReviewFile = { path, status: 'added', additions: 0, deletions: 0 }
     if (added === '-') file.binary = true
     else file.additions = Number(added)
     files.push(file)
     // An oversized file is not read into a patch at all.
-    patches.push(size > FILE_CAP ? undefined : await untrackedDiff(top, path, [], signal))
+    patches.push(size > FILE_CAP ? undefined : await untrackedDiff(exec, top, path, [], signal))
   }
   return { files, patches }
 }
@@ -261,11 +281,12 @@ async function untracked(top: string, signal?: AbortSignal) {
 /** The diff `spec` names in the repository holding `cwd`; see `ReviewKind` for the specs. */
 export async function reviewDiff(cwd: string, spec: string, options: Options): Promise<ReviewDiff> {
   if (typeof spec !== 'string' || !spec.trim()) throw new Error('Expected a spec')
-  const top = await git({ cwd, signal: options.signal }, 'rev-parse', '--show-toplevel')
+  const { exec } = options
+  const top = await exec.git({ cwd, signal: options.signal }, 'rev-parse', '--show-toplevel')
   const side = await sides(top, spec.trim(), options)
-  const changes = await tracked(top, side.base, side.head, options.signal)
+  const changes = await tracked(exec, top, side.base, side.head, options.signal)
   if (side.kind === 'uncommitted') {
-    const extra = await untracked(top, options.signal)
+    const extra = await untracked(exec, top, options.signal)
     changes.files.push(...extra.files)
     changes.patches.push(...extra.patches)
   }

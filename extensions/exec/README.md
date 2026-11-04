@@ -19,4 +19,5 @@ directory until it closes, so register a target before an agent works in it.
 
 Work in a project or worktree goes through the service. Ultimate's own host-local work does not and keeps
 `lib/exec.ts`: Caddy, Tailscale, the updater, extension actions' `ctx.exec`, the system snapshot, automation scripts and
-the editor launcher.
+the editor launcher, and previews (`instance`): a preview is Ultimate's own server, listening on `127.0.0.1` for this
+host, and its cleanup runs at shutdown after services are gone.

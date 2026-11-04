@@ -28,6 +28,7 @@ import { git } from '../../lib/git.ts'
 import { setup } from '../../extensions/workspaces/setup.ts'
 import type { LanderEntry, WorkspaceIndex } from '../../extensions/workspaces/types.ts'
 import { createLander, landerCheckout, landerPath } from '../../extensions/workspaces/lander.ts'
+import { Exec } from '../../extensions/exec/api.ts'
 import { CheckRan, SubmissionLanded } from '../../extensions/workspaces/api.ts'
 import lineage, { leaveNote, startBranch } from '../../extensions/lineage/server.ts'
 import { LineageApi, Roots } from '../../extensions/lineage/api.ts'
@@ -47,7 +48,7 @@ import { Started } from '../../extensions/messages/addresses.ts'
 import promptExtension, { order as promptOrder } from '../../extensions/prompt/server.ts'
 import subagents from '../../extensions/subagents/server.ts'
 import { Subagents } from '../../extensions/subagents/api.ts'
-import { seedTally, temp, until } from '../helpers.ts'
+import { localExec, seedTally, temp, until } from '../helpers.ts'
 
 /** The part of the conversations service a test stands in for; standing a lander turns its summaries off and marks it standing. */
 const conversations = (service: Partial<ConversationsService>) =>
@@ -96,7 +97,7 @@ async function fixture(
   })
   let opened: Awaited<ReturnType<typeof prepared.open>>
   const resources = new Map<string, unknown>()
-  const services = new Map<string, unknown>()
+  const services = new Map<string, unknown>([[Exec.name, localExec]])
   const restart = vi.fn<ExtensionHost['restart']>(async () => 'RESTART_CALLED')
   const notice = vi.fn<ExtensionHost['notice']>()
   // As the server: openers run each time the harness opens, cleanups each time it closes.
@@ -296,8 +297,8 @@ it.concurrent('serializes concurrent lander checkout creation', async () => {
   await mkdir(path)
   await writeFile(join(path, 'incomplete'), 'interrupted')
   const results = await Promise.allSettled([
-    landerCheckout(home, projectRoot, {}),
-    landerCheckout(home, projectRoot, {}),
+    landerCheckout(localExec, home, projectRoot, {}),
+    landerCheckout(localExec, home, projectRoot, {}),
   ])
   expect(results).toEqual([
     { status: 'fulfilled', value: path },
@@ -309,13 +310,17 @@ it.concurrent('serializes concurrent lander checkout creation', async () => {
   expect(await readdir(path)).not.toContain('incomplete')
   // An existing checkout must be left alone, even when another tip is requested.
   await writeFile(join(path, 'keep.txt'), 'keep')
-  expect(await landerCheckout(home, projectRoot, {}, 'missing-tip')).toBe(path)
+  expect(await landerCheckout(localExec, home, projectRoot, {}, 'missing-tip')).toBe(path)
   expect(await readFile(join(path, 'keep.txt'), 'utf8')).toBe('keep')
 })
 it.concurrent('retries lander checkout creation after a failure', async () => {
   const { home, projectRoot } = await repository()
-  await expect(landerCheckout(home, projectRoot, {}, 'missing-tip')).rejects.toThrow('missing-tip')
-  expect(await landerCheckout(home, projectRoot, {})).toBe(await landerPath(home, projectRoot, {}))
+  await expect(landerCheckout(localExec, home, projectRoot, {}, 'missing-tip')).rejects.toThrow(
+    'missing-tip',
+  )
+  expect(await landerCheckout(localExec, home, projectRoot, {})).toBe(
+    await landerPath(home, projectRoot, {}),
+  )
 })
 it.concurrent('creates through the action; setup receives ULTIMATE_SOURCE and the first model request waits for ready', async () => {
   const f = await fixture()
@@ -452,6 +457,7 @@ it.concurrent('renders workspace preparation before project context in the first
 it.concurrent('setup closes stdin so commands waiting for EOF finish', async () => {
   const paths = await repository()
   await setup(
+    localExec,
     paths.projectRoot,
     paths.projectRoot,
     {

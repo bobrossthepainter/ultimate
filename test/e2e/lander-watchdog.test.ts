@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { runLanderCheck } from '../../extensions/workspaces/lander.ts'
 import { context } from '../../server/harness.ts'
-import { removeTemp, temp } from '../helpers.ts'
+import { localExec, removeTemp, temp } from '../helpers.ts'
 
 it('kills a silent process group on stall and a printing process on the total cap', async () => {
   const directory = await temp('ultimate-lander-watchdog-')
@@ -14,7 +14,7 @@ it('kills a silent process group on stall and a printing process on the total ca
       const command = `echo $$ > '${pidFile}'; sleep 10 & echo $! > '${childFile}'; ${printing ? 'while true; do echo progress; sleep 0.02; done' : 'wait'}`
       const pids = join(directory, 'pids')
       const tmp = join(directory, 'tmp')
-      const result = await runLanderCheck(directory, command, context, pids, tmp, {
+      const result = await runLanderCheck(localExec, directory, command, context, pids, tmp, {
         stall: 0.2,
         total: 0.5,
       })

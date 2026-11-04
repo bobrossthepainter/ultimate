@@ -50,20 +50,20 @@ export type ExecProtocol = {
 
 export type ExecService = {
   /** The target owning `cwd`: the registered one with the longest root containing it, else `local`. */
-  resolve(cwd: string): ExecTarget
+  resolve: (cwd: string) => ExecTarget
   /** Run `file` in `cwd` to its end, like execFile: resolves stdout and stderr. */
-  run(
+  run: (
     cwd: string,
     file: string,
     args: readonly string[],
     options?: RunOptions,
-  ): Promise<{ stdout: string; stderr: string }>
+  ) => Promise<{ stdout: string; stderr: string }>
   /** Start `file` in `cwd` as its own process group, like spawnGroup. */
-  start(cwd: string, file: string, args: string[], options?: StartOptions): Group
+  start: (cwd: string, file: string, args: string[], options?: StartOptions) => Group
   /** Run git in `cwd` and return its trimmed stdout, like `git` from `lib/git.ts`. */
-  git(cwd: string | GitOptions, ...args: string[]): Promise<string>
+  git: (cwd: string | GitOptions, ...args: string[]) => Promise<string>
   /** Pi's execution environment in `cwd`, as the agent's tools get it. */
-  env(cwd: string): ExecutionEnv
+  env: (cwd: string) => ExecutionEnv
 }
 /** Run commands where a directory lives; `need` it for work in a project or worktree, never for host-local work. */
 export const Exec = defineApi<ExecService>()('exec')

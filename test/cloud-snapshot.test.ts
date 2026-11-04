@@ -13,7 +13,7 @@ import { temp } from './helpers.ts'
 const key = 'github.com/o/project'
 const stub = cloudStub()
 const stored = stub.objects
-const remote = { url: 'ws://127.0.0.1:8787', token: 'dev', secret: 'snapshot secret', key }
+const remote = { url: 'ws://127.0.0.1:8787', token: 'dev', secret: 'snapshot secret', key, git }
 /** sha256 of a `VACUUM INTO` copy: the plaintext a manifest hashes. */
 async function contentHash(path: string) {
   const copy = join(await temp('ultimate-snapshot-hash-'), 'copy.sqlite')

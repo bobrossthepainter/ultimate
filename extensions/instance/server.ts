@@ -372,7 +372,7 @@ export const actions: Record<string, ExtensionAction> = {
  * already) and the guard config written into its home; none outside git or before a first commit.
  */
 async function previewGit(project: string, home: string) {
-  const checkout = await isolatable(project)
+  const checkout = await isolatable(project, git)
   if ('reason' in checkout) return undefined
   const branch = previewBranch(home)
   if (!(await git(project, 'branch', '--list', branch))) await git(project, 'branch', branch)

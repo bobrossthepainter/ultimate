@@ -11,10 +11,12 @@ import {
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, TaskId, Tx } from '@earendil-works/pi-durable'
-import { exec } from '../../lib/exec.ts'
-import { git, isolatable } from '../../lib/git.ts'
+import { exec as run } from '../../lib/exec.ts'
+import { isolatable } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { Exec } from '../exec/api.ts'
+import type { ExecService } from '../exec/api.ts'
 import { Branches } from './api.ts'
 import { WorkspacesDoc } from './refs.ts'
 import { setup } from './setup.ts'
@@ -96,15 +98,17 @@ type Host = Pick<
   | 'emit'
 >
 async function changes(
+  exec: ExecService,
   id: ConversationId,
   workspace: WorkspaceIndex['items'][string],
 ): Promise<KeptWork> {
   return {
     id,
-    uncommitted: (await git(workspace.path, 'status', '--porcelain')).split('\n').filter(Boolean)
-      .length,
+    uncommitted: (await exec.git(workspace.path, 'status', '--porcelain'))
+      .split('\n')
+      .filter(Boolean).length,
     unlanded: Number(
-      await git(
+      await exec.git(
         workspace.path,
         'rev-list',
         '--count',
@@ -130,18 +134,20 @@ async function onDisk(path: string) {
  * after `git worktree remove`) is not a repository to inspect, and holds none.
  */
 async function atRisk(
+  exec: ExecService,
   id: ConversationId,
   workspace: Pick<WorkspaceIndex['items'][string], 'path' | 'branch' | 'target'>,
 ): Promise<KeptWork> {
-  const branch = (await git(workspace.path, 'branch', '--list', workspace.branch))
+  const branch = (await exec.git(workspace.path, 'branch', '--list', workspace.branch))
     ? [workspace.branch]
     : []
   return {
     id,
-    uncommitted: (await git(workspace.path, 'status', '--porcelain')).split('\n').filter(Boolean)
-      .length,
+    uncommitted: (await exec.git(workspace.path, 'status', '--porcelain'))
+      .split('\n')
+      .filter(Boolean).length,
     unlanded: Number(
-      await git(
+      await exec.git(
         workspace.path,
         'rev-list',
         '--count',
@@ -154,31 +160,32 @@ async function atRisk(
   }
 }
 const held = (
+  exec: ExecService,
   id: ConversationId,
   workspace: WorkspaceIndex['items'][string],
   registered: boolean,
 ): Promise<KeptWork> =>
-  registered ? atRisk(id, workspace) : Promise.resolve({ id, uncommitted: 0, unlanded: 0 })
+  registered ? atRisk(exec, id, workspace) : Promise.resolve({ id, uncommitted: 0, unlanded: 0 })
 /** Whether the source lists the path as a worktree; throws when the source cannot tell, so callers never guess. */
-async function listedBySource(workspace: WorkspaceIndex['items'][string]) {
-  return (await git(workspace.source, 'worktree', 'list', '--porcelain'))
+async function listedBySource(exec: ExecService, workspace: WorkspaceIndex['items'][string]) {
+  return (await exec.git(workspace.source, 'worktree', 'list', '--porcelain'))
     .split('\n\n')
     .some((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
 }
 /** Whether the folder at the path holds only what the source's ignore rules ignore, such as `.vite/` or `node_modules/`. */
-async function onlyIgnored(workspace: WorkspaceIndex['items'][string]) {
+async function onlyIgnored(exec: ExecService, workspace: WorkspaceIndex['items'][string]) {
   const entries = await readdir(workspace.path, { withFileTypes: true })
   if (!entries.length) return true
   const paths = entries.map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
-  const ignored = await git(workspace.source, 'check-ignore', '--no-index', '--', ...paths).catch(
-    () => '',
-  )
+  const ignored = await exec
+    .git(workspace.source, 'check-ignore', '--no-index', '--', ...paths)
+    .catch(() => '')
   const matched = new Set(ignored.split('\n'))
   return paths.every((path) => matched.has(path))
 }
-async function registeredCheckout(workspace: WorkspaceIndex['items'][string]) {
+async function registeredCheckout(exec: ExecService, workspace: WorkspaceIndex['items'][string]) {
   if (!(await onDisk(workspace.path))) return false
-  const listed = await git(workspace.path, 'worktree', 'list', '--porcelain').catch(
+  const listed = await exec.git(workspace.path, 'worktree', 'list', '--porcelain').catch(
     // A folder Git cannot inspect is not a usable registered checkout.
     () => '',
   )
@@ -187,6 +194,7 @@ async function registeredCheckout(workspace: WorkspaceIndex['items'][string]) {
     .some((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
 }
 export function workspaces(host: Host) {
+  const exec = host.need(Exec)
   const queues = host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
   /** Runs writes to one source checkout one at a time, across synchronous landing and the lander. */
   async function serial<T>(source: string, operation: () => Promise<T>): Promise<T> {
@@ -266,11 +274,13 @@ export function workspaces(host: Host) {
       for (const id of Object.values(index.landerConversations) as ConversationId[])
         if (await tx.conversation(id)) await host.need(ConversationsApi).setStanding(tx, id, true)
     }, context)
-    const checkout = await isolatable(host.projectRoot)
+    const checkout = await isolatable(host.projectRoot, exec.git)
     const { source, target } = 'source' in checkout ? checkout : {}
     // The conversation's cwd exists from the start, at the target tip, so it can answer before any submission.
     const path =
-      source && target && (await landerCheckout(host.home, source, await host.projectSettings()))
+      source &&
+      target &&
+      (await landerCheckout(exec, host.home, source, await host.projectSettings()))
     await host.harness().commit(async (tx) => {
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       const landers: ConversationId[] = []
@@ -328,7 +338,7 @@ export function workspaces(host: Host) {
           // written ("failed to read .git/worktrees/<name>/locked"), so preparations of one source take turns.
           await serial(workspace.source, async () => {
             const list = async () =>
-              (await git(workspace.source, 'worktree', 'list', '--porcelain'))
+              (await exec.git(workspace.source, 'worktree', 'list', '--porcelain'))
                 .split('\n\n')
                 .find((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
             let registered = await list()
@@ -343,7 +353,7 @@ export function workspaces(host: Host) {
                 ? !registered.split('\n').includes(`branch refs/heads/${workspace.branch}`)
                 : await onDisk(workspace.path))
             ) {
-              await clearCheckout(workspace.source, workspace.path)
+              await clearCheckout(exec, workspace.source, workspace.path)
               registered = await list()
             }
             if (registered) {
@@ -360,18 +370,21 @@ export function workspaces(host: Host) {
                 })
               )
                 throw new Error(`Workspace path already exists: ${workspace.path}`)
-              if (await git(workspace.source, 'branch', '--list', workspace.branch)) {
+              if (await exec.git(workspace.source, 'branch', '--list', workspace.branch)) {
                 if (
                   !task.input.reset &&
                   (!resumed ||
-                    (await git(workspace.source, 'rev-parse', workspace.branch)) !== workspace.base)
+                    (await exec.git(workspace.source, 'rev-parse', workspace.branch)) !==
+                      workspace.base)
                 )
                   throw new Error(`Workspace branch already exists: ${workspace.branch}`)
-                if (!task.input.reset) await git(workspace.source, 'branch', '-D', workspace.branch)
+                if (!task.input.reset)
+                  await exec.git(workspace.source, 'branch', '-D', workspace.branch)
               }
               await runtime.memo('started', true, context)
               created = true
               await addCheckout(
+                exec,
                 settings,
                 workspace.source,
                 workspace.path,
@@ -384,6 +397,7 @@ export function workspaces(host: Host) {
           })
           created = true
           await setup(
+            exec,
             workspace.source,
             workspace.path,
             await host.projectSettings(),
@@ -398,7 +412,7 @@ export function workspaces(host: Host) {
           if (runtime.signal.aborted) throw error
           await serial(workspace.source, async () => {
             // Remove only the registered checkout created for this record, never an existing path.
-            const registered = (await git(workspace.source, 'worktree', 'list', '--porcelain'))
+            const registered = (await exec.git(workspace.source, 'worktree', 'list', '--porcelain'))
               .split('\n\n')
               .find(
                 (entry) =>
@@ -408,6 +422,7 @@ export function workspaces(host: Host) {
             if (created) {
               if (registered)
                 await removeCheckout(
+                  exec,
                   await host.projectSettings(),
                   workspace.source,
                   workspace.path,
@@ -418,11 +433,14 @@ export function workspaces(host: Host) {
                 )
               if (
                 !task.input.preserve &&
-                (await git(workspace.source, 'rev-parse', workspace.branch).catch(() => '')) ===
-                  workspace.base
+                (await exec
+                  .git(workspace.source, 'rev-parse', workspace.branch)
+                  .catch(() => '')) === workspace.base
               )
                 // Best-effort rollback: the preparation error is recorded below and must not be replaced.
-                await git(workspace.source, 'branch', '-D', workspace.branch).catch(() => undefined)
+                await exec
+                  .git(workspace.source, 'branch', '-D', workspace.branch)
+                  .catch(() => undefined)
             }
           })
           await runtime.commit(async (tx) => {
@@ -498,7 +516,7 @@ export function workspaces(host: Host) {
   async function recordedCheckout(id: ConversationId, context: Context) {
     const workspace = await presentCheckout(id, context)
     if (!workspace) return undefined
-    const registered = await listedBySource(workspace)
+    const registered = await listedBySource(exec, workspace)
     if (!registered && workspace.state !== 'ready') return undefined
     return { workspace, registered }
   }
@@ -511,7 +529,7 @@ export function workspaces(host: Host) {
         // it forks. `git worktree remove` deletes that file and leaves only ignored files behind.
         if (workspace?.state !== 'ready' || !(await onDisk(join(workspace.path, '.git'))))
           return undefined
-        return changes(id as ConversationId, workspace).catch(
+        return changes(exec, id as ConversationId, workspace).catch(
           // A checkout gone from disk or mid-removal has nothing to show.
           () => undefined,
         )
@@ -525,7 +543,7 @@ export function workspaces(host: Host) {
       const checkout = await recordedCheckout(id, context)
       // Concluding keeps a branch's commits; the warning still names them, since they have not landed.
       if (!checkout?.registered) continue
-      const item = await changes(id, checkout.workspace)
+      const item = await changes(exec, id, checkout.workspace)
       if (item.uncommitted || item.unlanded) result.push(item)
     }
     return result
@@ -538,8 +556,8 @@ export function workspaces(host: Host) {
   ) {
     let item: KeptWork = { id, uncommitted: 0, unlanded: 0 }
     try {
-      if (await listedBySource(workspace)) {
-        item = await atRisk(id, workspace)
+      if (await listedBySource(exec, workspace)) {
+        item = await atRisk(exec, id, workspace)
         if (item.uncommitted || item.unlanded) {
           await host.harness().commit(async (tx) => {
             ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'ready'
@@ -548,6 +566,7 @@ export function workspaces(host: Host) {
         }
         // Never force: Git refuses uncommitted changes made since the status check.
         await removeCheckout(
+          exec,
           await host.projectSettings(),
           workspace.source,
           workspace.path,
@@ -556,27 +575,23 @@ export function workspaces(host: Host) {
       } else if (await onDisk(workspace.path)) {
         // A process left running in the released checkout (a dev server) can re-create ignored state there; any
         // other folder at the path is not ours to remove.
-        if (!(await onlyIgnored(workspace)))
+        if (!(await onlyIgnored(exec, workspace)))
           throw new Error(`Workspace path is not a registered checkout: ${workspace.path}`)
         await rm(workspace.path, { recursive: true, force: true })
       }
-      if (await git(workspace.source, 'branch', '--list', workspace.branch)) {
-        const merged = await git(
-          workspace.source,
-          'merge-base',
-          '--is-ancestor',
-          workspace.branch,
-          workspace.target,
-        ).then(
-          () => true,
-          () => false,
-        )
-        if (merged) await git(workspace.source, 'branch', '-D', workspace.branch)
+      if (await exec.git(workspace.source, 'branch', '--list', workspace.branch)) {
+        const merged = await exec
+          .git(workspace.source, 'merge-base', '--is-ancestor', workspace.branch, workspace.target)
+          .then(
+            () => true,
+            () => false,
+          )
+        if (merged) await exec.git(workspace.source, 'branch', '-D', workspace.branch)
       }
       return undefined
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
-      const present = await registeredCheckout(workspace)
+      const present = await registeredCheckout(exec, workspace)
       await host.harness().commit(async (tx) => {
         const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)]
         saved.state = present ? 'ready' : 'removed'
@@ -610,7 +625,7 @@ export function workspaces(host: Host) {
         const present = Boolean(checkout)
         const registered = Boolean(checkout?.registered)
         const item: KeptWork = present
-          ? await held(id, workspace, registered)
+          ? await held(exec, id, workspace, registered)
           : { id, uncommitted: 0, unlanded: 0 }
         if (retained.has(id)) item.descendant = retained.get(id)
         const reason = await host.harness().commit(async (tx) => {
@@ -676,7 +691,7 @@ export function workspaces(host: Host) {
       throw error
     })
     if (!names.length) return []
-    const checkout = await isolatable(host.projectRoot)
+    const checkout = await isolatable(host.projectRoot, exec.git)
     if ('reason' in checkout) return []
     const { source, target } = checkout
     const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
@@ -696,7 +711,7 @@ export function workspaces(host: Host) {
       const path = join(root, name)
       if (known.has(path)) continue
       await serial(source, async () => {
-        const record = (await git(source, 'worktree', 'list', '--porcelain'))
+        const record = (await exec.git(source, 'worktree', 'list', '--porcelain'))
           .split('\n\n')
           .map((lines) => lines.split('\n'))
           .find((lines) => lines[0] === `worktree ${path}`)
@@ -706,14 +721,14 @@ export function workspaces(host: Host) {
           .find((line) => line.startsWith('branch refs/heads/'))
           ?.slice('branch refs/heads/'.length)
         // A detached checkout counts its HEAD's commits not on the target as work only it holds.
-        const work = await atRisk(0 as ConversationId, { path, branch: branch ?? '', target })
+        const work = await atRisk(exec, 0 as ConversationId, { path, branch: branch ?? '', target })
         if (work.uncommitted || work.unlanded) {
           kept.push(path)
           return
         }
-        await git(source, 'worktree', 'remove', path)
-        if (branch && (await contains(source, branch, target)))
-          await git(source, 'branch', '-D', branch)
+        await exec.git(source, 'worktree', 'remove', path)
+        if (branch && (await contains(exec, source, branch, target)))
+          await exec.git(source, 'branch', '-D', branch)
       })
     }
     if (kept.length)
@@ -729,17 +744,18 @@ export function workspaces(host: Host) {
       const source = workspace.source
       await idle(id, context)
       if (workspace.state !== 'ready') throw new Error(`Workspace is ${workspace.state}`)
-      const dirty = await git(workspace.path, 'status', '--porcelain')
+      const dirty = await exec.git(workspace.path, 'status', '--porcelain')
       if (dirty) throw new Error(`Worktree is dirty:\n${dirty}`)
       if (
-        (await git(source, 'symbolic-ref', '--short', 'HEAD').catch(() => '')) !== workspace.target
+        (await exec.git(source, 'symbolic-ref', '--short', 'HEAD').catch(() => '')) !==
+        workspace.target
       )
         throw new Error(`Target branch changed; check out ${workspace.target} first`)
-      if ((await git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch)
+      if ((await exec.git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch)
         throw new Error('Workspace branch changed')
-      const tip = await git(workspace.path, 'rev-parse', 'HEAD')
-      const head = await git(source, 'rev-parse', 'HEAD')
-      const integrated = await git(source, 'merge-base', '--is-ancestor', tip, head).then(
+      const tip = await exec.git(workspace.path, 'rev-parse', 'HEAD')
+      const head = await exec.git(source, 'rev-parse', 'HEAD')
+      const integrated = await exec.git(source, 'merge-base', '--is-ancestor', tip, head).then(
         () => true,
         () => false,
       )
@@ -752,7 +768,7 @@ export function workspaces(host: Host) {
       }
       if (!integrated) {
         if (
-          !(await git(source, 'merge-base', '--is-ancestor', head, tip).then(
+          !(await exec.git(source, 'merge-base', '--is-ancestor', head, tip).then(
             () => true,
             () => false,
           ))
@@ -760,10 +776,12 @@ export function workspaces(host: Host) {
           throw new Error(
             `Target moved or diverged; update the workspace onto ${workspace.target} and verify again`,
           )
-        const commits = (await git(workspace.path, 'log', '--oneline', `${head}..${tip}`))
+        const commits = (await exec.git(workspace.path, 'log', '--oneline', `${head}..${tip}`))
           .split('\n')
           .filter(Boolean)
-        const files = (await git(workspace.path, 'diff', '--numstat', '--no-renames', head, tip))
+        const files = (
+          await exec.git(workspace.path, 'diff', '--numstat', '--no-renames', head, tip)
+        )
           .split('\n')
           .filter(Boolean)
           .map((line) => {
@@ -774,7 +792,7 @@ export function workspaces(host: Host) {
         const needsRestart =
           (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
           files.some(({ path }) => /^(server|shared)\//.test(path))
-        await git(source, 'merge', '--ff-only', tip)
+        await exec.git(source, 'merge', '--ff-only', tip)
         result = {
           text: `Landed commits:\n${commits.join('\n')}\nChanged files:\n${files.map((file) => `${file.path} +${file.added} -${file.removed}`).join('\n')}${needsRestart ? '\nNeeds restart.' : ''}`,
           landed: tip,
@@ -803,11 +821,11 @@ export function workspaces(host: Host) {
     const workspace = await get(id, context)
     if (!workspace) throw new Error('Conversation has no workspace')
     if (workspace.state !== 'ready') throw new Error(`Workspace is ${workspace.state}`)
-    const dirty = await git(workspace.path, 'status', '--porcelain')
+    const dirty = await exec.git(workspace.path, 'status', '--porcelain')
     if (dirty) throw new Error(`Worktree is dirty:\n${dirty}`)
-    if ((await git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch)
+    if ((await exec.git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch)
       throw new Error('Workspace branch changed')
-    const tip = await git(workspace.path, 'rev-parse', 'HEAD')
+    const tip = await exec.git(workspace.path, 'rev-parse', 'HEAD')
     const path = await landerPath(host.home, workspace.source, await host.projectSettings())
     const subject = await host.need(ConversationsApi).subject(id, context)
     const result = await host.harness().commit(async (tx) => {
@@ -874,7 +892,7 @@ export function workspaces(host: Host) {
     }
     if (workspace.state !== 'ready')
       return `Workspace is ${workspace.state}: ${workspace.error ?? 'checkout is not ready; send a new input to retry'}`
-    if (!(await registeredCheckout(workspace)))
+    if (!(await registeredCheckout(exec, workspace)))
       return `Workspace checkout is missing or unregistered: ${workspace.path}${workspace.error ? `; ${workspace.error}` : ''}`
     return undefined
   }
@@ -917,20 +935,24 @@ export function workspaces(host: Host) {
           return false
         const remaining = await finishRemoval(id, workspace, context)
         if (remaining) return remaining
-        const exists = Boolean(await git(workspace.source, 'branch', '--list', workspace.branch))
+        const exists = Boolean(
+          await exec.git(workspace.source, 'branch', '--list', workspace.branch),
+        )
         const preserve =
           exists &&
-          !(await git(
-            workspace.source,
-            'merge-base',
-            '--is-ancestor',
-            workspace.branch,
-            workspace.target,
-          ).then(
-            () => true,
-            () => false,
-          ))
-        const base = await git(
+          !(await exec
+            .git(
+              workspace.source,
+              'merge-base',
+              '--is-ancestor',
+              workspace.branch,
+              workspace.target,
+            )
+            .then(
+              () => true,
+              () => false,
+            ))
+        const base = await exec.git(
           workspace.source,
           'rev-parse',
           preserve ? workspace.branch : workspace.target,
@@ -1007,7 +1029,7 @@ export function workspaces(host: Host) {
         !host.extensions().some((extension) => extension.name === 'workspaces' && extension.enabled)
       )
         throw new Error('Enable workspaces to create an isolated conversation')
-      const checkout = await isolatable(cwd)
+      const checkout = await isolatable(cwd, exec.git)
       if ('reason' in checkout) throw new Error(checkout.reason)
       const { source, target } = checkout
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
@@ -1021,7 +1043,7 @@ export function workspaces(host: Host) {
       index.items[String(id)] = {
         path,
         branch,
-        base: await git(source, 'rev-parse', `refs/heads/${target}`),
+        base: await exec.git(source, 'rev-parse', `refs/heads/${target}`),
         source,
         target,
         state: 'preparing',
@@ -1047,18 +1069,17 @@ export function workspaces(host: Host) {
       if (!workspace) return null
       return {
         ...workspace,
-        ahead: await git(workspace.source, 'rev-list', '--count', `HEAD..${workspace.branch}`).then(
-          Number,
-          () => null,
-        ),
-        tip: await git(workspace.path, 'rev-parse', 'HEAD').catch(() => null),
-        sourceTip: await git(workspace.source, 'rev-parse', 'HEAD').catch(() => null),
-        currentBranch: await git(workspace.path, 'symbolic-ref', '--short', 'HEAD').catch(
-          () => null,
-        ),
-        sourceBranch: await git(workspace.source, 'symbolic-ref', '--short', 'HEAD').catch(
-          () => null,
-        ),
+        ahead: await exec
+          .git(workspace.source, 'rev-list', '--count', `HEAD..${workspace.branch}`)
+          .then(Number, () => null),
+        tip: await exec.git(workspace.path, 'rev-parse', 'HEAD').catch(() => null),
+        sourceTip: await exec.git(workspace.source, 'rev-parse', 'HEAD').catch(() => null),
+        currentBranch: await exec
+          .git(workspace.path, 'symbolic-ref', '--short', 'HEAD')
+          .catch(() => null),
+        sourceBranch: await exec
+          .git(workspace.source, 'symbolic-ref', '--short', 'HEAD')
+          .catch(() => null),
       }
     },
     async discard(id: ConversationId, context: Context) {
@@ -1067,8 +1088,9 @@ export function workspaces(host: Host) {
       if (!workspace) throw new Error('Conversation has no workspace')
       if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
       if (workspace.state !== 'removed') {
-        if (await listedBySource(workspace))
+        if (await listedBySource(exec, workspace))
           await removeCheckout(
+            exec,
             await host.projectSettings(),
             workspace.source,
             workspace.path,
@@ -1100,20 +1122,22 @@ export function workspaces(host: Host) {
         items.map(async (workspace) => {
           stats[workspace.state]++
           if (workspace.state !== 'ready') return
-          const tip = await git(workspace.path, 'rev-parse', 'HEAD').catch(() => '')
-          if (await git(workspace.path, 'status', '--porcelain').catch(() => '')) stats.dirty++
+          const tip = await exec.git(workspace.path, 'rev-parse', 'HEAD').catch(() => '')
+          if (await exec.git(workspace.path, 'status', '--porcelain').catch(() => '')) stats.dirty++
           if (!tip || tip === workspace.base) stats.fresh++
           else if (
-            await git(
-              workspace.source,
-              'merge-base',
-              '--is-ancestor',
-              tip,
-              `refs/heads/${workspace.target}`,
-            ).then(
-              () => true,
-              () => false,
-            )
+            await exec
+              .git(
+                workspace.source,
+                'merge-base',
+                '--is-ancestor',
+                tip,
+                `refs/heads/${workspace.target}`,
+              )
+              .then(
+                () => true,
+                () => false,
+              )
           )
             stats.landed++
           else stats.ahead++
@@ -1131,11 +1155,11 @@ export function workspaces(host: Host) {
       if (disk.running) return disk.running
       const directory = join(host.home, 'worktrees')
       const promise: Promise<WorkspaceDisk> = Promise.all([
-        exec('du', ['-sk', directory], { timeout: 120_000 }).then(
+        run('du', ['-sk', directory], { timeout: 120_000 }).then(
           ({ stdout }) => Number(stdout.split('\t')[0]) * 1024,
           () => null,
         ),
-        exec('btrfs', ['filesystem', 'du', '-s', '--raw', directory], {
+        run('btrfs', ['filesystem', 'du', '-s', '--raw', directory], {
           timeout: 120_000,
         }).then(
           ({ stdout }) => {

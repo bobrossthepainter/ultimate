@@ -21,6 +21,7 @@ import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { Exec } from '../exec/api.ts'
 import { HealthApi } from '../health/api.ts'
 import type { MemoryDoc, RootsDoc } from '../lineage/refs.ts'
 import { Standing } from '../subagents/api.ts'
@@ -267,7 +268,7 @@ async function worktreeArea(host: CheckHost): Promise<SetupIssue | undefined> {
     ?.worktree?.setup
   if (Array.isArray(commands) && commands.length)
     return { area: 'Worktree setup', status: 'ok', summary: `${commands.length} commands` }
-  if ('reason' in (await isolatable(host.projectRoot))) return undefined
+  if ('reason' in (await isolatable(host.projectRoot, host.need(Exec).git))) return undefined
   const manifests = MANIFESTS.filter((name) => existsSync(join(host.projectRoot, name)))
   if (!manifests.length) return undefined
   return {

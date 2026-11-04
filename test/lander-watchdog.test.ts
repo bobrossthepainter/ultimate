@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { withAbortSignal } from '@earendil-works/chord/context'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
+import { localExec } from './helpers.ts'
 import { runGroup } from '../lib/process-group.ts'
 import {
   landerSettings,
@@ -16,8 +17,8 @@ const runLanderCheck = (
   path: string,
   command: string,
   ctx: typeof context,
-  limits?: Parameters<typeof run>[5],
-) => run(path, command, ctx, tmpdir(), tmpdir(), limits)
+  limits?: Parameters<typeof run>[6],
+) => run(localExec, path, command, ctx, tmpdir(), tmpdir(), limits)
 
 afterEach(() => {
   vi.resetAllMocks()
@@ -169,7 +170,7 @@ it('gives each check its own TMPDIR in the given directory and removes it afterw
     await writeFile(join(seen!, 'left'), '')
     return 1
   })
-  await run('.', 'pnpm test', context, tmpdir(), temp)
+  await run(localExec, '.', 'pnpm test', context, tmpdir(), temp)
   expect(seen && dirname(seen)).toBe(temp)
   expect(await readdir(temp)).toEqual([])
 })

@@ -83,10 +83,10 @@ it('trims git output, reports a failed command with its stderr and explains why 
   await expect(git(dir, 'rev-parse', '--show-toplevel')).rejects.toThrow(
     /Command failed: git rev-parse --show-toplevel\n.*not a git repository/,
   )
-  expect(await isolatable(dir)).toEqual({ reason: noRepository })
+  expect(await isolatable(dir, git)).toEqual({ reason: noRepository })
   const repo = join(dir, 'repo')
   await mkdir(repo)
   await git(repo, 'init', '-q', '-b', 'main')
-  expect(await isolatable(repo)).toEqual({ reason: noCommit })
+  expect(await isolatable(repo, git)).toEqual({ reason: noCommit })
   expect(await git({ cwd: repo, timeout: 0 }, 'symbolic-ref', '--short', 'HEAD')).toBe('main')
 })

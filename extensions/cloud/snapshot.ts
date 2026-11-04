@@ -10,7 +10,7 @@ import { pipeline } from 'node:stream/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { createZstdCompress, createZstdDecompress } from 'node:zlib'
 import { vacuum } from '../../lib/database-files.ts'
-import { git as gitIn } from '../../lib/git.ts'
+import type { Git } from '../../lib/git.ts'
 
 export interface SnapshotManifest {
   id: string
@@ -48,8 +48,10 @@ const CHUNK = 16 * 1024 * 1024
 // A for-each-ref pattern without a trailing slash matches refs below it, not `ultimate-moved/`.
 const BRANCHES = 'refs/heads/ultimate'
 /** Bundles take as long as they take and list every branch. */
-const git = (repo: string, ...args: string[]) =>
-  gitIn({ cwd: repo, timeout: 0, maxBuffer: 16 * 1024 * 1024 }, ...args)
+const unbounded =
+  (gitIn: Git) =>
+  (repo: string, ...args: string[]) =>
+    gitIn({ cwd: repo, timeout: 0, maxBuffer: 16 * 1024 * 1024 }, ...args)
 
 /**
  * Copy a closed or open SQLite file consistently (VACUUM INTO via node:sqlite, read-only), compress (zlib zstd), encrypt
@@ -64,11 +66,14 @@ export async function uploadSnapshot(o: {
   machine: string
   database: string
   repo: string
+  /** Runs git in `repo`. */
+  git: Git
   /** The project checkout, recorded in the manifest. */
   root?: string
   signal?: AbortSignal
   progress?: (done: number, total: number, uploaded: number) => void
 }): Promise<SnapshotManifest> {
+  const git = unbounded(o.git)
   const id = `${Date.now().toString(36)}-${randomBytes(8).toString('hex')}`
   const temp = await mkdtemp(join(dirname(o.database), '.snapshot-'))
   try {
@@ -112,6 +117,8 @@ export async function downloadSnapshot(o: {
   id: string
   dir: string
   repo: string
+  /** Runs git in `repo`. */
+  git: Git
   /** Refuse, before writing anything, a snapshot taken of a checkout at another path. */
   root?: string
   signal?: AbortSignal
@@ -148,7 +155,11 @@ export async function downloadSnapshot(o: {
     await open(o, manifest.bundle, o.id, 'bundle', bundle, (done) =>
       o.progress?.(manifest.database.bytes + done, total),
     )
-    return { database, manifest, keptRefs: await fetchBranches(o.repo, bundle, o.id) }
+    return {
+      database,
+      manifest,
+      keptRefs: await fetchBranches(unbounded(o.git), o.repo, bundle, o.id),
+    }
   } catch (error) {
     // Only this download's own files go: the project's database and refs are never touched on failure.
     await rm(`${database}.part`, { force: true })
@@ -325,7 +336,12 @@ async function get(o: Remote, id: string, name: string) {
  * older one fast-forwarded unless it is checked out; one already containing the incoming commit stays. Anything else
  * keeps the local branch and stores the incoming commit as `refs/heads/ultimate-moved/<id>/<name>`.
  */
-async function fetchBranches(repo: string, bundle: string, id: string) {
+async function fetchBranches(
+  git: ReturnType<typeof unbounded>,
+  repo: string,
+  bundle: string,
+  id: string,
+) {
   await git(repo, 'bundle', 'verify', '--quiet', bundle)
   const heads = (await git(repo, 'bundle', 'unbundle', bundle))
     .split('\n')

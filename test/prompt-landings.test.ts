@@ -41,7 +41,7 @@ it('names the branches that landed between two commits, a worker under its branc
     { id: 40, title: 'Answer card redesign', busy: false },
     { id: 50, title: 'Prototype a card', label: 'designer', parentConversationId: 40, busy: false },
   ]
-  const landed = await landings(cwd, from, to, conversations)
+  const landed = await landings(git, cwd, from, to, conversations)
   expect(landed.map(({ conversation, title }) => ({ conversation, title }))).toEqual([
     { conversation: 60, title: 'skills: chip' },
     { conversation: undefined, title: 'hand edit' },

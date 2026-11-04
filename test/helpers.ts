@@ -19,6 +19,11 @@ import type { Api } from '../shared/extension-api.ts'
 import type { EventData, EventToken } from '../shared/events.ts'
 import { EventFeed, eventLog } from '../server/events.ts'
 import type { Reactor } from '../server/events.ts'
+import { Exec } from '../extensions/exec/api.ts'
+import { createExec, localProtocol } from '../extensions/exec/exec.ts'
+
+/** The exec service on this machine only, as a host without another protocol has it. */
+export const localExec = createExec(localProtocol, () => undefined)
 
 vi.mock('@earendil-works/pi-ai/providers/faux', async (importOriginal) => {
   const original = await importOriginal<typeof import('@earendil-works/pi-ai/providers/faux')>()
@@ -41,6 +46,8 @@ export const idleNeed = <S>(_api: Api<string, S>) =>
   new Proxy({}, { get: (_, key) => (key === 'then' ? undefined : async () => undefined) }) as S
 
 export function apis(provided = new Map<string, unknown>()) {
+  // Work in a directory runs on this machine, as the exec extension runs it without another protocol.
+  if (!provided.has(Exec.name)) provided.set(Exec.name, localExec)
   return {
     provided,
     implement: <S>(api: Api<string, S>, value: S) => void provided.set(api.name, value),
@@ -121,12 +128,13 @@ export async function linkDependencies(root: string) {
   }
 }
 /**
- * Copy `shared/`, `lib/` and every extension's `api.ts` and `refs.ts` into `root`, so partially copied extensions find
- * their contracts and helpers.
+ * Copy `shared/`, `lib/`, the exec extension and every extension's `api.ts` and `refs.ts` into `root`, so partially
+ * copied extensions find their contracts and helpers, and run work in a directory through exec.
  */
 export async function copyApis(root: string) {
   await cp(resolve('shared'), join(root, 'shared'), { recursive: true })
   await cp(resolve('lib'), join(root, 'lib'), { recursive: true })
+  await cp(resolve('extensions/exec'), join(root, 'extensions/exec'), { recursive: true })
   for (const name of await readdir(resolve('extensions')))
     for (const file of ['api.ts', 'refs.ts']) {
       const contract = resolve('extensions', name, file)

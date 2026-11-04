@@ -5,8 +5,9 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import { formatAgo } from '../../lib/ago.ts'
 import { UserInputEvent } from '../../shared/events.ts'
-import { git, isolatable } from '../../lib/git.ts'
+import { isolatable } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { Exec } from '../exec/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import { checkReview, reviewText } from './comments.ts'
@@ -35,7 +36,7 @@ async function target(host: ExtensionHost, branch: string) {
   const items = Object.values((await index(host, context))?.items ?? {})
   const owned = items.find((item) => item.branch === branch)
   if (owned) return owned.target
-  const checkout = await isolatable(host.projectRoot)
+  const checkout = await isolatable(host.projectRoot, host.need(Exec).git)
   if ('reason' in checkout) throw new Error(checkout.reason)
   return checkout.target
 }
@@ -48,17 +49,13 @@ async function target(host: ExtensionHost, branch: string) {
 async function resolve(host: ExtensionHost, cwd: string, spec: string) {
   if (!spec.startsWith('branch:')) return spec
   const branch = spec.slice('branch:'.length)
-  const present = await git(
-    cwd,
-    'rev-parse',
-    '--verify',
-    '--quiet',
-    '--end-of-options',
-    `refs/heads/${branch}`,
-  ).catch(
-    // `--quiet` exits 1 for an unknown ref: the branch is gone.
-    () => '',
-  )
+  const present = await host
+    .need(Exec)
+    .git(cwd, 'rev-parse', '--verify', '--quiet', '--end-of-options', `refs/heads/${branch}`)
+    .catch(
+      // `--quiet` exits 1 for an unknown ref: the branch is gone.
+      () => '',
+    )
   if (present) return spec
   const doc = await index(host, context)
   const owner = Object.entries(doc?.items ?? {}).find(([, item]) => item.branch === branch)?.[0]
@@ -86,21 +83,27 @@ async function ranges(host: ExtensionHost): Promise<ReviewRange[]> {
       .map(([id, item]) => [item.branch, Number(id)]),
   )
   const [branches, commits, landings] = await Promise.all([
-    git(
-      cwd,
-      'for-each-ref',
-      '--sort=-committerdate',
-      '--count=20',
-      '--format=%(refname:short)%09%(committerdate:unix)',
-      'refs/heads/ultimate/',
-    ).catch(
-      // No repository: the selector offers free entry only.
-      () => '',
-    ),
-    git(cwd, 'log', '-n', '15', '--format=%H%x09%ct%x09%s').catch(
-      // No commit yet: nothing to list.
-      () => '',
-    ),
+    host
+      .need(Exec)
+      .git(
+        cwd,
+        'for-each-ref',
+        '--sort=-committerdate',
+        '--count=20',
+        '--format=%(refname:short)%09%(committerdate:unix)',
+        'refs/heads/ultimate/',
+      )
+      .catch(
+        // No repository: the selector offers free entry only.
+        () => '',
+      ),
+    host
+      .need(Exec)
+      .git(cwd, 'log', '-n', '15', '--format=%H%x09%ct%x09%s')
+      .catch(
+        // No commit yet: nothing to list.
+        () => '',
+      ),
     host.eventLog.recent({ events: [SubmissionLanded], limit: 10 }),
   ])
   const list: ReviewRange[] = [
@@ -161,25 +164,29 @@ async function recipient(host: ExtensionHost, spec: string): Promise<number> {
     const range = /^[^.]+\.\.\.([^.]+)$/.exec(spec)
     if (range) {
       const landings = await host.eventLog.recent({ events: [SubmissionLanded], limit: 200 })
-      const sha = await git(
-        host.projectRoot,
-        'rev-parse',
-        '--verify',
-        '--quiet',
-        '--end-of-options',
-        `${range[1]}^{commit}`,
-      )
+      const sha = await host
+        .need(Exec)
+        .git(
+          host.projectRoot,
+          'rev-parse',
+          '--verify',
+          '--quiet',
+          '--end-of-options',
+          `${range[1]}^{commit}`,
+        )
       return landings.find(({ data }) => data.sha === sha)?.data.conversationId
     }
     if (spec === 'uncommitted' || spec.startsWith('-')) return undefined
-    const trailer = await git(
-      host.projectRoot,
-      'log',
-      '-1',
-      '--format=%(trailers:key=Ultimate-Conversation,valueonly)',
-      '--end-of-options',
-      spec,
-    )
+    const trailer = await host
+      .need(Exec)
+      .git(
+        host.projectRoot,
+        'log',
+        '-1',
+        '--format=%(trailers:key=Ultimate-Conversation,valueonly)',
+        '--end-of-options',
+        spec,
+      )
     return Number(trailer.split('\n')[0]) || undefined
   }
   const found = await owner().catch(
@@ -203,6 +210,7 @@ export const actions = {
       worktree === undefined ? await resolve(host, cwd, input.spec.trim()) : 'uncommitted'
     const diff = await reviewDiff(cwd, shown, {
       target: (branch) => target(host, branch),
+      exec: host.need(Exec),
       signal,
     })
     if (worktree !== undefined)

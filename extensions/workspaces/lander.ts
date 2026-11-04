@@ -9,9 +9,10 @@ import type { JsonObject } from '@earendil-works/pi-durable'
 import { withAbortSignal } from '@earendil-works/chord/context'
 import { defineEntry, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationDocToken, ConversationId, Tx } from '@earendil-works/pi-durable'
-import { git } from '../../lib/git.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { Exec } from '../exec/api.ts'
+import type { ExecService } from '../exec/api.ts'
 import { CheckRan, SubmissionLanded } from './api.ts'
 import { setup } from './setup.ts'
 import { addCheckout, treePath } from './tree.ts'
@@ -40,6 +41,7 @@ const checkouts = new Map<string, Promise<string>>()
  * stays as it is. Serialize creation per path so another caller cannot remove a checkout being created.
  */
 export async function landerCheckout(
+  exec: ExecService,
   home: string,
   source: string,
   settings: JsonObject,
@@ -52,14 +54,14 @@ export async function landerCheckout(
       () => undefined,
     )
     .then(async () => {
-      const registered = (await git(source, 'worktree', 'list', '--porcelain'))
+      const registered = (await exec.git(source, 'worktree', 'list', '--porcelain'))
         .split('\n\n')
         .some((entry) => entry.split('\n').includes(`worktree ${path}`))
       if (!registered) {
         // The directory is the lander's own; a crash may have left it half created.
         await rm(path, { recursive: true, force: true })
-        await git(source, 'worktree', 'prune')
-        await addCheckout(settings, source, path, landerName(source), ['--detach', tip])
+        await exec.git(source, 'worktree', 'prune')
+        await addCheckout(exec, settings, source, path, landerName(source), ['--detach', tip])
       }
       return path
     })
@@ -104,7 +106,15 @@ export const log = (
 }
 type Host = Pick<
   ExtensionHost,
-  'home' | 'ultimateRoot' | 'harness' | 'projectSettings' | 'doc' | 'metadata' | 'notice' | 'emit'
+  | 'home'
+  | 'ultimateRoot'
+  | 'harness'
+  | 'projectSettings'
+  | 'doc'
+  | 'metadata'
+  | 'notice'
+  | 'emit'
+  | 'need'
 >
 /** One check command, with its own total limit in seconds when set. */
 type Check = { command: string; timeout?: number }
@@ -157,6 +167,7 @@ export const checkTemp = (home: string) => join(home, 'lander-tmp')
  * TERM, then KILL after a short grace.
  */
 export async function runLanderCheck(
+  exec: ExecService,
   path: string,
   command: string,
   context: Context,
@@ -213,6 +224,7 @@ export async function runLanderCheck(
         signal,
         grace: 2000,
         onOutput,
+        start: exec.start,
       })
     } catch (error) {
       context.abortSignal?.throwIfAborted()
@@ -265,8 +277,8 @@ export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promi
     ...(lander?.push && !process.env.ULTIMATE_PREVIEW_BRANCH ? { push: lander.push } : {}),
   }
 }
-export const contains = (cwd: string, ancestor: string, descendant: string) =>
-  git(cwd, 'merge-base', '--is-ancestor', ancestor, descendant).then(
+export const contains = (exec: ExecService, cwd: string, ancestor: string, descendant: string) =>
+  exec.git(cwd, 'merge-base', '--is-ancestor', ancestor, descendant).then(
     () => true,
     () => false,
   )
@@ -278,8 +290,8 @@ const failure = (error: unknown) => {
     .slice(-3000)
 }
 /** Run a network git command in `cwd`; longer than git()'s local timeout. */
-const remote = (cwd: string, signal: AbortSignal, ...args: string[]) =>
-  git({ cwd, signal, timeout: 300000 }, ...args)
+const remote = (exec: ExecService, cwd: string, signal: AbortSignal, ...args: string[]) =>
+  exec.git({ cwd, signal, timeout: 300000 }, ...args)
 
 type Prepared = {
   base: string
@@ -332,12 +344,13 @@ export function createLander(
   },
   limits: CheckLimits = checkLimits,
 ) {
+  const exec = host.need(Exec)
   async function checkout(source: string, tip: string) {
-    const path = await landerCheckout(host.home, source, await host.projectSettings(), tip)
+    const path = await landerCheckout(exec, host.home, source, await host.projectSettings(), tip)
     // Every attempt starts from a clean checkout at the target tip; ignored files such as installs stay.
-    await git(path, 'reset', '--hard', '-q')
-    await git(path, 'checkout', '-q', '--detach', '--force', tip)
-    await git(path, 'clean', '-fdq')
+    await exec.git(path, 'reset', '--hard', '-q')
+    await exec.git(path, 'checkout', '-q', '--detach', '--force', tip)
+    await exec.git(path, 'clean', '-fdq')
     return path
   }
 
@@ -504,7 +517,15 @@ export function createLander(
           await step(`pushing to ${settings.push}`)
           try {
             // Push the checked commit, not whatever the branch points to by now.
-            await remote(source, signal, 'push', '-q', settings.push, `${sha}:refs/heads/${target}`)
+            await remote(
+              exec,
+              source,
+              signal,
+              'push',
+              '-q',
+              settings.push,
+              `${sha}:refs/heads/${target}`,
+            )
             return {
               remote: `${settings.push}/${target}`,
               text: `Pushed to ${settings.push}/${target}.`,
@@ -541,7 +562,7 @@ export function createLander(
             entry.landed &&
             attempt === 1 &&
             !pushRetried &&
-            (await contains(source, entry.landed.sha, `refs/heads/${target}`))
+            (await contains(exec, source, entry.landed.sha, `refs/heads/${target}`))
           )
             return await landedReport(settings, entry.landed, entry.landed.sha)
           // A crash after the checks keeps the integrated commit: go straight to fast-forwarding it.
@@ -554,11 +575,11 @@ export function createLander(
             )
             const path = await checkout(
               source,
-              merged?.sha ?? (await git(source, 'rev-parse', `refs/heads/${target}`)),
+              merged?.sha ?? (await exec.git(source, 'rev-parse', `refs/heads/${target}`)),
             )
             if (!merged) {
               await step('preparing')
-              const base = await git(path, 'rev-parse', 'HEAD')
+              const base = await exec.git(path, 'rev-parse', 'HEAD')
               /** Merge `commit` into the checkout; true when it conflicted and the submission failed. */
               const merge = async (
                 commit: string,
@@ -567,23 +588,30 @@ export function createLander(
                 hint: string,
               ) => {
                 try {
-                  await git(path, 'merge', '--no-edit', '-m', message, commit)
+                  await exec.git(path, 'merge', '--no-edit', '-m', message, commit)
                   return false
                 } catch {
-                  const conflicts = await git(path, 'diff', '--name-only', '--diff-filter=U')
+                  const conflicts = await exec.git(path, 'diff', '--name-only', '--diff-filter=U')
                   // The next attempt starts from a reset, cleaned checkout, so a failed abort cannot leak into it.
-                  await git(path, 'merge', '--abort').catch(() => undefined)
+                  await exec.git(path, 'merge', '--abort').catch(() => undefined)
                   await fail(reason, conflicts, hint)
                   return true
                 }
               }
               if (settings.push) {
                 if (
-                  await remote(path, signal, 'ls-remote', settings.push, `refs/heads/${target}`)
+                  await remote(
+                    exec,
+                    path,
+                    signal,
+                    'ls-remote',
+                    settings.push,
+                    `refs/heads/${target}`,
+                  )
                 ) {
-                  await remote(path, signal, 'fetch', '-q', settings.push, target)
-                  const fetched = await git(path, 'rev-parse', 'FETCH_HEAD')
-                  if (!(await contains(path, fetched, 'HEAD'))) {
+                  await remote(exec, path, signal, 'fetch', '-q', settings.push, target)
+                  const fetched = await exec.git(path, 'rev-parse', 'FETCH_HEAD')
+                  if (!(await contains(exec, path, fetched, 'HEAD'))) {
                     await step(`merging ${settings.push}/${target}`)
                     if (
                       await merge(
@@ -609,20 +637,21 @@ export function createLander(
                 return
               merged = await runtime.memo(
                 `merged:${id}:${attempt}`,
-                { base, sha: await git(path, 'rev-parse', 'HEAD') },
+                { base, sha: await exec.git(path, 'rev-parse', 'HEAD') },
                 context,
               )
             }
             const { base } = merged
             // Setup prepares the merged revision, for example installs its lockfile.
             await step('setting up')
-            await setup(source, path, await host.projectSettings(), signal)
+            await setup(exec, source, path, await host.projectSettings(), signal)
             const flaky: string[] = []
             for (const [position, group] of settings.checks.entries()) {
               const members = Array.isArray(group) ? group : [group]
               const commands = members.map((check) => check.command)
               const run = (command: string, member: number) =>
                 runLanderCheck(
+                  exec,
                   path,
                   command,
                   checkContext,
@@ -705,12 +734,12 @@ export function createLander(
             }
             // Only the commit every check ran on lands: nothing may have moved or touched the checkout meanwhile.
             if (
-              (await git(path, 'rev-parse', 'HEAD')) !== merged.sha ||
-              (await git(path, 'status', '--porcelain'))
+              (await exec.git(path, 'rev-parse', 'HEAD')) !== merged.sha ||
+              (await exec.git(path, 'status', '--porcelain'))
             )
               return await fail(
                 'the integration checkout changed during checks',
-                `${await git(path, 'log', '--oneline', '-3')}\n${await git(path, 'status', '--short')}`.trim(),
+                `${await exec.git(path, 'log', '--oneline', '-3')}\n${await exec.git(path, 'status', '--short')}`.trim(),
                 'Submit again.',
               )
             prepared = await runtime.memo<Prepared>(
@@ -723,19 +752,19 @@ export function createLander(
           await step('fast-forwarding')
           let refused: string | undefined
           const moved = await serial(source, async () => {
-            const current = await git(source, 'rev-parse', `refs/heads/${target}`)
+            const current = await exec.git(source, 'rev-parse', `refs/heads/${target}`)
             // A replay after the fast-forward finds exactly the integrated commit; anything else moved.
             if (current === integrated) return false
             if (current !== base) return true
             try {
               // Fast-forward the checkout that has the target checked out, so its files follow the branch.
-              const worktree = (await git(source, 'worktree', 'list', '--porcelain'))
+              const worktree = (await exec.git(source, 'worktree', 'list', '--porcelain'))
                 .split('\n\n')
                 .map((record) => record.split('\n'))
                 .find((record) => record.includes(`branch refs/heads/${target}`))?.[0]
                 .slice('worktree '.length)
-              if (worktree) await git(worktree, 'merge', '-q', '--ff-only', integrated)
-              else await git(source, 'update-ref', `refs/heads/${target}`, integrated, base)
+              if (worktree) await exec.git(worktree, 'merge', '-q', '--ff-only', integrated)
+              else await exec.git(source, 'update-ref', `refs/heads/${target}`, integrated, base)
             } catch (error) {
               refused = failure(error)
             }
@@ -755,8 +784,8 @@ export function createLander(
           const candidate: Landed = {
             sha: integrated,
             base,
-            commits: lines(await git(source, 'log', '--oneline', `${base}..${integrated}`)),
-            paths: lines(await git(source, 'diff', '--name-only', base, integrated)),
+            commits: lines(await exec.git(source, 'log', '--oneline', `${base}..${integrated}`)),
+            paths: lines(await exec.git(source, 'diff', '--name-only', base, integrated)),
             flaky,
           }
           let landed = candidate

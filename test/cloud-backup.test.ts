@@ -20,7 +20,7 @@ import { eventHost, fauxServer, post, temp } from './helpers.ts'
 
 const key = 'github.com/o/app'
 const stub = cloudStub()
-const cloud = { url: 'ws://127.0.0.1:8787', token: 'dev', secret: 'snapshot secret' }
+const cloud = { url: 'ws://127.0.0.1:8787', token: 'dev', secret: 'snapshot secret', git }
 
 beforeAll(() => vi.stubGlobal('fetch', stub.fetch))
 afterAll(() => vi.unstubAllGlobals())

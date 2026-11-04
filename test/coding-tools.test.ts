@@ -9,6 +9,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import codingTools from '../extensions/coding-tools/server.ts'
 import { context } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
+import { apis } from './helpers.ts'
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -18,6 +19,7 @@ it('uses a 600-second default tripwire and leaves explicit timeouts unchanged', 
     .fn<ReturnType<typeof createBashTool>['execute']>()
     .mockRejectedValue(new Error('Command timed out after 600 seconds'))
   const wrapper = codingTools({
+    ...apis(),
     emit: vi.fn<ExtensionHost['emit']>() as ExtensionHost['emit'],
   }).wraps!.find((wrap) => 'tool' in wrap && wrap.tool === 'bash')!
   if (!('tool' in wrapper)) throw new Error('Missing bash wrapper')
@@ -67,6 +69,7 @@ it('reads an image past the 2000 px limit shrunk to fit, keeping its aspect rati
   try {
     await writeFile(join(dir, 'wide.png'), png(3000, 30))
     const read = codingTools({
+      ...apis(),
       emit: vi.fn<ExtensionHost['emit']>() as ExtensionHost['emit'],
     }).tools!.find((tool) => tool.name === 'read')!
     const api = {

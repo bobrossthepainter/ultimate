@@ -49,8 +49,8 @@ import {
 import type { AgentDefinition, DefinitionFields } from '../../lib/agents.ts'
 import { createChild, started } from './children.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { exec } from '../../lib/exec.ts'
 import { shortTitle } from '../../lib/title.ts'
+import { Exec } from '../exec/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { ConversationsApi, Marks } from '../conversations/api.ts'
 import type { AgentMarkStyle } from '../conversations/refs.ts'
@@ -568,6 +568,7 @@ export default function subagents(
   // Core services, always on; each handle resolves the current provider at every call.
   const conversations = host.need(ConversationsApi)
   const workspaces = host.need(WorkspacesApi)
+  const exec = host.need(Exec)
   const residentDefinitions = async () =>
     (
       await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
@@ -1280,10 +1281,11 @@ export default function subagents(
             // Untrimmed NUL-separated name lists: the git helper in lib/ trims, which would cut a
             // leading space off the first name.
             const list = (...command: string[]) =>
-              exec('git', [...command, '-z'], {
-                cwd: workspace!.path,
-                maxBuffer: 1024 * 1024,
-              }).then(({ stdout }) => stdout.split('\0').filter(Boolean))
+              exec
+                .run(workspace!.path, 'git', [...command, '-z'], {
+                  maxBuffer: 1024 * 1024,
+                })
+                .then(({ stdout }) => stdout.split('\0').filter(Boolean))
             const uncommitted =
               workspace?.state === 'ready'
                 ? [

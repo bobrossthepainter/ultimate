@@ -9,6 +9,7 @@ import { cloudConfig, fetchRegister } from '../../lib/cloud.ts'
 import { projectIdentity } from '../../lib/project-identity.ts'
 import { readSecret } from '../../lib/secrets.ts'
 import { CloudApi } from './api.ts'
+import { Exec } from '../exec/api.ts'
 import { PauseApi } from '../pause/api.ts'
 import { SecretsApi } from '../secrets/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
@@ -117,6 +118,7 @@ async function upload(
       key: ready.key,
       chapter: ready.chapter,
       dir: ready.dir,
+      git: host.need(Exec).git,
       projectRoot: host.projectRoot,
       force,
       ...(tailnet?.startsWith('https://') ? { tailnet } : {}),

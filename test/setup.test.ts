@@ -6,7 +6,8 @@ import { fallbackModel, summaryModelStatus } from '../extensions/conversations/s
 import { check, noteFor } from '../extensions/setup/server.ts'
 import type { SetupIssue } from '../extensions/setup/refs.ts'
 import { git } from '../lib/git.ts'
-import { removeTemps, temp } from './helpers.ts'
+import { Exec } from '../extensions/exec/api.ts'
+import { localExec, removeTemps, temp } from './helpers.ts'
 
 afterEach(removeTemps)
 
@@ -101,14 +102,17 @@ async function checkHost(options: { logins: string[]; secrets?: string[] }) {
         },
       },
     ],
-    need: () => ({
-      summaryModelStatus: async () => ({
-        model: { provider: 'openrouter', id: 'haiku', thinking: 'medium' },
-        configured: 'openai-codex/gpt-6-luna:low',
-        source: 'default',
-        fellBack: true,
-      }),
-    }),
+    need: (api: { name: string }) =>
+      api.name === Exec.name
+        ? localExec
+        : {
+            summaryModelStatus: async () => ({
+              model: { provider: 'openrouter', id: 'haiku', thinking: 'medium' },
+              configured: 'openai-codex/gpt-6-luna:low',
+              source: 'default',
+              fellBack: true,
+            }),
+          },
     want: () => undefined,
     doc: () => undefined,
   } as unknown as Parameters<typeof check>[0]

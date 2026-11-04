@@ -10,7 +10,8 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import workspaceExtension from '../../extensions/workspaces/server.ts'
 import { workspaces } from '../../extensions/workspaces/workspaces.ts'
 import { git } from '../../lib/git.ts'
-import { temp, until } from '../helpers.ts'
+import { Exec } from '../../extensions/exec/api.ts'
+import { localExec, temp, until } from '../helpers.ts'
 
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -47,7 +48,7 @@ async function reopen(
     harness: () => opened.harness,
     metadata: Metadata,
     implement: () => {},
-    need: () => ({}),
+    need: (api: { name: string }) => (api.name === Exec.name ? localExec : {}),
     want: () => undefined,
     projectSettings: async () => ({ isolates: { worktree: { ...worktree, setup: commands } } }),
     extensions: () => [{ name: 'workspaces', enabled: true }],
@@ -80,6 +81,7 @@ it('clears and reruns a configured add command a crash interrupted', async () =>
     import { writeFile } from 'node:fs/promises';
     import { prepareHarness } from './server/harness.ts';
     import extension, { actions } from './extensions/workspaces/server.ts';
+    import { createExec, localProtocol } from './extensions/exec/exec.ts';
     const paths = ${JSON.stringify(paths)};
     const prepared = await prepareHarness({ ...paths, ultimateRoot: paths.projectRoot, userHome: paths.directory });
     let opened;
@@ -87,7 +89,7 @@ it('clears and reruns a configured add command a crash interrupted', async () =>
     const host = { ...prepared, harness: () => opened.harness, metadata: (await import('./server/metadata.ts')).Metadata,
       projectSettings: async () => ({ isolates: { worktree: ${JSON.stringify(worktree)} } }),
       extensions: () => [{ name: 'workspaces', enabled: true }],
-      implement: () => {}, need: () => ({}), want: () => undefined,
+      implement: () => {}, need: (api) => (api.name === 'exec' ? createExec(localProtocol, () => undefined) : {}), want: () => undefined,
       resource: (key, create) => { if (!resources.has(key)) resources.set(key, create()); return resources.get(key) },
       onOpen: () => {}, onClose: () => {} };
     prepared.registry.install(extension(host));
@@ -150,6 +152,7 @@ it.each(['symlinked home mid-setup', 'branch creation before registration'])(
     import { writeFile } from 'node:fs/promises';
     import { prepareHarness, context } from './server/harness.ts';
     import extension, { actions } from './extensions/workspaces/server.ts';
+    import { createExec, localProtocol } from './extensions/exec/exec.ts';
     const paths = ${JSON.stringify(paths)};
     const prepared = await prepareHarness({ ...paths, ultimateRoot: paths.projectRoot, userHome: paths.directory });
     let opened;
@@ -157,7 +160,7 @@ it.each(['symlinked home mid-setup', 'branch creation before registration'])(
     const host = { ...prepared, harness: () => opened.harness, metadata: (await import('./server/metadata.ts')).Metadata,
       projectSettings: async () => ({ isolates: { worktree: { setup: ${JSON.stringify(commands)} } } }),
       extensions: () => [{ name: 'workspaces', enabled: true }],
-      implement: () => {}, need: () => ({}), want: () => undefined,
+      implement: () => {}, need: (api) => (api.name === 'exec' ? createExec(localProtocol, () => undefined) : {}), want: () => undefined,
       resource: (key, create) => { if (!resources.has(key)) resources.set(key, create()); return resources.get(key) },
       onOpen: () => {}, onClose: () => {} };
     prepared.registry.install(extension(host));

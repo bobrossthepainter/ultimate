@@ -16,10 +16,11 @@ import {
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import type { ActionInput } from '../../lib/actions.ts'
-import { empty, git, isolatable, noCommit, noRepository } from '../../lib/git.ts'
+import { empty, isolatable, noCommit, noRepository } from '../../lib/git.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi, Release } from '../conversations/api.ts'
+import { Exec } from '../exec/api.ts'
 import { Branches, WorkspacesApi } from './api.ts'
 import {
   DiskAction,
@@ -46,9 +47,10 @@ function workspaceId(args: ActionInput<{ id: number }>) {
   return id as ConversationId
 }
 async function setupGit(host: ExtensionHost) {
-  const checkout = await isolatable(host.projectRoot)
+  const { git } = host.need(Exec)
+  const checkout = await isolatable(host.projectRoot, git)
   if (!('reason' in checkout)) return
-  if (!(await empty(host.projectRoot)))
+  if (!(await empty(host.projectRoot, git)))
     throw new Error('This folder has files; ask the agent to choose what the first commit holds')
   if (checkout.reason === noRepository) await git(host.projectRoot, 'init')
   else if (checkout.reason !== noCommit) throw new Error(checkout.reason)
@@ -108,9 +110,10 @@ export const actions = {
    * commit made in a conversation brings the lander without a restart.
    */
   isolation: implementAction(IsolationAction, async (_args, { host }) => {
-    const checkout = await isolatable(host.projectRoot)
+    const { git } = host.need(Exec)
+    const checkout = await isolatable(host.projectRoot, git)
     if ('reason' in checkout)
-      return { reason: checkout.reason, empty: await empty(host.projectRoot) }
+      return { reason: checkout.reason, empty: await empty(host.projectRoot, git) }
     const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
     if (index?.landerConversations[checkout.source] === undefined)
       await workspaces(host).standLander(context)
@@ -137,10 +140,12 @@ export default function workspaceExtension(host: ExtensionHost) {
   // What a landing asks about its branch is an extension point, wanted where the lander calls it.
   host.want(Branches)
   const conversations = host.need(ConversationsApi)
+  const exec = host.need(Exec)
   const service = workspaces(host)
   host.implement(WorkspacesApi, {
     ...service,
-    git,
+    // Read at each call: exec may load after this facet.
+    git: (cwd, ...args) => exec.git(cwd, ...args),
     doc: Workspaces,
     setupGit: () => setupGit(host),
   })

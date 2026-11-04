@@ -19,6 +19,7 @@ import { writeJson } from '../../lib/json-file.ts'
 import { readSettings, updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
+import { Exec } from '../exec/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { LineageApi } from '../lineage/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
@@ -214,7 +215,7 @@ export const actions: Record<string, ExtensionAction> = {
     if ((await lineage.rootOf(root, context)) !== root) throw new Error('Expected a project root')
     const id = await host.need(SubagentsApi).standing('ultimate', context)
     const project = await host.projectSetup()
-    const checkout = await isolatable(host.projectRoot)
+    const checkout = await isolatable(host.projectRoot, host.need(Exec).git)
     const facts = {
       project: { name: basename(host.projectRoot), path: host.projectRoot },
       firstRun: !existsSync(marker(host.userHome)),
@@ -545,7 +546,8 @@ export default function onboarding(host: ExtensionHost) {
                 ? 'This project has no .ultimate/ setup'
                 : 'Project setup is already decided',
             )
-          const checkout = card === 'git' ? await isolatable(host.projectRoot) : undefined
+          const checkout =
+            card === 'git' ? await isolatable(host.projectRoot, host.need(Exec).git) : undefined
           if (checkout && !('reason' in checkout))
             throw new Error('This folder is already isolatable')
           const text =

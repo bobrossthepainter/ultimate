@@ -10,6 +10,7 @@ import { parseArgs } from 'node:util'
 import { cloudConfig, fetchRegister } from '../lib/cloud.ts'
 import type { Register } from '../lib/cloud.ts'
 import { moveDatabase } from '../lib/database-files.ts'
+import { git } from '../lib/git.ts'
 import { projectIdentity } from '../lib/project-identity.ts'
 import { readSecret } from '../lib/secrets.ts'
 import { projectHome } from '../server/project.ts'
@@ -137,6 +138,7 @@ export async function restore(o: RestoreOptions) {
       id: o.id,
       dir: files.dir,
       repo: o.projectRoot,
+      git,
       root: o.projectRoot,
     })
     const journal: RestoreJournal = {

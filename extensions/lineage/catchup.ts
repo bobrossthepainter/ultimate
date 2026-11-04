@@ -10,9 +10,9 @@ import type {
   EntryRecord,
   Tx,
 } from '@earendil-works/pi-durable'
-import { git } from '../../lib/git.ts'
 import { shortTitle } from '../../lib/title.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { Exec } from '../exec/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import type { OpenAbstract } from './server.ts'
 
@@ -45,13 +45,19 @@ async function mainOf(
   // A shared conversation follows the branch the project checkout is on, like a workspace's target.
   const target =
     workspace?.target ??
-    (await git(cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => ''))
+    (await host
+      .need(Exec)
+      .git(cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD')
+      .catch(() => ''))
   if (!target) return undefined
   // Projects without a main branch have nothing to catch up on.
-  const sha = await git(cwd, 'rev-parse', '--verify', `refs/heads/${target}`).catch(
-    // An unborn target branch has no commits to catch up on.
-    () => undefined,
-  )
+  const sha = await host
+    .need(Exec)
+    .git(cwd, 'rev-parse', '--verify', `refs/heads/${target}`)
+    .catch(
+      // An unborn target branch has no commits to catch up on.
+      () => undefined,
+    )
   // Only a ready checkout exists on disk: a concluded conversation's is released, and its next request recreates it.
   return sha
     ? { cwd, target, sha, ...(workspace?.state === 'ready' ? { workspace: workspace.path } : {}) }
@@ -110,9 +116,11 @@ export function watchSeen(host: ExtensionHost, ctx: Context) {
 /** Files this conversation changed: its workspace diff, or its own edit/write calls in a shared checkout. */
 async function changedFiles(host: ExtensionHost, id: ConversationId, main: Main, tx: Tx) {
   if (main.workspace) {
-    const base = await git(main.workspace, 'merge-base', 'HEAD', main.sha)
+    const base = await host.need(Exec).git(main.workspace, 'merge-base', 'HEAD', main.sha)
     return new Set(
-      (await git(main.workspace, 'diff', '--name-only', base)).split('\n').filter(Boolean),
+      (await host.need(Exec).git(main.workspace, 'diff', '--name-only', base))
+        .split('\n')
+        .filter(Boolean),
     )
   }
   const cwd = (await tx.doc(AgentDoc, id)).cwd ?? host.projectRoot
@@ -147,16 +155,18 @@ async function catchupText(
 ) {
   const range = `${since.main}..${main.sha}`
   const [count, records, changed] = await Promise.all([
-    git(main.cwd, 'rev-list', '--count', range).then(Number),
-    git(
-      main.cwd,
-      'log',
-      '--name-only',
-      '--no-renames',
-      '--diff-merges=first-parent',
-      '--format=%x1e%H%x00%s%x00%(trailers:key=Ultimate-Conversation,valueonly)%x00',
-      range,
-    ),
+    host.need(Exec).git(main.cwd, 'rev-list', '--count', range).then(Number),
+    host
+      .need(Exec)
+      .git(
+        main.cwd,
+        'log',
+        '--name-only',
+        '--no-renames',
+        '--diff-merges=first-parent',
+        '--format=%x1e%H%x00%s%x00%(trailers:key=Ultimate-Conversation,valueonly)%x00',
+        range,
+      ),
     changedFiles(host, id, main, tx),
   ])
   if (!count) return undefined
@@ -184,7 +194,7 @@ async function catchupText(
     .toSorted((a, b) => Number(b.overlap.length > 0) - Number(a.overlap.length > 0))
     .slice(0, 30)
   const behind = main.workspace
-    ? Number(await git(main.workspace, 'rev-list', '--count', `HEAD..${main.sha}`))
+    ? Number(await host.need(Exec).git(main.workspace, 'rev-list', '--count', `HEAD..${main.sha}`))
     : 0
   return [
     `Since you last worked (${new Date(since.at ?? Date.now()).toISOString()}), ${count} commits landed on ${main.target}:`,
