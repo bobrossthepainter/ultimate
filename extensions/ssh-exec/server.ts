@@ -1,7 +1,5 @@
 import { mkdtempSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Protocol } from '../exec/api.ts'
@@ -16,8 +14,9 @@ export const reloadOnSettings = true
 export default async function sshExec(host: ExtensionHost) {
   // Only the machine's own settings name targets: a project must not send this machine's commands anywhere.
   const targets = targetsOf((await readSettings(userSettingsPath(host.userHome)))['ssh-exec'])
-  // Control sockets need a short path (sun_path holds about 100 bytes) and belong to this process alone.
-  const sockets = mkdtempSync(join(tmpdir(), 'ultimate-ssh-'))
+  // Control sockets belong to this process alone and need a short path: ssh refuses one of 108 bytes or more, which
+  // a deep TMPDIR (the lander's checks set one under the project home) reaches. So /tmp, never tmpdir() (#7522).
+  const sockets = mkdtempSync('/tmp/ultimate-ssh-')
   const statuses = new Map<string, TargetStatus>(
     targets.map((target) => [
       target.id,

@@ -1,8 +1,8 @@
 import { execFileSync, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:net'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { connect, createServer } from 'node:net'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -21,6 +21,16 @@ const freePort = () =>
       const { port } = server.address() as { port: number }
       server.close(() => resolve(port))
     })
+  })
+
+const listening = (port: number) =>
+  new Promise<boolean>((resolve) => {
+    const socket = connect(port, '127.0.0.1')
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('error', () => resolve(false))
   })
 
 const keygen = (path: string) =>
@@ -49,8 +59,8 @@ describe.skipIf(!existsSync(sshd))('ssh-exec against a local sshd', () => {
 
   beforeAll(async () => {
     dir = await temp('ultimate-ssh-exec-')
-    sockets = join(dir, 's')
-    await mkdir(sockets)
+    // Short, as the extension keeps them: the lander's TMPDIR is too deep for a control socket (#7522).
+    sockets = await mkdtemp('/tmp/ultimate-ssh-test-')
     await mkdir(join(dir, 'root'))
     keygen(join(dir, 'host'))
     keygen(join(dir, 'client'))
@@ -93,13 +103,9 @@ describe.skipIf(!existsSync(sshd))('ssh-exec against a local sshd', () => {
       ],
     }
     exec = createExec(localProtocol, () => routed)
-    // sshd listens a moment after it starts.
-    await until(async () =>
-      exec
-        .run(target.root, 'true', [])
-        .then(() => true)
-        .catch(() => false),
-    )
+    // sshd listens a moment after it starts; then the first run must work, or fail with ssh's reason.
+    await until(() => listening(port))
+    await exec.run(target.root, 'true', [])
   })
 
   afterAll(async () => {
@@ -112,6 +118,7 @@ describe.skipIf(!existsSync(sshd))('ssh-exec against a local sshd', () => {
       } catch {
         // No shared connection left.
       }
+    await rm(sockets, { recursive: true, force: true })
   })
 
   it('runs a cwd under the root over SSH and one outside it here, with cwd, arguments and variables intact', async () => {
