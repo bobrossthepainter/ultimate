@@ -137,14 +137,20 @@ exit $code`
  * Locally, ssh runs in its own session, outside the group a caller signals (the ssh client exits at once on TERM, even
  * an ignored one), with a FIFO as its input whose only writer is this shell. TERM, INT or HUP close the writer; so does
  * this shell's death by KILL. Either way ssh sends EOF and the target stops the command (see `wrapper`). This shell
- * exits with ssh's code once ssh exits, which is after the remote group is gone, unless KILL ended it first.
+ * exits with ssh's code once ssh exits, which is after the remote group is gone, unless KILL ended it first. The trap
+ * comes first and both ends are open before ssh starts: a signal before that runs nothing remote, and any later one
+ * closes the writer (#7522 review).
  */
-const hold = `d=$(mktemp -d) && mkfifo "$d/in" || exit 255
-setsid -w ssh "$@" <"$d/in" &
-ssh=$!
-exec 3>"$d/in"
+const hold = `stop=
+trap 'stop=1' TERM INT HUP
+d=$(mktemp -d) && mkfifo "$d/in" || exit 255
+exec 5<>"$d/in" 3>"$d/in" 4<"$d/in" 5<&-
 rm -r "$d"
-trap 'exec 3>&-' TERM INT HUP
+[ -z "$stop" ] || exit 143
+trap 'exec 3>&- 4<&-' TERM INT HUP
+setsid -w ssh "$@" <&4 3>&- 4<&- &
+ssh=$!
+exec 4<&-
 wait $ssh
 code=$?
 while kill -0 $ssh 2>/dev/null; do wait $ssh; code=$?; done
