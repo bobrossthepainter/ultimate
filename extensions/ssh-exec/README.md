@@ -42,13 +42,16 @@ Only `~/.ultimate/settings.json` names targets; a project's settings cannot send
 The system `ssh` client, with no config file (`-F /dev/null`), `BatchMode` and one multiplexed connection per target
 (`ControlMaster=auto`, `ControlPersist` 10 minutes, the socket in a private temp directory). A command becomes one
 remote command line in which every word is single-quoted, so no path, argument or value is interpreted by the remote
-shell; variables the caller sets beyond this process's own are exported on the target. The remote login shell must be
-POSIX.
+shell. Variables the caller sets beyond this process's own reach the command (through `env`, so the wrapper keeps the
+target's PATH); the rest of this machine's environment does not replace the target's, and removing a variable is not
+passed on. The remote login shell must be POSIX.
 
 On the target a small wrapper changes to the directory (exit 126 when it does not exist), starts the command as its own
-session and process group with `setsid`, and watches the SSH channel: when the local `ssh` goes away (an abort, a
-timeout, a stopped group, a killed bash call) the channel closes and the whole remote group gets TERM, then KILL 3 s
-later. A group the command leaves behind when it exits is stopped the same way, as `spawnGroup` does locally.
+session and process group with `setsid`, and watches the SSH channel. Locally `ssh` runs in its own session behind a
+shell that holds the channel's input: a TERM, INT or HUP to that shell (an abort, a timeout, a stopped group), or its
+death by KILL, closes the input, and the whole remote group gets TERM, then KILL a second later. A group the command
+leaves behind when it exits is stopped the same way. The wrapper exits only once its group is gone, and the local
+shell waits for `ssh`, so a stop that returns means the remote work has ended (except after a local KILL).
 
 - `run`: execFile semantics, with the remote exit code, stdout, stderr, `signal`, `timeout` and `maxBuffer`.
 - `start`: a local `spawnGroup` around `ssh`, streamed; stopping it stops the remote group.

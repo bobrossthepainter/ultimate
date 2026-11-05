@@ -107,46 +107,83 @@ export const sshArgs = (target: Target, sockets: string) => [
 ]
 
 /**
- * Runs on the target: `cd` to the directory, export the variables, then start the command as its own session and
- * process group. Its input is the SSH channel, which nothing writes to: EOF means the local ssh is gone (killed,
- * aborted, timed out), and the whole group gets TERM, then KILL 3 s later. A group the command leaves behind when it
- * exits is stopped the same way, as `spawnGroup` does locally.
+ * Runs on the target: `cd` to the directory, then start the command through `env` (which sets the variables for the
+ * command alone, so the wrapper's own `setsid` and `sleep` keep the login PATH) as its own session and process group.
+ * Its input is the SSH channel, which nothing writes to until the local side closes it: EOF means stop, and the whole
+ * group gets TERM, then KILL a second later. The wrapper exits only once nothing of the group is left, so the local
+ * ssh, and whoever waits for it, ends after the remote cleanup, never before.
  */
 const wrapper = `cd "$1" || exit 126
 shift
-while [ "$1" != -- ]; do export "$1"; shift; done
-shift
 exec 3<&0
-setsid "$@" </dev/null 3<&- &
+setsid env -- "$@" </dev/null 3<&- &
 child=$!
-( while read -r _; do :; done; kill -TERM -$child; sleep 3; kill -KILL -$child ) <&3 >/dev/null 2>&1 &
+( while read -r _; do :; done; kill -TERM -$child; sleep 1; kill -KILL -$child ) <&3 >/dev/null 2>&1 &
 watch=$!
 exec 3<&-
 wait $child
 code=$?
-kill $watch
-kill -TERM -$child 2>/dev/null && { (sleep 3; kill -KILL -$child) </dev/null >/dev/null 2>&1 & }
+kill $watch 2>/dev/null
+if kill -0 -$child 2>/dev/null; then
+  kill -TERM -$child
+  n=0
+  while kill -0 -$child 2>/dev/null && [ $n -lt 10 ]; do sleep 0.1; n=$((n + 1)); done
+  kill -KILL -$child 2>/dev/null
+  while kill -0 -$child 2>/dev/null; do sleep 0.1; done
+fi
 exit $code`
 
 /**
- * Locally, ssh runs with a private FIFO as its input, opened read-write so it never sees EOF: execFile, spawnGroup and
- * Pi's environment close or ignore a command's input, which would end the remote side at once.
+ * Locally, ssh runs in its own session, outside the group a caller signals (the ssh client exits at once on TERM, even
+ * an ignored one), with a FIFO as its input whose only writer is this shell. TERM, INT or HUP close the writer; so does
+ * this shell's death by KILL. Either way ssh sends EOF and the target stops the command (see `wrapper`). This shell
+ * exits with ssh's code once ssh exits, which is after the remote group is gone, unless KILL ended it first.
  */
-const hold = 'd=$(mktemp -d) && mkfifo "$d/in" && exec 0<>"$d/in" && rm -r "$d" && exec ssh "$@"'
+const hold = `d=$(mktemp -d) && mkfifo "$d/in" || exit 255
+setsid -w ssh "$@" <"$d/in" &
+ssh=$!
+exec 3>"$d/in"
+rm -r "$d"
+trap 'exec 3>&-' TERM INT HUP
+wait $ssh
+code=$?
+while kill -0 $ssh 2>/dev/null; do wait $ssh; code=$?; done
+exit $code`
 
 const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`
 
-/** The variables `env` sets differently from this process: what the caller added for the command. */
+/**
+ * The variables `env` sets differently from this process: what the caller added for the command. Callers pass this
+ * process's environment plus their own variables; the rest (PATH, HOME, ...) is this machine's and must not replace
+ * the target's own, so only the difference crosses. Removing a variable is not passed on.
+ *
+ * Git's `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` only work together: the agent's bash adds
+ * its commit hooks after any this process inherited, so when one of them differs, all of them cross. Without that a
+ * commit on the target failed with "missing config key GIT_CONFIG_KEY_0" (#7522).
+ */
 function added(env: NodeJS.ProcessEnv | undefined) {
   if (!env) return []
+  const gitConfig = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/
+  const changed = (name: string) => process.env[name] !== env[name]
+  const wholeGitConfig = Object.keys(env).some((name) => gitConfig.test(name) && changed(name))
   return Object.entries(env)
-    .filter(([name, value]) => value !== undefined && process.env[name] !== value)
+    .filter(
+      ([name, value]) =>
+        value !== undefined && (changed(name) || (wholeGitConfig && gitConfig.test(name))),
+    )
     .map(([name, value]) => {
       // Names reach `export` on the target; one that is not a shell name would be parsed as something else.
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
         throw new Error(`ssh-exec cannot pass the variable ${JSON.stringify(name)}`)
       return `${name}=${value}`
     })
+}
+
+/** `env` would read a program name with `=` as one more variable. */
+function checked(file: string) {
+  if (file.includes('='))
+    throw new Error(`ssh-exec cannot run a program named ${JSON.stringify(file)}`)
+  return file
 }
 
 /**
@@ -163,7 +200,7 @@ export function command(
   env?: NodeJS.ProcessEnv,
 ): [string, string[]] {
   const remote = ['exec', '/bin/sh', '-c', quote(wrapper), 'sh']
-    .concat([cwd, ...added(env), '--', file, ...args].map(quote))
+    .concat([cwd, ...added(env), checked(file), ...args].map(quote))
     .join(' ')
   return ['/bin/sh', ['-c', hold, 'sh', ...sshArgs(target, sockets), remote]]
 }

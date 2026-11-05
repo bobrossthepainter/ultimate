@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { stopGroup } from '../../lib/process-group.ts'
 import { createExec, localProtocol } from '../../extensions/exec/exec.ts'
 import type { ExecTargets } from '../../extensions/exec/api.ts'
@@ -160,18 +160,51 @@ describe.skipIf(!existsSync(sshd))('ssh-exec against a local sshd', () => {
     await until(() => !running(timed))
   })
 
-  it('streams a started group and stops the remote children with it', async () => {
+  it('streams a started group and stops it, with a child that ignores TERM, before the stop returns', async () => {
     const marker = `ssh-exec-start-${process.pid}`
     const group = exec.start(target.root, 'bash', [
       '-c',
-      `echo started; (exec -a ${marker} sleep 303) & wait`,
+      `echo started; (trap '' TERM; exec -a ${marker} sleep 303) & wait`,
     ])
     let output = ''
     group.child.stdout.setEncoding('utf8').on('data', (text: string) => (output += text))
     await until(() => output === 'started\n' && running(marker))
     await stopGroup(group.child.pid!, { leader: group })
-    await until(() => !running(marker))
+    // The lander removes its checkout once the stop returns: nothing of the remote group may still run then.
+    expect(running(marker)).toBe(false)
     expect(await group.ended).toBe(true)
+  })
+
+  it("passes git's numbered config whole when the caller extends this process's", async () => {
+    // The agent's bash appends its commit hooks after the ones this process inherited (#7522).
+    vi.stubEnv('GIT_CONFIG_COUNT', '1')
+    vi.stubEnv('GIT_CONFIG_KEY_0', 'ssh-exec.inherited')
+    vi.stubEnv('GIT_CONFIG_VALUE_0', 'a')
+    try {
+      const { stdout } = await exec.run(
+        target.root,
+        'git',
+        ['config', '--get-regexp', '^ssh-exec'],
+        {
+          env: {
+            ...process.env,
+            GIT_CONFIG_COUNT: '2',
+            GIT_CONFIG_KEY_1: 'ssh-exec.added',
+            GIT_CONFIG_VALUE_1: 'b',
+          },
+        },
+      )
+      expect(stdout).toBe('ssh-exec.inherited a\nssh-exec.added b\n')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('sets variables for the command only, even a PATH without the tools the target needs', async () => {
+    const { stdout } = await exec.run(target.root, '/usr/bin/printenv', ['PATH'], {
+      env: { ...process.env, PATH: '/nonexistent' },
+    })
+    expect(stdout).toBe('/nonexistent\n')
   })
 
   it("runs the agent's shell over SSH and kills its children on abort", async () => {
