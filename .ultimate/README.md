@@ -6,9 +6,9 @@ work, and changes its own code while you talk to it.
 Every built-in is already on; this setup adds how the repository is landed and reviewed:
 
 - `settings.json`: each worktree isolate installs its dependencies, and the lander runs `pnpm check`, then
-  `pnpm test` and `pnpm test:e2e` in parallel, and pushes to `origin`. `update.remote` compares the clone with
-  `upstream` (the repository this fork came from), so new upstream commits show in the status line; the
-  `skills/merge-upstream` skill says how a branch merges them.
+  `pnpm test` and `pnpm test:e2e` in parallel, and pushes to `origin`. The built-in
+  `upstream-sync` extension compares the clone with `upstream` (the repository this fork came from), so new upstream
+  commits show in the status line; the `skills/merge-upstream` skill says how a branch merges them.
 - `agents/reviewer-*.md`: the review team (correctness, simplicity, architecture), each on its own model; the shipped
   `reviewer` starts them in parallel and returns one merged verdict.
 

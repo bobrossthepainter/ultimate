@@ -142,7 +142,6 @@ function Popup({
   // Packages owed or loaded since start, with nothing new to pull: retry the install, or restart.
   const owes = !state.behind && (state.install || state.restart)
   const current = !state.behind && !updated && !owes
-  const remote = state.remote ?? 'origin'
   return (
     <>
       <div className="border-b border-border/70 px-3 py-2 text-[11.5px]">
@@ -155,10 +154,10 @@ function Popup({
         {current ? (
           <div>
             {checking ? (
-              `Checking ${remote} for new commits…`
+              'Checking origin for new commits…'
             ) : (
               <>
-                Ultimate is <span className="text-success">up to date</span> with {remote}/
+                Ultimate is <span className="text-success">up to date</span> with origin/
                 {state.branch ?? 'main'}
               </>
             )}
@@ -181,7 +180,8 @@ function Popup({
           <>
             <div>
               {state.branch ?? 'main'} is {state.behind} {state.behind === 1 ? 'commit' : 'commits'}{' '}
-              behind {remote}/{state.branch ?? 'main'}
+              behind origin/
+              {state.branch ?? 'main'}
             </div>
             {state.summary && (
               <ul className="space-y-0.5 font-sans text-[12.5px] text-foreground">
@@ -237,7 +237,7 @@ function Popup({
           <div data-update-diverged>
             {state.branch ?? 'main'} also has {state.ahead}{' '}
             {state.ahead === 1 ? 'commit' : 'commits'} of its own, so it can't fast-forward.
-            @ultimate can merge {remote} into them on a branch and land it once the checks pass.
+            @ultimate can merge origin into them on a branch and land it once the checks pass.
           </div>
         ) : (
           state.refused &&

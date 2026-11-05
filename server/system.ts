@@ -134,7 +134,7 @@ export async function createSystem(
         sizeBytes: await bytes(host.database),
         walBytes: await bytes(host.database + '-wal'),
       },
-      execution: { kind: 'node-local', defaultCwd: host.projectRoot },
+      execution: { defaultCwd: host.projectRoot },
       code,
       web: web(),
       extensions: registry(),

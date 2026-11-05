@@ -134,7 +134,8 @@ export interface SystemInfo {
   }
   access: { origins: string[] }
   persistence: { kind: 'sqlite'; path: string; sizeBytes: number; walBytes: number }
-  execution: { kind: 'node-local'; defaultCwd: string }
+  /** Where commands of a conversation without its own cwd start; exec's `target` action says where they run. */
+  execution: { defaultCwd: string }
   project: {
     root: string
     name: string
