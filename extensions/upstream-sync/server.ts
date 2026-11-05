@@ -103,12 +103,13 @@ export async function compare(
     .split(/\s+/)
     .map(Number)
   const current = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '')
+  // A refusal matters only with something to merge: a branch worktree that has upstream's commits is fine.
   const state = {
     ...base,
     branch,
     ahead,
     behind,
-    ...(current !== branch
+    ...(behind && current !== branch
       ? { refused: `${current || 'a detached HEAD'} is checked out, not ${branch}` }
       : {}),
   }
@@ -266,7 +267,7 @@ async function refresh(host: ExtensionHost, check: boolean, force = false) {
   const repo = remoteHead
     ? projectKey(await git('remote', 'get-url', REMOTE).catch(() => ''))
     : undefined
-  const refused = state.behind ? (state.refused ?? (await landing(host))) : state.refused
+  const refused = state.refused ?? (state.behind ? await landing(host) : undefined)
   shared(host).latest = {
     ...state,
     ...(summary ? { summary } : {}),

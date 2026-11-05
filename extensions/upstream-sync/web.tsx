@@ -79,14 +79,16 @@ function Popup({
               )}
             </ul>
             {state.compare && (
-              <a
-                className="text-muted-foreground hover:text-brand"
-                href={state.compare}
-                rel="noreferrer"
-                target="_blank"
-              >
-                DiffsHub ↗
-              </a>
+              <div>
+                <a
+                  className="text-muted-foreground hover:text-brand"
+                  href={state.compare}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  DiffsHub ↗
+                </a>
+              </div>
             )}
             {state.merge && (
               <div>
@@ -164,7 +166,7 @@ function Upstream() {
     const timer = setInterval(() => void refetch(), 60_000)
     return () => clearInterval(timer)
   }, [refetch])
-  if (!state || state.off || (!state.behind && !state.error && !state.refused)) return null
+  if (!state || state.off || (!state.behind && !state.error)) return null
   const check = () => {
     setChecking(true)
     setError(undefined)
