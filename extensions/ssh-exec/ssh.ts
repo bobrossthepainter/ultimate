@@ -146,8 +146,8 @@ trap 'stop=1' TERM INT HUP
 d=$(mktemp -d) && mkfifo "$d/in" || exit 255
 exec 5<>"$d/in" 3>"$d/in" 4<"$d/in" 5<&-
 rm -r "$d"
-[ -z "$stop" ] || exit 143
 trap 'exec 3>&- 4<&-' TERM INT HUP
+[ -z "$stop" ] || exit 143
 setsid -w ssh "$@" <&4 3>&- 4<&- &
 ssh=$!
 exec 4<&-
