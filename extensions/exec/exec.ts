@@ -24,6 +24,7 @@ export const localProtocol: ExecProtocol = {
   start: (_target, cwd, file, args, options = {}) => spawnGroup(file, args, { ...options, cwd }),
   // Agents' commands start from the process helper (the patched spawn option), never by forking this process.
   env: (_target, cwd): ExecutionEnv => new NodeExecutionEnv({ cwd, spawn }),
+  describe: () => 'local Node',
 }
 
 /** The exec service over `local` and whatever protocol `routed` returns now (none while no extension provides one). */
@@ -57,6 +58,11 @@ export function createExec(
     env(cwd) {
       const [protocol, target] = route(cwd)
       return protocol.env(target, cwd)
+    },
+    describe(cwd) {
+      const [protocol, target] = route(cwd)
+      const { id, root } = target
+      return { protocol: target.protocol, id, root, description: protocol.describe(target) }
     },
   }
 }

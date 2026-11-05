@@ -262,6 +262,7 @@ export function sshProtocol(
       }) as typeof spawn
       return new NodeExecutionEnv({ cwd, spawn: remote })
     },
+    describe: (target) => address(configOf(target)),
   }
 }
 

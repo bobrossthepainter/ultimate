@@ -13,10 +13,12 @@ import {
   useModels,
   useNow,
   useRestart,
+  useAction,
   useSystem,
 } from '@/sdk'
 import type { SystemInfo, Usage } from '@/sdk'
 import { Row, Rows } from '@/components/ui/rows'
+import { TargetAction } from '../exec/ui.tsx'
 import { useWorkspacesMeta, Workspaces as WorkspaceRows } from '../workspaces/ui.tsx'
 import { Copy, ErrorText, Meter, Section } from './ui.tsx'
 import { SkillPicker, skillDialog } from './skill-picker.tsx'
@@ -150,12 +152,26 @@ function Execution({ system }: { system: SystemInfo }) {
   const path = usePath(system)
   const { agent } = useConversation()
   const cwd = agent.cwd ?? system.execution.defaultCwd
+  const { data: target, error } = useAction(TargetAction, { cwd })
   return (
-    <Section id="execution" meta="local" title="Execution">
+    <Section
+      id="execution"
+      meta={target && (target.protocol === 'local' ? 'local' : `${target.protocol} · ${target.id}`)}
+      title="Execution"
+    >
       <Rows>
         <Row label="env">
-          {system.execution.kind === 'node-local' ? 'local Node' : system.execution.kind}
+          {target ? (
+            <span className="truncate">{target.description}</span>
+          ) : (
+            <span className="text-muted-foreground/60">{error ? 'unknown' : '…'}</span>
+          )}
         </Row>
+        {target && target.protocol !== 'local' && (
+          <Row label="root">
+            <Copy value={target.root}>{path(target.root)}</Copy>
+          </Row>
+        )}
         <Row label="cwd">
           <Copy value={cwd}>{path(cwd)}</Copy>
         </Row>

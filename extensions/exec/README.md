@@ -11,8 +11,12 @@ The `Exec` service (`api.ts`), which core extensions `need`:
 - `env(cwd)`: Pi's execution environment. The server asks for it (`host.executionEnv`), so the agent's `bash`, `read`,
   `write` and `edit` run where their conversation's directory lives.
 
+- `describe(cwd)`: the owning target as `{ protocol, id, root, description }`, the description being the protocol's
+  one line for people (`local Node`; never a secret or a key's path). The browser reads it through the `target` action
+  (`refs.ts`, `{ cwd }`); the Info panel's Execution section shows it.
+
 Another extension sends directories elsewhere by providing the `exec.protocol` point: a protocol (`run`, `start`,
-`env`, each given the resolved target) and `targets()`, each `{ protocol, id, root, files, config }`. `files: 'shared'`
+`env`, `describe`, each given the resolved target) and `targets()`, each `{ protocol, id, root, files, config }`. `files: 'shared'`
 means this machine sees the target's files at the same paths (a container sharing a volume); `'remote'` means only the
 target does. `run`, `start` and `git` read the targets at every call; the harness keeps the environment it built for a
 directory until it closes, so register a target before an agent works in it.
