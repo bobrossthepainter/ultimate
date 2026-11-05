@@ -25,6 +25,7 @@ import { Exec } from '../exec/api.ts'
 import { HealthApi } from '../health/api.ts'
 import type { MemoryDoc, RootsDoc } from '../lineage/refs.ts'
 import { Standing } from '../subagents/api.ts'
+import { SshExecApi } from '../ssh-exec/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
 import { CheckAction } from './refs.ts'
 import type { SetupIssue } from './refs.ts'
@@ -235,6 +236,26 @@ function tailscaleArea(host: CheckHost): SetupIssue | undefined {
     : { area: 'Tailscale', status: 'info', summary: `${state}: no direct links from other devices` }
 }
 
+function sshExecArea(host: CheckHost): SetupIssue[] | undefined {
+  return host
+    .want(SshExecApi)
+    ?.status()
+    .map((target) =>
+      target.state === 'unreachable'
+        ? {
+            area: 'SSH exec',
+            status: 'warn',
+            summary: `${target.id} (${target.address}) unreachable: ${target.error}`,
+            impact: `Commands under ${target.root} fail until it is reachable; everything else runs here.`,
+          }
+        : {
+            area: 'SSH exec',
+            status: 'ok',
+            summary: `${target.root} runs on ${target.id} (${target.address})${target.state === 'unchecked' ? ', connecting' : ''}`,
+          },
+    )
+}
+
 async function landerArea(host: CheckHost): Promise<SetupIssue | undefined> {
   if (!host.extensions().some((extension) => extension.name === 'workspaces' && extension.enabled))
     return undefined
@@ -332,6 +353,7 @@ export async function check(
         extensionsArea,
         cloudArea,
         tailscaleArea,
+        sshExecArea,
         landerArea,
         worktreeArea,
         memoryArea,

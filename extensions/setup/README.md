@@ -12,6 +12,7 @@ button (a ⌘K command, or the Secrets panel at the missing secret).
 | Extensions        | an enabled extension's server facet failed to load                                                                            | Extensions panel  |
 | Cloud backup      | `cloud.url` is set but `ULTIMATE_CLOUD_TOKEN` or the snapshot key is missing; `info` while unset                              | Join              |
 | Tailscale         | never; `info` while not published                                                                                             |                   |
+| SSH exec          | an `ssh-exec` target is unreachable (`ok` per target otherwise)                                                               |                   |
 | Lander checks     | never; `info` while `lander.checks` is empty                                                                                  |                   |
 | Worktree setup    | the project is isolatable, has a package manifest, and no worktree setup                                                      |                   |
 | Project memory    | a listed root has no memories (`lineage.memory`), so its branches start from the full tally; ask @ultimate for a review       |                   |
