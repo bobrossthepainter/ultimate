@@ -33,20 +33,6 @@ import { UpdateApi } from './api.ts'
 /** How often the clone is compared with origin locally; origin itself is fetched at most hourly (`FETCH_EVERY`). */
 export const TICK = 5 * 60_000
 
-/**
- * The remote the clone is compared with: the project's `update.remote` (a fork's `upstream`), else `origin`. An
- * invalid value throws, so a typo is reported rather than silently comparing with origin.
- */
-export async function remoteOf(host: Pick<ExtensionHost, 'projectSettings'>) {
-  const setting = (await host.projectSettings()).update
-  const remote =
-    setting && typeof setting === 'object' && !Array.isArray(setting) ? setting.remote : undefined
-  if (remote === undefined) return 'origin'
-  if (typeof remote !== 'string' || !/^\w[\w.-]*$/.test(remote))
-    throw new Error(`Invalid update.remote ${JSON.stringify(remote)}: expected a remote name`)
-  return remote
-}
-
 /** Git in `root`, never prompting: an HTTPS fetch without a login must fail rather than hang a background check. */
 export const gitIn =
   (root: string): Git =>
@@ -326,11 +312,10 @@ async function refresh(host: ExtensionHost, check: boolean, force = false) {
   const shared = state(host)
   const root = host.ultimateRoot
   const git = gitIn(root)
-  const remote = await remoteOf(host)
   const summaryFile = await gitPath(git, root, 'ultimate-update-summary.json')
   /** The summary of the clone's current range; asks the model only with `asking`, else reads the cache. */
   const summarize = async (asking: boolean) => {
-    const { head, remoteHead } = await cloneState(git, root, remote)
+    const { head, remoteHead } = await cloneState(git, root)
     if (!remoteHead) return undefined
     return summaryFor(
       summaryFile,
@@ -343,14 +328,14 @@ async function refresh(host: ExtensionHost, check: boolean, force = false) {
   // and ask the summary model once between them.
   const checked = check
     ? await withLock(await lockOf(root), async () => {
-        const error = await fetchIfDue(git, root, Date.now(), force, remote)
+        const error = await fetchIfDue(git, root, Date.now(), force)
         await summarize(true)
         return { error }
       })
     : undefined
   const error = checked ? checked.error : shared.latest?.error
-  const clone = await cloneState(git, root, remote)
-  const repo = clone.remoteHead ? await githubRepo(root, remote) : undefined
+  const clone = await cloneState(git, root)
+  const repo = clone.remoteHead ? await githubRepo(root) : undefined
   const startedAt = Date.parse(host.system().process.startedAt)
   const { head, remoteHead, diverged, ...rest } = clone
   const summary = await summarize(false)
@@ -358,7 +343,6 @@ async function refresh(host: ExtensionHost, check: boolean, force = false) {
   const landingNow = rest.behind ? await landing(host) : undefined
   shared.latest = {
     root,
-    remote,
     head,
     ...rest,
     ...(summary ? { summary } : {}),
@@ -390,12 +374,11 @@ async function currentState(host: ExtensionHost) {
 const isProject = async (host: ExtensionHost) =>
   (await realpath(host.ultimateRoot)) === (await realpath(host.projectRoot))
 
-/** What @ultimate reads when the user asks it to merge the remote into the diverged clone. */
-const mergeInput = (remote: string, branch: string, root: string, ahead: number, behind: number) =>
+/** What @ultimate reads when the user asks it to merge origin into the diverged clone. */
+const mergeInput = (branch: string, root: string, ahead: number, behind: number) =>
   [
-    `Update with @ultimate: ${branch} in ${root} has diverged from ${remote}/${branch} (${ahead} local ${ahead === 1 ? 'commit' : 'commits'}, ${behind} new upstream), so Update now can't fast-forward it.`,
-    `Start a coordinator branch that merges ${remote}/${branch} into ${branch} in its worktree: git fetch ${remote}, then a normal git merge ${remote}/${branch}, never a rebase, reset or force push.`,
-    "It follows the project's merge instructions when it has any (a skill or memory about merging upstream).",
+    `Update with @ultimate: ${branch} in ${root} has diverged from origin/${branch} (${ahead} local ${ahead === 1 ? 'commit' : 'commits'}, ${behind} new upstream), so Update now can't fast-forward it.`,
+    `Start a coordinator branch that merges origin/${branch} into ${branch} in its worktree: git fetch origin, then a normal git merge origin/${branch}, never a rebase, reset or force push.`,
     'It resolves the conflicts it can resolve safely, sends the unclear ones back as decisions, runs the checks and the tests covering the conflicts, and lands the merge with workspace submit.',
     'Afterwards the update item asks for any restart the upstream changes need.',
   ].join('\n')
@@ -451,7 +434,7 @@ async function apply(
   try {
     // The landing check runs again right before the merge, after the fetch. A landing that starts after it is safe:
     // the lander fast-forwards only from the base it merged onto, sees the moved branch and retries.
-    moved = await fastForward(git, undefined, () => landing(host), await remoteOf(host))
+    moved = await fastForward(git, undefined, () => landing(host))
   } catch (error) {
     if (error instanceof Refusal) return refuse(error.message)
     throw error
@@ -516,23 +499,13 @@ export const actions = {
     await refresh(host, false)
     const latest = state(host).latest!
     if (!latest.merge) throw new Error(latest.refused ?? `${latest.branch} has not diverged`)
-    const { head, remoteHead } = await cloneState(
-      gitIn(host.ultimateRoot),
-      host.ultimateRoot,
-      latest.remote,
-    )
+    const { head, remoteHead } = await cloneState(gitIn(host.ultimateRoot), host.ultimateRoot)
     const id = await host.need(SubagentsApi).standing('ultimate', context)
     const conversation = (await host.harness().conversation(id, context))!
     await conversation.submit(
       {
         type: 'input',
-        content: mergeInput(
-          latest.remote ?? 'origin',
-          latest.branch!,
-          latest.root,
-          latest.ahead ?? 0,
-          latest.behind,
-        ),
+        content: mergeInput(latest.branch!, latest.root, latest.ahead ?? 0, latest.behind),
         // One ask per range: a second click while @ultimate is on it adds nothing.
         requestId: `update-merge:${head}..${remoteHead}`,
         whenBusy: 'followUp',

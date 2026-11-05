@@ -28,34 +28,29 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
  * Fetch origin; when that fails and origin is on GitHub, fetch once over the other transport into origin's refs,
  * without touching the remote's configuration (a machine may have only an SSH key or only an HTTPS login). After a
  * fallback, a missing `origin/HEAD` is set from the other transport's HEAD. Both failures are named when both fail.
- * `remote` names another remote to fetch the same way (`update.remote`, e.g. a fork's `upstream`).
  */
-export async function fetchOrigin(git: Git, remote = 'origin'): Promise<void> {
+export async function fetchOrigin(git: Git): Promise<void> {
   try {
-    await git('fetch', '--quiet', remote)
+    await git('fetch', '--quiet', 'origin')
     return
   } catch (error) {
-    const alternative = otherTransport(await git('remote', 'get-url', remote).catch(() => ''))
+    const alternative = otherTransport(await git('remote', 'get-url', 'origin').catch(() => ''))
     if (!alternative) throw error
     try {
-      await git('fetch', '--quiet', alternative, `+refs/heads/*:refs/remotes/${remote}/*`)
+      await git('fetch', '--quiet', alternative, '+refs/heads/*:refs/remotes/origin/*')
     } catch (second) {
       throw new Error(`${message(error)}\nRetry over ${alternative}: ${message(second)}`, {
         cause: second,
       })
     }
-    const head = await git('symbolic-ref', '--quiet', `refs/remotes/${remote}/HEAD`).catch(() => '')
+    const head = await git('symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD').catch(() => '')
     if (head) return
-    // `git remote set-head <remote> --auto` would ask the remote's failing transport, so ask the working one.
+    // `git remote set-head origin --auto` would ask origin's failing transport, so ask the working one.
     const symref = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(
       await git('ls-remote', '--symref', alternative, 'HEAD').catch(() => ''),
     )
     if (symref)
-      await git(
-        'symbolic-ref',
-        `refs/remotes/${remote}/HEAD`,
-        `refs/remotes/${remote}/${symref[1]}`,
-      )
+      await git('symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${symref[1]}`)
   }
 }
 
@@ -73,12 +68,12 @@ export type Standing = {
   diverged?: true
 }
 
-/** The checkout against the remote's default branch (no fetch); throws only when the remote has no default branch. */
-export async function standing(git: Git, name = 'origin'): Promise<Standing> {
-  const remote = await git('symbolic-ref', '--short', `refs/remotes/${name}/HEAD`).catch(() => {
-    throw new Error(`${name} has no default branch; run git remote set-head ${name} --auto`)
+/** The checkout against origin's default branch (no fetch); throws only when origin has no default branch. */
+export async function standing(git: Git): Promise<Standing> {
+  const remote = await git('symbolic-ref', '--short', 'refs/remotes/origin/HEAD').catch(() => {
+    throw new Error('origin has no default branch; run git remote set-head origin --auto')
   })
-  const branch = remote.slice(name.length + 1)
+  const branch = remote.replace(/^origin\//, '')
   const [ahead = 0, behind = 0] = (
     await git('rev-list', '--left-right', '--count', `HEAD...${remote}`)
   )
@@ -116,13 +111,12 @@ export async function fastForward(
   git: Git,
   owe?: () => Promise<void>,
   admit?: () => Promise<string | undefined>,
-  remote = 'origin',
 ): Promise<FastForward> {
   // Checked before fetching, so a dirty checkout is refused as such and its remote refs stay as they were.
   if (await git('status', '--porcelain', '--untracked-files=no'))
     throw new Refusal('The checkout has uncommitted changes')
-  await fetchOrigin(git, remote)
-  const state = await standing(git, remote)
+  await fetchOrigin(git)
+  const state = await standing(git)
   if (state.refused) throw new Refusal(state.refused)
   const refused = state.behind ? await admit?.() : undefined
   if (refused) throw new Refusal(refused)

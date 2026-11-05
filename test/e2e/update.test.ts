@@ -54,9 +54,9 @@ it('fetches only when the last fetch is an hour old', async () => {
   // That fetch just happened: not due, origin/main stays where it was.
   expect(await fetchIfDue(run, clone, Date.now())).toBeUndefined()
   expect((await cloneState(run, clone)).behind).toBe(0)
-  // Backdate the stamp: due now.
+  // Backdate FETCH_HEAD: due now.
   const old = new Date(Date.now() - 2 * 60 * 60_000)
-  await utimes(join(clone, '.git/ultimate-update-fetched-origin'), old, old)
+  await utimes(join(clone, '.git/FETCH_HEAD'), old, old)
   expect(await fetchIfDue(run, clone, Date.now())).toBeUndefined()
   const state = await cloneState(run, clone)
   expect(state).toMatchObject({
@@ -141,33 +141,6 @@ it('refuses a dirty, switched or diverged clone and leaves it alone', async () =
   expect(local).not.toBe(head)
   expect(await git(clone, 'rev-parse', 'HEAD')).toBe(local)
   expect((await cloneState(run, clone)).refused).toBe('main has diverged from origin/main')
-})
-
-it('compares a fork with its upstream remote, not its origin', async () => {
-  // The clone's origin is a fork that keeps up with the clone; upstream is the repository it was forked from.
-  const fork = join(await temp('ultimate-update-fork-'), 'fork.git')
-  await git(clone, 'remote', 'rename', 'origin', 'upstream')
-  await git(process.cwd(), 'clone', '-q', '--bare', clone, fork)
-  await git(clone, 'remote', 'add', 'origin', fork)
-  await git(clone, 'fetch', '-q', 'origin')
-  await git(clone, 'remote', 'set-head', 'origin', '--auto')
-  await writeFile(join(clone, 'local.txt'), 'mine\n')
-  await git(clone, 'add', '-A')
-  await git(clone, 'commit', '-q', '-m', 'local')
-  await git(clone, 'push', '-q', 'origin', 'main')
-  await push({ 'extensions/a/web.tsx': 'x\n' })
-
-  const run = gitIn(clone)
-  // A recent fetch of origin does not make upstream's look recent.
-  await fetchIfDue(run, clone, Date.now())
-  expect(await fetchIfDue(run, clone, Date.now(), false, 'upstream')).toBeUndefined()
-  expect(await cloneState(run, clone)).toMatchObject({ behind: 0, ahead: 0 })
-  expect(await cloneState(run, clone, 'upstream')).toMatchObject({
-    behind: 1,
-    ahead: 1,
-    diverged: true,
-    refused: 'main has diverged from upstream/main',
-  })
 })
 
 it('admits one holder of the clone lock among simultaneous ones, and recovers a stale sidecar', async () => {

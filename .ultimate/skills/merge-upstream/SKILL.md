@@ -5,9 +5,9 @@ description: Merge new upstream (HazAT/ultimate) commits into this fork's main o
 
 # Merge upstream
 
-This repository is a fork: `origin` is the fork, `upstream` is the repository it came from. The update extension
-compares main with `upstream/main` (`update.remote` in `.ultimate/settings.json`), and its **Update with @ultimate**
-button asks for this merge.
+This repository is a fork: `origin` is the fork, `upstream` is the repository it came from. The `upstream-sync`
+extension compares main with `upstream/main` (the `↓ N upstream` item), and its **Update with @ultimate** button asks
+for this merge.
 
 ## Setup, once per clone
 

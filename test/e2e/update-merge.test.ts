@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
+import { mkdir, realpath, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -19,10 +19,6 @@ const commit = (root: string, ...args: string[]) =>
 /** A copy of Ultimate whose `main` has one commit of its own and lacks one new commit on origin. */
 async function diverged(home: string) {
   const root = await sourceCopy(home)
-  // This repository's settings compare with its `upstream`; the fixture covers the default, origin.
-  const settings = join(root, '.ultimate/settings.json')
-  const { update: _, ...rest } = JSON.parse(await readFile(settings, 'utf8'))
-  await writeFile(settings, JSON.stringify(rest))
   await git(root, 'init', '-q', '-b', 'main')
   await git(root, 'add', '-A')
   await commit(root, '-m', 'base')
