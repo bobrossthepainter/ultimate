@@ -56,6 +56,7 @@ shell waits for `ssh`, so a stop that returns means the remote work has ended (e
 - `run`: execFile semantics, with the remote exit code, stdout, stderr, `signal`, `timeout` and `maxBuffer`.
 - `start`: a local `spawnGroup` around `ssh`, streamed; stopping it stops the remote group.
 - `env`: Pi's Node environment with the local file system and a `spawn` that runs each shell command over SSH.
+- `describe`: `user@host:port`, which the Info panel's Execution section shows for a conversation under the root.
 
 ## Status
 

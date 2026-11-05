@@ -2,7 +2,8 @@ import { realpath } from 'node:fs/promises'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { expect, it } from 'vitest'
 import type { ExtensionHost } from '../server/extensions.ts'
-import exec from '../extensions/exec/server.ts'
+import exec, { actions } from '../extensions/exec/server.ts'
+import type { ActionContext } from '../server/actions.ts'
 import { Exec, Protocol } from '../extensions/exec/api.ts'
 import type { ExecTarget, ExecTargets } from '../extensions/exec/api.ts'
 import type { Group } from '../lib/process-group.ts'
@@ -65,6 +66,7 @@ it('hands run, start, git and env under a registered root to its protocol; the r
       calls.push(['env', to.id, cwd])
       return env
     },
+    describe: () => 'box',
   })
   expect(await service.run('/box/app', 'make', ['test'])).toEqual({
     stdout: ' remote \n',
@@ -85,4 +87,28 @@ it('hands run, start, git and env under a registered root to its protocol; the r
   // lib/exec.ts stays host-local: a cwd the protocol owns does not reach it.
   await expect(hostExec('pwd', [], { cwd: '/box/app' })).rejects.toThrow('ENOENT')
   expect(calls).toEqual([])
+})
+
+it('describes where a directory runs through its protocol, and the target action answers the UI with it', () => {
+  const { service } = load({
+    targets: () => [target('box', '/box')],
+    describe: (to: ExecTarget) => `fake ${to.id}`,
+  } as unknown as ExecTargets)
+  expect(service.describe('/box/app')).toEqual({
+    protocol: 'fake',
+    id: 'box',
+    root: '/box',
+    description: 'fake box',
+  })
+  expect(service.describe('/elsewhere')).toEqual({
+    protocol: 'local',
+    id: 'local',
+    root: '/',
+    description: 'local Node',
+  })
+  const host = { need: () => service } as unknown as ActionContext['host']
+  expect(actions.target({ cwd: '/box' }, { host } as ActionContext)).toMatchObject({
+    id: 'box',
+  })
+  expect(() => actions.target({ cwd: 'box' }, { host } as ActionContext)).toThrow('Expected')
 })

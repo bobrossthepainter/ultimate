@@ -7,6 +7,7 @@ import { defineApi } from '../../shared/extension-api.ts'
 import type { GitOptions } from '../../lib/git.ts'
 import type { Group, spawnGroup } from '../../lib/process-group.ts'
 import type { execFile } from '../../lib/spawn.ts'
+import type { TargetInfo } from './refs.ts'
 
 /** How `run` runs: execFile's options without `cwd`, which every call names first. */
 export type RunOptions = Omit<NonNullable<Parameters<typeof execFile>[2]>, 'cwd'>
@@ -46,6 +47,8 @@ export type ExecProtocol = {
   ): Group
   /** Pi's execution environment (shell and file system) in `cwd`, for the agent's tools. */
   env(target: ExecTarget, cwd: string): ExecutionEnv
+  /** The target in one line for people (`local Node`, `user@host:port`); never a secret or a key's path. */
+  describe(target: ExecTarget): string
 }
 
 export type ExecService = {
@@ -64,6 +67,8 @@ export type ExecService = {
   git: (cwd: string | GitOptions, ...args: string[]) => Promise<string>
   /** Pi's execution environment in `cwd`, as the agent's tools get it. */
   env: (cwd: string) => ExecutionEnv
+  /** The target owning `cwd`, as its protocol describes it, for the UI. */
+  describe: (cwd: string) => TargetInfo
 }
 /** Run commands where a directory lives; `need` it for work in a project or worktree, never for host-local work. */
 export const Exec = defineApi<ExecService>()('exec')
