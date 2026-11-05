@@ -50,7 +50,7 @@ import {
 } from './refs.ts'
 import { describeSchedule, nextAt, parseSchedule } from './schedule.ts'
 import { scheduler } from './scheduler.ts'
-import { triggers, TRIGGER_EVENTS, describeTrigger } from './triggers.ts'
+import { dueAt, triggers, TRIGGER_EVENTS, describeTrigger } from './triggers.ts'
 import { supervisor } from './supervisor.ts'
 import type { Prepared } from './supervisor.ts'
 import type {
@@ -803,6 +803,10 @@ export default function automations(host: ExtensionHost) {
   host.need(SubagentsApi)
   host.need(MessagesApi)
   const api = backend(host)
+  const records = async () =>
+    Object.values(
+      (await host.harness().snapshot(Automations, BACKGROUND_CONTEXT))?.automations ?? {},
+    )
   host.implement(AutomationsApi, {
     create: async (args) => (await api.operate({ ...args, action: 'create' })) as Automation,
     delete: async (id) => void (await api.operate({ action: 'delete', id })),
@@ -814,6 +818,16 @@ export default function automations(host: ExtensionHost) {
       const a = (await tx.doc(Automations)).automations[id]
       return a && json(a)
     },
+    wakes: async (now) => {
+      const wakes: { at: number; reason: string }[] = []
+      for (const a of await records()) {
+        const at = a.schedule ? a.enabled && a.nextAt : a.condition?.idleFor && dueAt(a)
+        if (at) wakes.push({ at: Math.max(at, now), reason: `${a.id} ${describeTrigger(a)}` })
+      }
+      return wakes
+    },
+    scripts: async () =>
+      (await records()).filter((a) => groupAlive(a.script?.pid)).map((a) => a.id),
   })
   api.trigger.install()
   host.onOpen(async () => {

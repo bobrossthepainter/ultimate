@@ -20,6 +20,14 @@ export type AutomationsService = {
    * in the same transaction as the effect it allows.
    */
   read(tx: Tx, id: string): Promise<Automation | undefined>
+  /**
+   * When enabled automations next need the process, none before `now`: each schedule's next fire, and each context
+   * condition that waits for a pause and is over its threshold now. A condition under its threshold has none: its
+   * measurement changes only while something runs.
+   */
+  wakes(now: number): Promise<{ at: number; reason: string }[]>
+  /** Ids of the automations whose script process is alive. */
+  scripts(): Promise<string[]>
 }
 /** Optional automation service. */
 export const AutomationsApi = defineApi<AutomationsService>()('automations')

@@ -100,6 +100,21 @@ function summary(event: EventRecord): string {
     .slice(0, 200)
 }
 
+/**
+ * When condition `a` fires on its current measurement: armed and at or over its threshold, once the user's pause
+ * (`idleFor`, counted from their latest input to `of`, else from creation) and the cooldown since its own last fire are
+ * over. Undefined while it cannot fire.
+ */
+export function dueAt(a: Automation): number | undefined {
+  const c = a.condition
+  if (!a.enabled || !c?.armed || c.value === undefined || c.value < c.above) return undefined
+  return Math.max(
+    c.idleFor ? (c.inputAt ?? a.createdAt) + c.idleFor : 0,
+    // A manual run is not a crossing: the cooldown counts from the condition's own fire.
+    c.firedAt === undefined ? 0 : c.firedAt + c.cooldownMs,
+  )
+}
+
 export function triggers(
   host: ExtensionHost,
   Automations: typeof Ledger,
@@ -121,13 +136,8 @@ export function triggers(
     if (usage.percent < condition.above - 10) condition.armed = true
     const now = Date.now()
     const paused = condition.idleFor ? now - (condition.inputAt ?? a.createdAt) : undefined
-    if (
-      usage.percent >= condition.above &&
-      condition.armed &&
-      (paused === undefined || paused >= condition.idleFor!) &&
-      // A manual run is not a crossing: the cooldown counts from the condition's own fire.
-      (condition.firedAt === undefined || now - condition.firedAt >= condition.cooldownMs)
-    ) {
+    const due = dueAt(a)
+    if (due !== undefined && now >= due) {
       const count = (n: number) =>
         Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(n)
       await fire(

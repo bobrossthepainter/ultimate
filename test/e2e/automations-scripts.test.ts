@@ -895,3 +895,23 @@ it('closes during a pending start without spawning a process after cleanup', asy
     snapshot.mockRestore()
   }
 })
+
+it('reports a script whose process is alive to lifecycle', async () => {
+  const { app, folder, userHome } = await fixture()
+  await writeFile(
+    join(userHome, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { enable: ['lifecycle'] } }),
+  )
+  await until(() => !!app.extensions.action('lifecycle', 'state'))
+  const state = async () =>
+    (await app.extensions.invoke('lifecycle', 'state', {}, new AbortController().signal)) as {
+      scripts: string[]
+    }
+  const sub = await create(app)
+  await writeRun(folder(sub.id), 'sleep 60')
+  await call(app, 'resume', sub.id)
+  await until(async () => (await state()).scripts.length > 0)
+  expect((await state()).scripts).toEqual([sub.id])
+  await call(app, 'pause', sub.id)
+  expect((await state()).scripts).toEqual([])
+})
