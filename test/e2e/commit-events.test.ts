@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { realpath } from 'node:fs/promises'
+import { readdir, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -16,11 +16,13 @@ const run = promisify(execFile)
 type Event = typeof Committed extends EventToken<infer D> ? D : never
 
 let cwd: string
+let home: string
 let emitted: Event[]
 const git = async (...args: string[]) => (await run('git', args, { cwd })).stdout.trim()
 
 beforeEach(async () => {
   cwd = await realpath(await temp('ultimate-commit-events-'))
+  home = await temp('ultimate-commit-events-home-')
   emitted = []
   await git('init', '-b', 'main')
   await git('config', 'user.name', 'Event Test')
@@ -29,12 +31,14 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.unstubAllEnvs()
   await removeTemp(cwd)
+  await removeTemp(home)
 })
 
 /** The extension's bash tool, run as one call of conversation 7 in `dir`. */
 async function bash(command: string, dir = cwd) {
   const extension = codingTools({
     ...apis(),
+    home,
     emit: async (_tx, event, data) => {
       expect(event).toBe(Committed)
       emitted.push(data as Event)
@@ -82,6 +86,12 @@ it('records a commit through bash with its full sha, parents, branch and subject
     },
   ])
   expect(second).toMatch(/^[0-9a-f]{40}$/)
+})
+
+it("logs the hooks' commits under the home, which an ssh-exec target shares, and removes the log", async () => {
+  const { output } = await bash('printf %s "$ULTIMATE_COMMIT_LOG"')
+  expect(output.startsWith(join(home, 'commit-logs') + '/')).toBe(true)
+  expect(await readdir(join(home, 'commit-logs'))).toEqual([])
 })
 
 it('records an amend with the commit it replaced', async () => {
@@ -241,9 +251,10 @@ it('records nothing when bash made no commit', async () => {
 })
 
 it('never fails a commit when the log cannot be written', async () => {
-  // A log path inside a missing directory makes every hook's append fail.
-  vi.stubEnv('TMPDIR', join(cwd, 'missing'))
-  const { result } = await bash('git commit -q --allow-empty -m kept && echo ok')
+  // With the log's directory gone, every hook's append fails.
+  const { result } = await bash(
+    'rm -r "$(dirname "$ULTIMATE_COMMIT_LOG")" && git commit -q --allow-empty -m kept && echo ok',
+  )
   expect(result.isError).toBeFalsy()
   expect(await git('log', '-1', '--format=%s')).toBe('kept')
   expect(emitted).toEqual([])

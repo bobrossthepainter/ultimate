@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { Context } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
@@ -278,7 +277,7 @@ async function madeCommits(git: Git, path: string, conversation: number) {
   return events
 }
 
-export default function codingTools(host: Pick<ExtensionHost, 'emit' | 'need'>) {
+export default function codingTools(host: Pick<ExtensionHost, 'emit' | 'need' | 'home'>) {
   const exec = host.need(Exec)
   const shell = createBashTool()
   const parameters = obj({
@@ -307,7 +306,11 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit' | 'need'>) 
           `An interruptible command must only wait, but this one changes things (${change}). Run the change in its own bash call, then wait in a separate interruptible one.`,
         )
       // One log per invocation: task ids repeat across projects and a retried call reruns its task.
-      const log = join(tmpdir(), `ultimate-commits-${randomUUID()}.log`)
+      // Under the home, not the system temp: a bash call may run on an ssh-exec target, which shares the files
+      // under its root (the home included) but not this machine's /tmp, and its hooks write here.
+      const logs = join(host.home, 'commit-logs')
+      await mkdir(logs, { recursive: true })
+      const log = join(logs, `${randomUUID()}.log`)
       const call = createBashTool({
         prepare: (execution) => prepareBash(execution, api, log),
       })
