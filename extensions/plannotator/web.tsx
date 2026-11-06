@@ -21,6 +21,9 @@ const parse = (output: string): Session | undefined => {
   }
 }
 
+/** A ref as the card shows it: a full commit hash shortened to 7 characters, branch names as they are. */
+const short = (ref: string) => (/^[0-9a-f]{40}$/.test(ref) ? ref.slice(0, 7) : ref)
+
 const tone: Record<Session['state'], string> = {
   starting: 'text-muted-foreground',
   running: 'text-brand',
@@ -106,8 +109,15 @@ function ReviewCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
               <li className="flex min-w-0 gap-2" key={repo.path}>
                 <span className="shrink-0 text-foreground/90">{repo.name}</span>
                 <span className="min-w-0 truncate text-muted-foreground">{repo.path}</span>
-                {repo.base && (
-                  <span className="ml-auto shrink-0 text-muted-foreground">since {repo.base}</span>
+                {(repo.ref || repo.base) && (
+                  <span
+                    className="ml-auto shrink-0 text-muted-foreground"
+                    title={[repo.ref, repo.base].filter(Boolean).join(' since ')}
+                  >
+                    {repo.ref && <span className="text-foreground/80">{short(repo.ref)}</span>}
+                    {repo.ref && repo.base && ' '}
+                    {repo.base && `since ${short(repo.base)}`}
+                  </span>
                 )}
               </li>
             ))}

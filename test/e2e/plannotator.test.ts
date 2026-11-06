@@ -154,6 +154,33 @@ it('reviews several repositories as one patch and hands the feedback back as the
     expect(stopped).toMatchObject({ id: second.id, state: 'stopped' })
     await server.harness.waitForIdle(context)
     expect((await conversation.context(context)).entries.length).toBe(before)
+
+    // One branch across repositories, read from Git: a dirty linked worktree adds nothing, and it is named after its
+    // repository, not its folder.
+    await git(join(home, 'beta'), 'worktree', 'add', '-q', join(home, 'wt', '7'), 'main')
+    await writeFile(join(home, 'wt', '7', 'f.txt'), 'uncommitted\n')
+    await rm(join(dir, 'decision.json'))
+    const branched = await action(
+      'start',
+      {
+        branch: 'feature',
+        repos: [{ repo: join(home, 'alpha') }, { repo: join(home, 'wt', '7') }],
+      },
+      target,
+    )
+    expect(branched.data.result).toMatchObject({
+      mode: 'combined',
+      repos: [
+        { name: 'alpha', ref: 'feature', base: 'main' },
+        { name: 'beta', ref: 'feature', base: 'main' },
+      ],
+    })
+    const patch = JSON.parse(await readFile(join(dir, 'call.json'), 'utf8')).patch as string
+    expect(patch).toContain('+++ b/beta/f.txt')
+    expect(patch).toContain('+beta change')
+    expect(patch).not.toContain('uncommitted')
+    expect(patch).not.toContain('new.txt')
+    await action('stop', { id: branched.data.result.id })
   } finally {
     await server.close()
   }

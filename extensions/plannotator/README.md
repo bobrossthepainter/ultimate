@@ -12,19 +12,30 @@ the flags below against `plannotator review --help`.
 
 ## Starting a review
 
-- **Agents:** the `review_with_plannotator` tool, `{ items: [{ repo?, conversation?, base? }], mode?, title? }`. An item
-  is a directory in a Git repository, or a conversation's worktree (the project checkout once it has none). `base`
-  defaults to the worktree's target branch, else `origin`'s default branch, else `main` or `master`.
+- **Agents:** the `review_with_plannotator` tool, in one of two shapes:
+  - `{ branch, repos: [{ repo, base? }], title? }`: one branch across repositories. In each, the local branch, else
+    `origin/<branch>`, is read from Git and compared since its merge base with `base` (default `origin`'s default
+    branch). No clean checkout is needed: the working tree is not read. A repository without the branch fails the call,
+    naming it.
+  - `{ items: [{ repo?, conversation?, ref?, base? }], mode?, title? }`. An item is a directory in a Git repository, or
+    a conversation's worktree (the project checkout once it has none); `ref` reviews that branch or commit from Git
+    instead of the working tree. `base` defaults to the worktree's target branch, else `origin`'s default branch
+    (`origin/HEAD`, `origin/main`, `origin/master`), else `main` or `master`.
 - **The user:** ⌘K **Review with Plannotator** reviews the shown conversation's worktree and opens it in a new tab.
 
 What a session shows:
 
 - **One repository:** Plannotator's live view, `plannotator review --base <base> <dir>`: commits, staged, unstaged and
   untracked changes since the base, with its comparison picker to switch.
-- **Several, `combined` (default):** one fixed patch, each repository since the merge base with its own base, commits
-  and untracked files included, paths prefixed with the repository's folder name (`--patch-file`). No picker.
-- **Several, `live`:** Plannotator's own multi-repository view of a folder of links to them. It shows only their
-  uncommitted changes and last commits, and takes no base (Plannotator refuses `--base` there).
+- **Several, or any `ref`, `combined` (default):** one fixed patch (`--patch-file`), each repository since the merge
+  base with its own base: a ref's commits, or a working tree's commits, staged, unstaged and untracked changes. Paths
+  start with the repository's name, the main repository's folder also for a linked worktree (`ultimate/…`, not
+  `1234/…`). No picker.
+- **Several working trees, `live`:** Plannotator's own multi-repository view of a folder of links to them. It shows
+  only their uncommitted changes and last commits, and takes no base (Plannotator refuses `--base` there); a ref
+  cannot be shown live.
+
+The card lists each repository with the ref reviewed and its base, a full commit hash shortened to 7 characters.
 
 Every session runs with `BROWSER=none`, sharing off (`PLANNOTATOR_SHARE`), no `git ls-remote`
 (`PLANNOTATOR_GIT_REMOTE_CHECK=0`), and `updateCheck: false` in its config, so it asks GitHub for no release record.

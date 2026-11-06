@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
-import { basename, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineEntry, defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
@@ -23,7 +23,7 @@ import { CaddyApi } from '../caddy/api.ts'
 import { Exec } from '../exec/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { InstallAction, OverviewAction, StartAction, StopAction } from './refs.ts'
-import type { Overview, ReviewItem, Session, SessionRepo } from './refs.ts'
+import type { BranchRepo, Overview, ReviewItem, Session, SessionRepo } from './refs.ts'
 
 /**
  * The pinned release and its SHA-256 per platform, from the release's `.sha256` files. A newer Plannotator may change
@@ -137,11 +137,15 @@ function plain(value: unknown, name: string) {
   return value.trim()
 }
 
-/** Where an item lives and what it is compared against: the worktree's target, else the repository's default branch. */
+/**
+ * Where an item lives, what of it is reviewed (`ref`, else its working tree) and what it is compared against: the
+ * worktree's target, else `origin`'s default branch. `label` is the main repository's folder name, also for a worktree.
+ */
 async function locate(host: ExtensionHost, item: ReviewItem) {
   const exec = host.need(Exec)
   let dir: string | undefined
   let base = item.base === undefined ? undefined : plain(item.base, 'base')
+  const ref = item.ref === undefined ? undefined : plain(item.ref, 'ref')
   if (item.conversation !== undefined) {
     if (!Number.isSafeInteger(item.conversation) || item.conversation < 1)
       throw new Error('conversation must be a conversation id')
@@ -162,16 +166,27 @@ async function locate(host: ExtensionHost, item: ReviewItem) {
     throw new Error(`${dir} is not inside a Git repository`)
   })
   base ??= await defaultBranch(host, top)
-  if (base)
-    await exec
-      .git(top, 'rev-parse', '--verify', '--quiet', '--end-of-options', `${base}^{commit}`)
-      .catch(() => {
-        throw new Error(`${base} is not a commit in ${top}`)
-      })
-  return { path: top, base }
+  if (ref && !base)
+    throw new Error(`${top} has no origin/main or main to compare ${ref} with; give a base`)
+  for (const name of [ref, base])
+    if (name)
+      await exec
+        .git(top, 'rev-parse', '--verify', '--quiet', '--end-of-options', `${name}^{commit}`)
+        .catch(() => {
+          throw new Error(`${name} is not a commit in ${top}`)
+        })
+  // A linked worktree's common directory is the main repository's `.git`: its folder names the repository.
+  const common = await exec
+    .git(top, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    .catch(
+      // An old Git without --path-format: the checkout's own folder names it.
+      () => '',
+    )
+  const label = basename(common) === '.git' ? basename(dirname(common)) : basename(top)
+  return { path: top, label, ...(ref && { ref }), base }
 }
 
-/** `origin`'s default branch as known locally, else `main` or `master` when they exist. */
+/** The ref to compare with by default: `origin`'s default branch, else `origin/main` or `origin/master`, else local ones. */
 async function defaultBranch(host: ExtensionHost, top: string) {
   const git = (...args: string[]) =>
     host
@@ -183,26 +198,65 @@ async function defaultBranch(host: ExtensionHost, top: string) {
       )
   const head = await git('symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD')
   if (head) return head
-  for (const name of ['main', 'master'])
-    if (await git('rev-parse', '--verify', '--quiet', `refs/heads/${name}`)) return name
+  for (const name of ['origin/main', 'origin/master', 'main', 'master'])
+    if (await git('rev-parse', '--verify', '--quiet', `${name}^{commit}`)) return name
   return undefined
 }
 
-/** Distinct, readable path prefixes: a repository's folder name, numbered past every name already given. */
-export function names(dirs: string[]) {
+/**
+ * `branch` in each repository as a ref to review: the local branch, else `origin/<branch>`. Throws naming every
+ * repository that has neither, so none is left out of the review unnoticed.
+ */
+export async function branchItems(
+  host: ExtensionHost,
+  branch: string,
+  repos: BranchRepo[],
+): Promise<ReviewItem[]> {
+  const name = plain(branch, 'branch')
+  const found = await Promise.all(
+    repos.map(async (entry) => {
+      if (typeof entry?.repo !== 'string' || !entry.repo)
+        throw new Error('Each of repos names a repo')
+      const dir = isAbsolute(entry.repo) ? entry.repo : resolve(host.projectRoot, entry.repo)
+      for (const [ref, full] of [
+        [name, `refs/heads/${name}`],
+        [`origin/${name}`, `refs/remotes/origin/${name}`],
+      ])
+        if (
+          await host
+            .need(Exec)
+            .git(dir, 'rev-parse', '--verify', '--quiet', '--end-of-options', `${full}^{commit}`)
+            .catch(
+              // Not there, or not a repository: the next candidate, then the report below.
+              () => '',
+            )
+        )
+          return { repo: dir, ref, ...(entry.base !== undefined && { base: entry.base }) }
+      return dir
+    }),
+  )
+  const missing = found.filter((item) => typeof item === 'string')
+  if (missing.length)
+    throw new Error(`No branch ${name} (local or origin/${name}) in: ${missing.join(', ')}`)
+  return found as ReviewItem[]
+}
+
+/** Distinct, readable path prefixes: each repository's name, numbered past every name already given. */
+export function names(labels: string[]) {
   const used = new Set<string>()
-  return dirs.map((dir) => {
-    const name = basename(dir).replace(/[^A-Za-z0-9._-]/g, '_') || 'repo'
-    let label = name
-    for (let count = 2; used.has(label); count++) label = `${name}-${count}`
-    used.add(label)
-    return label
+  return labels.map((label) => {
+    const name = label.replace(/[^A-Za-z0-9._-]/g, '_') || 'repo'
+    let given = name
+    for (let count = 2; used.has(given); count++) given = `${name}-${count}`
+    used.add(given)
+    return given
   })
 }
 
 /**
- * Every repository's change since its base, committed, staged, unstaged and untracked, in one patch whose paths start
- * with the repository's name, as Plannotator's multi-repository view writes them.
+ * Every repository's change since its base in one patch whose paths start with the repository's name, as Plannotator's
+ * multi-repository view writes them: a `ref`'s commits since the merge base, read from Git alone, or else the working
+ * tree's commits, staged, unstaged and untracked changes.
  */
 async function combinedPatch(host: ExtensionHost, repos: SessionRepo[]) {
   const exec = host.need(Exec)
@@ -210,16 +264,21 @@ async function combinedPatch(host: ExtensionHost, repos: SessionRepo[]) {
   for (const repo of repos) {
     const prefix = [`--src-prefix=a/${repo.name}/`, `--dst-prefix=b/${repo.name}/`]
     const options = { timeout: 60000, maxBuffer: 64 * 1024 * 1024 }
+    const head = repo.ref ?? 'HEAD'
     const base = repo.base
-      ? await exec.git(repo.path, 'merge-base', '--end-of-options', repo.base, 'HEAD')
+      ? await exec.git(repo.path, 'merge-base', '--end-of-options', repo.base, head)
       : undefined
+    const diff = ['diff', '--no-color', '--no-ext-diff', '-M', ...prefix]
     const tracked = await exec.run(
       repo.path,
       'git',
-      ['diff', '--no-color', '--no-ext-diff', '-M', ...prefix, ...(base ? [base] : ['HEAD'])],
+      repo.ref
+        ? [...diff, base ?? `${repo.ref}^`, repo.ref, '--']
+        : [...diff, ...(base ? [base] : ['HEAD'])],
       options,
     )
     parts.push(tracked.stdout)
+    if (repo.ref) continue
     const untracked = await exec.run(
       repo.path,
       'git',
@@ -401,22 +460,40 @@ async function deliver(host: ExtensionHost, session: Running, decision: Decision
 async function start(
   host: ExtensionHost,
   conversation: number,
-  input: { items?: unknown; mode?: unknown; title?: unknown },
+  input: { items?: unknown; branch?: unknown; repos?: unknown; mode?: unknown; title?: unknown },
 ): Promise<Session> {
   const files = paths(host.userHome)
   if (!existsSync(files.binary))
     throw new Error(`Plannotator ${VERSION} is not installed: ⌘K → Install Plannotator.`)
   await swept(host)
-  const items = Array.isArray(input.items) ? (input.items as ReviewItem[]) : []
-  if (!items.length || items.length > 12) throw new Error('Give 1 to 12 items to review')
+  if ((input.items === undefined) === (input.branch === undefined))
+    throw new Error('Give either items, or branch with repos')
+  const items =
+    input.branch === undefined
+      ? Array.isArray(input.items)
+        ? (input.items as ReviewItem[])
+        : []
+      : await branchItems(
+          host,
+          input.branch as string,
+          Array.isArray(input.repos) ? (input.repos as BranchRepo[]) : [],
+        )
+  if (!items.length || items.length > 12) throw new Error('Give 1 to 12 repositories to review')
   if (input.mode !== undefined && input.mode !== 'combined' && input.mode !== 'live')
     throw new Error("mode is 'combined' or 'live'")
-  const mode = input.mode ?? 'combined'
   const located = await Promise.all(items.map((item) => locate(host, item)))
   if (new Set(located.map((repo) => repo.path)).size !== located.length)
     throw new Error('Each repository may appear once')
-  const labels = names(located.map((repo) => repo.path))
-  const repos = located.map((repo, index) => ({ ...repo, name: labels[index] }))
+  // A ref is read from Git into a patch: Plannotator's live views show working trees only.
+  const refs = located.some((repo) => repo.ref)
+  if (refs && input.mode === 'live')
+    throw new Error("mode 'live' reviews working trees; a ref or branch needs 'combined'")
+  const mode = input.mode ?? 'combined'
+  const labels = names(located.map((repo) => repo.label))
+  const repos = located.map(({ label: _label, ...repo }, index) => ({
+    ...repo,
+    name: labels[index],
+  }))
   const sessions = state(host)
   for (const [id] of [...sessions].filter(([, item]) => item.freed).slice(0, -KEEP))
     sessions.delete(id)
@@ -436,11 +513,12 @@ async function start(
     id: randomUUID(),
     conversation,
     title,
-    mode: repos.length === 1 ? 'single' : mode,
+    mode: repos.length === 1 && !refs ? 'single' : mode,
     // Plannotator's multi-repository view takes no base, so none is shown for it.
-    repos: repos.map(({ name, path, base }) => ({
+    repos: repos.map(({ name, path, ref, base }) => ({
       name,
       path,
+      ...(ref && { ref }),
       ...(base && (repos.length === 1 || mode === 'combined') && { base }),
     })),
     state: 'starting',
@@ -565,31 +643,61 @@ export default function plannotator(host: ExtensionHost) {
       defineTool({
         name: 'review_with_plannotator',
         description:
-          "Open a Plannotator code review for the user: one or more Git repositories, each against its base. Returns the session's address; the user opens it from the card, and their feedback or approval comes back to this conversation as their input. One repository gets Plannotator's live view with its comparison picker. Several get mode 'combined' (default: one fixed patch, each repository since its own base, commits included) or 'live' (Plannotator's own multi-repository view: uncommitted changes and last commits only).",
+          "Open a Plannotator code review for the user: one or more Git repositories, each against its base. Returns the session's address; the user opens it from the card, and their feedback or approval comes back to this conversation as their input. For one branch across several repositories, pass `branch` and `repos` (no `items`): the branch is read from Git in each (local, else origin/<branch>), compared since its merge base with origin's default branch or the repo's `base`; no clean checkout is needed, and a repository without the branch is an error naming it. Otherwise pass `items`: a repo or a conversation's worktree, optionally a `ref` to review a committed branch or commit instead of the working tree. One working tree gets Plannotator's live view with its comparison picker. Several get mode 'combined' (default: one fixed patch, each repository since its own base) or 'live' (working trees only, Plannotator's own multi-repository view: uncommitted changes and last commits).",
         parameters: obj({
-          items: arr(
-            obj({
-              repo: opt(
-                str({
-                  description:
-                    'A directory inside a Git repository (absolute, or relative to the project).',
-                }),
-              ),
-              conversation: opt(
-                int({
-                  minimum: 1,
-                  description:
-                    'A conversation whose worktree to review, against its target branch.',
-                }),
-              ),
-              base: opt(
-                str({
-                  description:
-                    'Branch, tag or commit to compare against; default: the worktree target, else the default branch.',
-                }),
-              ),
+          branch: opt(
+            str({
+              description:
+                'A branch to review in every repository of `repos`, e.g. feature/ABC-123; use instead of items.',
             }),
-            { minItems: 1, maxItems: 12 },
+          ),
+          repos: opt(
+            arr(
+              obj({
+                repo: str({
+                  description: 'A Git repository (absolute, or relative to the project).',
+                }),
+                base: opt(
+                  str({
+                    description:
+                      "What this repository's branch is compared against; default origin's default branch (origin/main).",
+                  }),
+                ),
+              }),
+              { minItems: 1, maxItems: 12 },
+            ),
+          ),
+          items: opt(
+            arr(
+              obj({
+                repo: opt(
+                  str({
+                    description:
+                      'A directory inside a Git repository (absolute, or relative to the project).',
+                  }),
+                ),
+                conversation: opt(
+                  int({
+                    minimum: 1,
+                    description:
+                      'A conversation whose worktree to review, against its target branch.',
+                  }),
+                ),
+                ref: opt(
+                  str({
+                    description:
+                      'A branch, tag or commit to review instead of the working tree, read from Git.',
+                  }),
+                ),
+                base: opt(
+                  str({
+                    description:
+                      "Branch, tag or commit to compare against; default: the worktree target, else origin's default branch.",
+                  }),
+                ),
+              }),
+              { minItems: 1, maxItems: 12 },
+            ),
           ),
           mode: opt(strEnum(['combined', 'live'])),
           title: opt(str({ maxLength: 120 })),
