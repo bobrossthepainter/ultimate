@@ -14,7 +14,7 @@ import { SshExecApi } from '../../extensions/ssh-exec/api.ts'
 import type { SshExecService } from '../../extensions/ssh-exec/api.ts'
 import sshExec from '../../extensions/ssh-exec/server.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { sshProtocol } from '../../extensions/ssh-exec/ssh.ts'
+import { sshArgs, sshProtocol } from '../../extensions/ssh-exec/ssh.ts'
 import type { Target } from '../../extensions/ssh-exec/ssh.ts'
 import { temp, until } from '../helpers.ts'
 
@@ -117,7 +117,7 @@ describe.skipIf(!existsSync(sshd))('ssh-exec against a local sshd', () => {
     daemon?.kill()
     if (target)
       try {
-        execFileSync('ssh', ['-o', `ControlPath=${join(sockets, target.id)}`, '-O', 'exit', 'x'], {
+        execFileSync('ssh', [...sshArgs(target, sockets).slice(0, -2), '-O', 'exit', '--', 'x'], {
           stdio: 'ignore',
         })
       } catch {

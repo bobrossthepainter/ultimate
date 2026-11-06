@@ -1,5 +1,6 @@
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { spawnGroup } from '../../lib/process-group.ts'
 import { execFile, spawn } from '../../lib/spawn.ts'
@@ -59,8 +60,22 @@ export function targetsOf(settings: unknown): Target[] {
 export const address = (target: Target) => `${target.user}@${target.host}:${target.port}`
 
 /**
+ * The control socket of `target`'s connection settings: the socket directory outlives a facet reload, and an env built
+ * before a settings change must not reuse a connection to the target's new address, nor the reverse.
+ */
+const socket = (target: Target, sockets: string) => {
+  const { host, port, user, identityFile, knownHostsFile } = target
+  const settings = JSON.stringify([host, port, user, identityFile, knownHostsFile])
+  return join(
+    sockets,
+    `${target.id}-${createHash('sha256').update(settings).digest('hex').slice(0, 12)}`,
+  )
+}
+
+/**
  * ssh's options for `target`: no config files, no prompts, the host key pinned by the target's known_hosts alone (an
- * unknown or changed key is refused, never learned), and one multiplexed connection per target under `sockets`.
+ * unknown or changed key is refused, never learned), and one multiplexed connection per target settings under
+ * `sockets`.
  */
 export const sshArgs = (target: Target, sockets: string) => [
   '-F',
@@ -93,7 +108,7 @@ export const sshArgs = (target: Target, sockets: string) => [
   '-o',
   'ControlMaster=auto',
   '-o',
-  `ControlPath=${join(sockets, target.id)}`,
+  `ControlPath=${socket(target, sockets)}`,
   '-o',
   'ControlPersist=600',
   '-o',
