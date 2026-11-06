@@ -61,7 +61,7 @@ export const address = (target: Target) => `${target.user}@${target.host}:${targ
 
 /**
  * The control socket of `target`'s connection settings: the socket directory outlives a facet reload, and an env built
- * before a settings change must not reuse a connection to the target's new address, nor the reverse.
+ * before a settings change must not reuse a connection to the target's new address, nor the reverse (#11877 review).
  */
 const socket = (target: Target, sockets: string) => {
   const { host, port, user, identityFile, knownHostsFile } = target
