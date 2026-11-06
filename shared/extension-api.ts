@@ -61,6 +61,7 @@ export const coreTier = /^export const tier = 'core'$/m
 export const defaultOff: readonly string[] = [
   'cloud',
   'parallel',
+  'brave',
   'tailscale',
   'ssh-exec',
   'lifecycle',
