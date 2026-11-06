@@ -125,9 +125,12 @@ it.concurrent('ships a resident Ultimate definition with valid tools; standing a
   expect(definition.resident).toBe(true)
   const ultimate = await f.subagents.standing('ultimate', context)
   const agent = await (await f.server.harness.conversation(ultimate, context))!.agent(context)
-  // mcp exists only while mcpServers names a server; the fixture configures none.
+  // mcp exists only while mcpServers names a server; the fixture configures none. review_with_plannotator only while the
+  // off-by-default plannotator extension is enabled (fork-only, .ultimate/FORK.md).
   expect(agent.tools.map((tool) => tool.name).toSorted()).toEqual(
-    definition.tools!.filter((name) => name !== 'mcp').toSorted(),
+    definition
+      .tools!.filter((name) => name !== 'mcp' && name !== 'review_with_plannotator')
+      .toSorted(),
   )
   // debug is deferred: @ultimate names it, the root agent does not get it.
   expect(definition.tools).toContain('debug')
