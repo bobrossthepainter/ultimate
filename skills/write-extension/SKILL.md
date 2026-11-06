@@ -45,6 +45,12 @@ For a full app, "Build an app, step by step".
 - An outcome a user waits for gets a card that matches existing ones (`extensions/subagents/messages.tsx`,
   `extensions/workspaces/log.tsx`), never raw Markdown.
 - Theme tokens only (`text-brand`, `text-muted-foreground`, `border-border/70`); dense and quiet, `font-mono` for meta.
+- **Run a project's programs where the project lives.** The agent's `bash` and an action's `ctx.exec` go through the
+  exec service, which may run them on another machine or container (ssh-exec), so a project's toolchain (Python, a
+  compiler, its CLI) may exist only there, not in Ultimate's own process. Use `ctx.exec` in actions (at most 30 s), and
+  `host.need(Exec).run(cwd, …)` from `extensions/exec/api.ts` for longer work. Never `node:child_process` or
+  `lib/exec.ts`: lint rejects them in extension code (`ultimate/no-unrouted-exec`). Check where a directory runs with
+  codemode `ultimate.action('exec', 'target', { cwd })` and call your action there before trusting a local run.
 
 ## 5. Verify
 

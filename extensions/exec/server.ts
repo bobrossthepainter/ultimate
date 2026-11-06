@@ -19,6 +19,6 @@ export default function exec(host: ExtensionHost) {
   host.want(Protocol)
   const service = createExec(localProtocol, () => host.want(Protocol))
   host.implement(Exec, service)
-  host.executionEnv((cwd) => service.env(cwd))
+  host.execution({ env: service.env, run: service.run })
   return { name: 'exec' }
 }

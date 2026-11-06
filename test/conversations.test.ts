@@ -609,7 +609,11 @@ it.concurrent('conclude merges concurrent additions, deduplicates ids and return
   const ctx = {
     host,
     signal: new AbortController().signal,
-    exec: actionExec('.', new AbortController().signal),
+    exec: actionExec(
+      () => Promise.reject(new Error('no exec here')),
+      '.',
+      new AbortController().signal,
+    ),
   }
   const results = await Promise.all([
     conversationActions.conclude({ ids: [first, first] }, ctx),

@@ -61,6 +61,24 @@ it('rejects process imports and real sleeps, but allows IO yields, fake timers a
   expect(reason.reports).toEqual([])
 })
 
+it('rejects spawning in extension code that bypasses the exec service, but allows types and pure helpers', () => {
+  const f = context()
+  const rule = ultimate.rules['no-unrouted-exec'].create(f.context)
+  for (const source of ['node:child_process', '../../../lib/exec.ts', '../../lib/spawn.ts'])
+    rule.ImportDeclaration(imported(source, 'exec'))
+  rule.ImportDeclaration(imported('../../lib/process-group.ts', 'spawnGroup'))
+  rule.ImportDeclaration(imported('../../lib/git.ts', 'git'))
+  rule.ImportExpression({
+    type: 'ImportExpression',
+    source: { type: 'Literal', value: 'child_process' },
+  })
+  expect(f.reports).toHaveLength(6)
+  rule.ImportDeclaration(imported('../../lib/process-group.ts', 'groupAlive'))
+  rule.ImportDeclaration(imported('../../lib/git.ts', 'isolatable'))
+  rule.ImportDeclaration({ ...imported('node:child_process', 'ChildProcess'), importKind: 'type' })
+  expect(f.reports).toHaveLength(6)
+})
+
 it('rejects retired UI labels case-insensitively and only the board surface property', () => {
   const f = context()
   const rule = ultimate.rules['no-retired-ui'].create(f.context)

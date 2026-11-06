@@ -39,7 +39,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { createBuild } from './build.ts'
-import { spawn } from '../lib/spawn.ts'
+import { execFile, spawn } from '../lib/spawn.ts'
 import { applyHttpProxySettings, configureHttpDispatcher } from './http.ts'
 import type { Notice } from '../shared/protocol.ts'
 
@@ -117,6 +117,16 @@ export function createHarnessSettings(
     followUpMode: 'all',
   }
 }
+/** Where a directory's commands run: Pi's environment for the agent's tools, and `run` for extension actions' `exec`. */
+export type Execution = {
+  env: (cwd: string) => ExecutionEnv
+  run: (
+    cwd: string,
+    file: string,
+    args: readonly string[],
+    options?: Omit<NonNullable<Parameters<typeof execFile>[2]>, 'cwd'>,
+  ) => Promise<{ stdout: string; stderr: string }>
+}
 export interface HostOptions {
   ultimateRoot: string
   projectRoot?: string
@@ -146,11 +156,14 @@ export async function prepareHarness(options: HostOptions) {
   const envs = new Map<string, ExecutionEnv>()
   // Agents' commands start from the process helper (the patched spawn option), never by forking this process. The exec
   // extension replaces this with its service's, which runs a directory where it lives.
-  let build = (cwd: string): ExecutionEnv => new NodeExecutionEnv({ cwd, spawn })
+  let runner: Execution = {
+    env: (cwd) => new NodeExecutionEnv({ cwd, spawn }),
+    run: (cwd, file, args, how) => execFile(file, args, { ...how, cwd }),
+  }
   const env = ({ cwd = projectRoot }: EnvTarget) => {
     let found = envs.get(cwd)
     if (!found) {
-      found = build(cwd)
+      found = runner.env(cwd)
       envs.set(cwd, found)
     }
     return found
@@ -196,10 +209,12 @@ export async function prepareHarness(options: HostOptions) {
       if (!active) throw new Error('Harness is not open')
       return active.storage.scanSubmissions(query, limit, cursor, caller)
     },
-    /** Build the agent's environment in a directory with `next` from now on; environments built before stay. */
-    executionEnv(next: (cwd: string) => ExecutionEnv) {
-      build = next
+    /** Run directories with `next` from now on; the agent's environments built before stay. */
+    execution(next: Execution) {
+      runner = next
     },
+    /** Run `file` in `cwd` where that directory lives, as an extension action's `exec` does. */
+    run: ((...call) => runner.run(...call)) satisfies Execution['run'],
     models: async () => (await listModels(modelRuntime)).models,
     model: (ref: ModelRef) => modelRuntime.getModel(ref.provider, ref.modelId),
     skills: (cwd: string) => projectSkills({ ultimateRoot, projectRoot, userHome }, cwd).skills,

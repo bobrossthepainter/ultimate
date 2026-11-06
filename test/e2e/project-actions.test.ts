@@ -12,6 +12,7 @@ import {
 } from '../helpers.ts'
 import { context } from '../../server/harness.ts'
 import { actionExec } from '../../server/actions.ts'
+import { execFile } from '../../lib/spawn.ts'
 
 const directories: string[] = []
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
@@ -323,7 +324,11 @@ it('discovers clone skills live and lets project skills override them by name', 
 
 it('exec times out, caps output and defaults to the project without a shell', async () => {
   const root = await temp()
-  const exec = actionExec(root, new AbortController().signal)
+  const exec = actionExec(
+    (cwd, file, args, options) => execFile(file, args, { ...options, cwd }),
+    root,
+    new AbortController().signal,
+  )
   expect((await exec(process.execPath, ['-e', 'process.stdout.write(process.cwd())'])).stdout).toBe(
     root,
   )

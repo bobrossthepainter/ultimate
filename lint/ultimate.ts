@@ -13,7 +13,7 @@ interface Node {
   type: string
   name?: string
   id?: Node
-  specifiers?: { type?: string; imported?: Node }[]
+  specifiers?: { type?: string; imported?: Node; importKind?: string }[]
   source?: Node
   value?: unknown
   computed?: boolean
@@ -156,6 +156,46 @@ export default {
           },
           NewExpression(node: Node) {
             if (isGlobal(node.callee, 'EventSource') || isGlobal(node.callee, 'WebSocket'))
+              context.report({ node, message })
+          },
+        }
+      },
+    },
+    'no-unrouted-exec': {
+      meta: { schema: [] },
+      create(context: Context) {
+        const message =
+          "Extension code runs a project's programs where the project lives: ctx.exec in an action, or host.need(Exec) (extensions/exec/README.md). Spawning here runs them in Ultimate's own process, where a project's toolchain may be missing."
+        /** The names `source` must not give a value import of, or true for every name. */
+        const banned = (source: string): true | string[] | undefined =>
+          /^(node:)?child_process$|^execa(?:\/|$)|(^|\/)lib\/(exec|spawn)\.ts$/.test(source)
+            ? true
+            : /(^|\/)lib\/process-group\.ts$/.test(source)
+              ? ['spawnGroup', 'runGroup']
+              : /(^|\/)lib\/git\.ts$/.test(source)
+                ? ['git']
+                : undefined
+        return {
+          ImportDeclaration(node: Node) {
+            const names = banned(typeof node.source?.value === 'string' ? node.source.value : '')
+            if (!names || node.importKind === 'type') return
+            if (
+              names === true ||
+              node.specifiers?.some(
+                (specifier) =>
+                  specifier.importKind !== 'type' &&
+                  (specifier.type === 'ImportNamespaceSpecifier' ||
+                    names.includes(specifier.imported?.name ?? '')),
+              )
+            )
+              context.report({ node, message })
+          },
+          ExportNamedDeclaration(node: Node) {
+            const names = banned(typeof node.source?.value === 'string' ? node.source.value : '')
+            if (names && node.exportKind !== 'type') context.report({ node, message })
+          },
+          ImportExpression(node: Node) {
+            if (typeof node.source?.value === 'string' && banned(node.source.value))
               context.report({ node, message })
           },
         }

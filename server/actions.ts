@@ -1,5 +1,5 @@
-import { exec } from '../lib/exec.ts'
 import type { JsonValue } from '@earendil-works/chord'
+import type { Execution } from './harness.ts'
 import type { Device } from '../shared/events.ts'
 import type { ExtensionHost } from './extensions.ts'
 
@@ -19,10 +19,14 @@ export type ExtensionAction = (
   args: JsonValue,
   ctx: ActionContext,
 ) => JsonValue | Promise<JsonValue>
-export function actionExec(projectRoot: string, signal: AbortSignal): ActionContext['exec'] {
+/** `exec` for an action: `command` in `cwd` where that directory lives (the exec service routes it), never a shell. */
+export function actionExec(
+  run: Execution['run'],
+  cwd: string,
+  signal: AbortSignal,
+): ActionContext['exec'] {
   return (command, args, options = {}) =>
-    exec(command, args, {
-      cwd: options.cwd ?? projectRoot,
+    run(cwd, command, args, {
       signal,
       timeout: Math.max(1, Math.min(options.timeout ?? 30000, 30000)),
       killSignal: 'SIGKILL',

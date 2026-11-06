@@ -3,7 +3,9 @@ import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { expect, it } from 'vitest'
 import type { ExtensionHost } from '../server/extensions.ts'
 import exec, { actions } from '../extensions/exec/server.ts'
+import { actionExec } from '../server/actions.ts'
 import type { ActionContext } from '../server/actions.ts'
+import type { Execution } from '../server/harness.ts'
 import { Exec, Protocol } from '../extensions/exec/api.ts'
 import type { ExecTarget, ExecTargets } from '../extensions/exec/api.ts'
 import type { Group } from '../lib/process-group.ts'
@@ -18,18 +20,22 @@ const target = (id: string, root: string): ExecTarget => ({
   config: null,
 })
 
-/** The exec extension on a hand-built host, with the environment builder it hands the harness. */
+/** The exec extension on a hand-built host, with the execution it hands the harness. */
 function load(protocol?: ExecTargets) {
   const host = apis()
   if (protocol) host.implement(Protocol, protocol)
-  let build: ((cwd: string) => ExecutionEnv) | undefined
+  let execution: Execution | undefined
   exec({
     ...host,
-    executionEnv: (next: (cwd: string) => ExecutionEnv) => {
-      build = next
+    execution: (next: Execution) => {
+      execution = next
     },
   } as unknown as ExtensionHost)
-  return { service: host.provided.get(Exec.name) as typeof Exec.service & object, build: build! }
+  return {
+    service: host.provided.get(Exec.name) as typeof Exec.service & object,
+    build: execution!.env,
+    run: execution!.run,
+  }
 }
 
 it('routes a directory to the target with the longest root containing it, else runs it locally', () => {
@@ -87,6 +93,35 @@ it('hands run, start, git and env under a registered root to its protocol; the r
   // lib/exec.ts stays host-local: a cwd the protocol owns does not reach it.
   await expect(hostExec('pwd', [], { cwd: '/box/app' })).rejects.toThrow('ENOENT')
   expect(calls).toEqual([])
+})
+
+it("runs an extension action's exec where its directory lives, with the action limits", async () => {
+  const calls: unknown[][] = []
+  const { run } = load({
+    targets: () => [target('box', '/box')],
+    run: async (
+      to: ExecTarget,
+      cwd: string,
+      file: string,
+      args: readonly string[],
+      options: unknown,
+    ) => {
+      calls.push([to.id, cwd, file, args, options])
+      return { stdout: 'box-host\n', stderr: '' }
+    },
+  } as unknown as ExecTargets)
+  const signal = new AbortController().signal
+  const ctxExec = actionExec(run, '/box/app', signal)
+  expect((await ctxExec('hostname', [], { timeout: 90_000 })).stdout).toBe('box-host\n')
+  expect(calls).toEqual([
+    [
+      'box',
+      '/box/app',
+      'hostname',
+      [],
+      { signal, timeout: 30000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 },
+    ],
+  ])
 })
 
 it('describes where a directory runs through its protocol, and the target action answers the UI with it', () => {

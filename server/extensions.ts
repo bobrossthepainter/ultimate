@@ -47,7 +47,7 @@ export type ExtensionHost = Pick<
   | 'skills'
   | 'restart'
   | 'chapter'
-  | 'executionEnv'
+  | 'execution'
 > & {
   access: Pick<Access, 'allow'>
   notice(message: string): void
@@ -316,7 +316,7 @@ export async function loadExtensions(
               : await runtime
                   .harness()
                   .snapshot(AgentDoc, conversationId as ConversationId, BACKGROUND_CONTEXT)
-          return actionExec(options?.cwd ?? agent?.cwd ?? host.projectRoot, signal)(
+          return actionExec(host.run, options?.cwd ?? agent?.cwd ?? host.projectRoot, signal)(
             command,
             commandArgs,
             options,
@@ -376,7 +376,7 @@ export async function loadExtensions(
     models: () => host.models(),
     skills: (cwd) => host.skills(cwd),
     restart: (approved) => host.restart(approved),
-    executionEnv: (build) => host.executionEnv(build),
+    execution: (next) => host.execution(next),
     get chapter() {
       return host.chapter
     },
