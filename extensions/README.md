@@ -81,8 +81,9 @@ project is Ultimate itself, that is `.ultimate/extensions/` in the clone, not `e
 
 Extensions outside the clone import exactly what built-ins import (`@/sdk`, `@/components/…`, `react`,
 `lucide-react`, any package installed in the clone): Ultimate resolves those from its clone, and Tailwind picks up their
-classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`; extensions of
-other projects are not checked by anything, so try them in the browser. Agents live in the same three places
+classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`; for extensions of
+other projects, the `check_extensions` tool ([check-extensions](check-extensions/README.md)) formats, lints and
+type-checks them with the clone's config. Then try them in the browser. Agents live in the same three places
 (`agents/`); an enabled extension may also ship an `agents/` folder. Those definitions load as built-ins before
 user/project definitions and overlays, and disappear when the extension is disabled. Skills load as [Discovery and settings](../docs/settings.md) describes, later scopes winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
 [Surfaces](#surfaces)).
@@ -916,8 +917,8 @@ For a request such as "build a triage surface for this repo's GitHub issues":
 6. **Write `README.md`**, opening with one sentence; the Info panel shows it.
 7. **Look at it.** Switch to it, take a screenshot, and go through every state: loading, empty, error, setup, many
    items, a long title; then the light theme (⌘K, "Toggle light and dark theme"). Fix what looks off.
-8. **Verify and commit**: `pnpm check` in the clone (it covers `.ultimate/extensions/`), then commit the folder with the
-   project.
+8. **Verify and commit**: `pnpm check` in the clone (it covers `.ultimate/extensions/`), or the `check_extensions` tool
+   for another project's extensions, then commit the folder with the project.
 
 Keep in mind:
 

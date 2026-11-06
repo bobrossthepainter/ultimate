@@ -55,6 +55,8 @@ For a full app, "Build an app, step by step".
 ## 5. Verify
 
 1. Server actions first: call them with codemode `ultimate.action(extension, action, args)`.
-2. `pnpm check` in the clone (format, lint, types, import boundaries, the dependency graph).
+2. `pnpm check` in the clone (format, lint, types, import boundaries, the dependency graph). For an extension outside
+   the clone (another project's `.ultimate/extensions/`, `~/.ultimate/extensions/`), call the `check_extensions` tool
+   on its folder instead; never guess with `npx prettier` or `tsc`.
 3. Tests for behaviour behind it: fast tests in `test/`, no real waits.
 4. Look at it: follow the `verify-ui` skill (a preview of your checkout for anything outside the running host).
