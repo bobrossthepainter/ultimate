@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { ConversationId } from '@earendil-works/pi-durable'
@@ -136,6 +136,23 @@ it('reviews several repositories as one patch and hands the feedback back as the
     expect(entries.at(-1)?.kind).toBe('pi.assistant')
     const overview = (await action('overview', null)).data.result
     expect(overview.sessions[0]).toMatchObject({ id: session.id, state: 'annotated' })
+
+    // Stop ends a session for good: a decision it prints while stopping is not delivered, and its port is free again.
+    await rm(join(dir, 'decision.json'))
+    const second = (await action('start', { items: [{ repo: join(home, 'alpha') }] }, target)).data
+      .result
+    expect(second).toMatchObject({
+      mode: 'single',
+      state: 'running',
+      url: 'http://127.0.0.1:19432',
+    })
+    const before = (await conversation.context(context)).entries.length
+    await writeFile(join(dir, 'decision.json'), JSON.stringify({ decision: 'approved' }))
+    expect((await action('stop', { id: second.id })).status).toBe(200)
+    const stopped = (await action('overview', null)).data.result.sessions[0]
+    expect(stopped).toMatchObject({ id: second.id, state: 'stopped' })
+    await server.harness.waitForIdle(context)
+    expect((await conversation.context(context)).entries.length).toBe(before)
   } finally {
     await server.close()
   }

@@ -7,7 +7,7 @@ import { defineEntry, defineExtension, defineTool } from '@earendil-works/pi-dur
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { arr, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { implementAction } from '../../lib/actions.ts'
-import { spawnGroup, stopGroup } from '../../lib/process-group.ts'
+import { closeOutput, spawnGroup, stopGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import type { Group } from '../../lib/process-group.ts'
 import { strEnum } from '../../lib/schema.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -59,16 +59,43 @@ export type PlannotatorResult = {
 }
 export const ResultEntry = defineEntry<PlannotatorResult>('plannotator.result')
 
-type Running = Session & { group?: Group; port?: number; folder?: string }
+/**
+ * A session and what it holds until `teardown` has freed it: its port (taken until then, so no new session reuses it
+ * early), its process group, its Caddy route and its folder. `ended` is set once, by whoever ends it first.
+ */
+type Running = Session & {
+  port: number
+  group?: Group
+  folder?: string
+  published?: number
+  ended?: Promise<void>
+  freed?: boolean
+}
 
-/** The sessions of this process: they outlive a reload of this facet, and stop with the server. */
+/**
+ * The sessions of this process: they outlive a reload of this facet, and stop with the server. A crash leaves pid
+ * files under `sessions/`; the next start stops what they name and removes the folders.
+ */
 function state(host: ExtensionHost) {
   return host.resource('plannotator', () => {
     const sessions = new Map<string, Running>()
     host.onClose(async () => {
-      await Promise.all([...sessions.values()].map((session) => halt(host, session, 'stopped')))
+      // Caddy drops this process's published routes itself at shutdown, after the services are gone.
+      await Promise.all([...sessions.values()].map((session) => finish(host, session, 'stopped')))
     })
     return sessions
+  })
+}
+
+/**
+ * What a crashed server left: its sessions' process groups and folders. Once per process, before it starts any session
+ * (`start` awaits it), so it never touches this server's own.
+ */
+function swept(host: ExtensionHost) {
+  return host.resource('plannotator:sweep', async () => {
+    const dir = paths(host.userHome).sessions
+    await sweepPidFiles(dir)
+    await rm(dir, { recursive: true, force: true })
   })
 }
 
@@ -131,14 +158,15 @@ async function defaultBranch(host: ExtensionHost, top: string) {
   return undefined
 }
 
-/** Distinct, readable path prefixes: a repository's folder name, numbered when two share it. */
-function names(dirs: string[]) {
-  const seen = new Map<string, number>()
+/** Distinct, readable path prefixes: a repository's folder name, numbered past every name already given. */
+export function names(dirs: string[]) {
+  const used = new Set<string>()
   return dirs.map((dir) => {
     const name = basename(dir).replace(/[^A-Za-z0-9._-]/g, '_') || 'repo'
-    const count = (seen.get(name) ?? 0) + 1
-    seen.set(name, count)
-    return count === 1 ? name : `${name}-${count}`
+    let label = name
+    for (let count = 2; used.has(label); count++) label = `${name}-${count}`
+    used.add(label)
+    return label
   })
 }
 
@@ -187,55 +215,69 @@ async function combinedPatch(host: ExtensionHost, repos: SessionRepo[]) {
   return parts.filter(Boolean).join('\n')
 }
 
-/** Starts `plannotator review` for `session` and returns once it serves, or throws its output. */
-async function launch(
-  host: ExtensionHost,
-  session: Running,
-  args: string[],
-  cwd: string,
-  onEnd: (decision: Decision | undefined, output: string) => Promise<void>,
-) {
+/**
+ * Starts `plannotator review` for `session` and returns once it serves, or throws its output. Once it exits, its full
+ * stdout is read and the session finishes with the decision it printed.
+ */
+async function launch(host: ExtensionHost, session: Running, args: string[], cwd: string) {
   const files = paths(host.userHome)
   await mkdir(files.data, { recursive: true, mode: 0o700 })
   // Plannotator reads `updateCheck` only from its config: off, so a session asks GitHub for no release record.
   const config = join(files.data, 'config.json')
   if (!existsSync(config)) await writeFile(config, '{ "updateCheck": false }\n')
+  const { PLANNOTATOR_ALLOWED_HOSTS: _inherited, ...parent } = process.env
   const env = {
-    ...process.env,
+    ...parent,
     BROWSER: 'none',
     PLANNOTATOR_DATA_DIR: files.data,
     PLANNOTATOR_PORT: String(session.port),
     PLANNOTATOR_SHARE: 'disabled',
     PLANNOTATOR_AI: 'disabled',
     PLANNOTATOR_GIT_REMOTE_CHECK: '0',
-    ...(session.url && { PLANNOTATOR_ALLOWED_HOSTS: new URL(session.url).hostname }),
+    // Plannotator refuses a Host header other than its own: the Caddy domain only when the session is published there.
+    ...(session.published !== undefined && {
+      PLANNOTATOR_ALLOWED_HOSTS: new URL(session.url!).hostname,
+    }),
   }
-  // Plannotator is Ultimate's own host-local tool, like Caddy: it serves on this machine's loopback for its browser.
-  const group = spawnGroup(files.binary, ['review', '--json', ...args], { cwd, env, grace: 3000 })
+  // Stopped while the folders were made: start nothing.
+  if (session.ended) throw new Error('The Plannotator session was stopped while it started')
+  // Plannotator is Ultimate's own host-local tool, like Caddy: it serves on this machine's loopback for its browser. Its
+  // pid file lets the next start stop it after a crash of this server.
+  await mkdir(files.sessions, { recursive: true })
+  if (session.ended) throw new Error('The Plannotator session was stopped while it started')
+  const group = spawnGroup(files.binary, ['review', '--json', ...args], {
+    cwd,
+    env,
+    grace: 3000,
+    pidFile: join(files.sessions, `${session.id}.pid`),
+  })
   session.group = group
   let stdout = ''
   let output = ''
   group.child.stdout.setEncoding('utf8')
   group.child.stderr.setEncoding('utf8')
   group.child.stdout.on('data', (chunk: string) => (stdout += chunk))
-  group.child.stderr.on('data', (chunk: string) => (output = (output + chunk).slice(-4000)))
   const ready = Promise.withResolvers<void>()
-  group.child.stderr.on('data', () => {
+  group.child.stderr.on('data', (chunk: string) => {
+    output = (output + chunk).slice(-4000)
     if (/session ready/i.test(output)) ready.resolve()
   })
   group.child.once('error', (error) => ready.reject(error))
   group.child.once('exit', () => {
     ready.reject(new Error(output.trim() || 'Plannotator exited before it served'))
-    const line = stdout.trim().split('\n').at(-1)
-    let decision: Decision | undefined
-    try {
-      decision = line ? (JSON.parse(line) as Decision) : undefined
-    } catch {
-      // Not its JSON record: the session failed, and its output says why.
-    }
-    void onEnd(decision, output).catch((error: unknown) =>
-      host.notice(`Plannotator: ${String(error)}`),
-    )
+    // The exit can come before the last of stdout: the decision is read once the pipes have closed.
+    void closeOutput(group)
+      .then(() => {
+        const line = stdout.trim().split('\n').at(-1)
+        let decision: Decision | undefined
+        try {
+          decision = line ? (JSON.parse(line) as Decision) : undefined
+        } catch {
+          // Not its JSON record: the session failed, and its output says why.
+        }
+        return finish(host, session, decision?.decision ?? 'failed', decision, output)
+      })
+      .catch((error: unknown) => host.notice(`Plannotator: ${String(error)}`))
   })
   const timer = setTimeout(
     () => ready.reject(new Error('Plannotator did not serve within 30 s')),
@@ -248,23 +290,43 @@ async function launch(
   }
 }
 
-async function halt(host: ExtensionHost, session: Running, end: Session['state']) {
-  if (session.state === 'running' || session.state === 'starting') {
+/**
+ * Ends `session` once, whoever comes first (its exit, Stop, a failed start, shutdown): records how it ended, stops its
+ * process group, frees its route and folder, and only then gives up its port. Only the exit that ended a running
+ * session delivers its decision; after Stop nothing is delivered.
+ */
+function finish(
+  host: ExtensionHost,
+  session: Running,
+  end: Session['state'],
+  decision?: Decision,
+  output = '',
+) {
+  session.ended ??= (async () => {
+    const delivers = session.state === 'running' && decision !== undefined
     session.state = end
     session.endedAt = new Date().toISOString()
-  }
-  const pid = session.group?.child.pid
-  if (pid !== undefined && session.group!.child.exitCode === null)
-    await stopGroup(pid, { leader: session.group, grace: 3000 })
-  await release(host, session)
-}
-
-/** Frees what a session held: its Caddy route and its folder of links. */
-async function release(host: ExtensionHost, session: Running) {
-  if (session.port !== undefined && session.url && session.url !== session.local)
-    await host.want(CaddyApi)?.unpublish(PUBLISH + PORTS.indexOf(session.port))
-  if (session.folder) await rm(session.folder, { recursive: true, force: true })
-  session.folder = undefined
+    if (end === 'failed' && output && !session.error)
+      session.error = output.trim().split('\n').slice(-5).join('\n')
+    // Also once it exited by itself: stopGroup then only waits for the group and removes the pid file.
+    const group = session.group
+    if (group?.child.pid !== undefined)
+      await stopGroup(group.child.pid, {
+        leader: group,
+        grace: 3000,
+        pidFile: join(paths(host.userHome).sessions, `${session.id}.pid`),
+      })
+    if (session.published !== undefined)
+      try {
+        await host.want(CaddyApi)?.unpublish(session.published)
+      } catch {
+        // At shutdown the service is gone; Caddy then drops this process's routes itself.
+      }
+    if (session.folder) await rm(session.folder, { recursive: true, force: true })
+    session.freed = true
+    if (delivers) await deliver(host, session, decision)
+  })()
+  return session.ended
 }
 
 /** The result as the input of the conversation that started the review: it steers a busy one, like a typed message. */
@@ -313,6 +375,7 @@ async function start(
   const files = paths(host.userHome)
   if (!existsSync(files.binary))
     throw new Error(`Plannotator ${VERSION} is not installed: ⌘K → Install Plannotator.`)
+  await swept(host)
   const items = Array.isArray(input.items) ? (input.items as ReviewItem[]) : []
   if (!items.length || items.length > 12) throw new Error('Give 1 to 12 items to review')
   if (input.mode !== undefined && input.mode !== 'combined' && input.mode !== 'live')
@@ -324,9 +387,12 @@ async function start(
   const labels = names(located.map((repo) => repo.path))
   const repos = located.map((repo, index) => ({ ...repo, name: labels[index] }))
   const sessions = state(host)
-  for (const [id, old] of [...sessions].filter(([, item]) => !live(item)).slice(0, -KEEP))
-    if (old) sessions.delete(id)
-  const taken = new Set([...sessions.values()].filter(live).map((item) => item.port))
+  for (const [id] of [...sessions].filter(([, item]) => item.freed).slice(0, -KEEP))
+    sessions.delete(id)
+  // A port stays taken until its session is freed, not only while it runs.
+  const taken = new Set(
+    [...sessions.values()].filter((item) => !item.freed).map((item) => item.port),
+  )
   const port = PORTS.find((candidate) => !taken.has(candidate))
   if (port === undefined)
     throw new Error(`${PORTS.length} Plannotator sessions run already; stop one first.`)
@@ -353,53 +419,59 @@ async function start(
     startedAt: new Date().toISOString(),
   }
   sessions.set(session.id, session)
+  // Stop during any await below ends the session; each step checks before it goes on.
+  const stopped = () => {
+    if (session.ended) throw new Error('The Plannotator session was stopped while it started')
+  }
   try {
-    session.url =
-      (await host.want(CaddyApi)?.publish(PUBLISH + PORTS.indexOf(port), local)) ?? local
+    const publish = PUBLISH + PORTS.indexOf(port)
+    const url = await host.want(CaddyApi)?.publish(publish, local)
+    if (url) {
+      session.published = publish
+      session.url = url
+    }
+    stopped()
     let args: string[]
     let cwd: string
     if (session.mode === 'single') {
       const [repo] = repos
       args = [...(repo.base ? ['--base', repo.base] : []), '--title', title, repo.path]
       cwd = repo.path
-    } else if (session.mode === 'live') {
-      // A folder of links, one per repository: Plannotator follows them and shows each under its name.
-      session.folder = join(files.sessions, session.id)
-      await mkdir(session.folder, { recursive: true })
-      for (const repo of repos) await symlink(repo.path, join(session.folder, repo.name))
-      args = ['--title', title, session.folder]
-      cwd = session.folder
     } else {
       session.folder = join(files.sessions, session.id)
       await mkdir(session.folder, { recursive: true })
-      const patch = join(session.folder, 'review.patch')
-      await writeFile(patch, await combinedPatch(host, repos))
-      args = ['--title', title, '--patch-file', patch]
+      if (session.mode === 'live') {
+        // A folder of links, one per repository: Plannotator follows them and shows each under its name.
+        for (const repo of repos) await symlink(repo.path, join(session.folder, repo.name))
+        args = ['--title', title, session.folder]
+      } else {
+        const patch = join(session.folder, 'review.patch')
+        await writeFile(patch, await combinedPatch(host, repos))
+        args = ['--title', title, '--patch-file', patch]
+      }
       cwd = session.folder
     }
-    await launch(host, session, args, cwd, async (decision, output) => {
-      if (session.state === 'running' || session.state === 'starting') {
-        session.state = decision?.decision ?? 'failed'
-        if (!decision) session.error = output.trim().split('\n').slice(-5).join('\n')
-        session.endedAt = new Date().toISOString()
-      }
-      await release(host, session)
-      if (decision) await deliver(host, session, decision)
-    })
+    stopped()
+    await launch(host, session, args, cwd)
+    stopped()
     session.state = 'running'
   } catch (error) {
-    session.state = 'failed'
-    session.error = String(error instanceof Error ? error.message : error).slice(0, 1000)
-    session.endedAt = new Date().toISOString()
-    await halt(host, session, 'failed')
+    session.error ??= String(error instanceof Error ? error.message : error).slice(0, 1000)
+    await finish(host, session, session.ended ? session.state : 'failed')
     throw error
   }
   return view(session)
 }
 
-const live = (session: Session) => session.state === 'starting' || session.state === 'running'
-const view = ({ group: _group, port: _port, folder: _folder, ...session }: Running): Session =>
-  session
+const view = ({
+  group: _group,
+  port: _port,
+  folder: _folder,
+  published: _published,
+  ended: _ended,
+  freed: _freed,
+  ...session
+}: Running): Session => session
 
 export const userActions = ['install']
 export const pollActions = ['overview']
@@ -438,12 +510,17 @@ export const actions: Record<string, ExtensionAction> = {
     const id = args && typeof args === 'object' && !Array.isArray(args) ? args.id : undefined
     const session = typeof id === 'string' ? state(host).get(id) : undefined
     if (!session) throw new Error('No such Plannotator session')
-    await halt(host, session, 'stopped')
+    await finish(
+      host,
+      session,
+      session.state === 'running' || session.state === 'starting' ? 'stopped' : session.state,
+    )
     return { stopped: session.id }
   }),
 }
 
 export default function plannotator(host: ExtensionHost) {
+  swept(host).catch((error: unknown) => host.notice(`Plannotator: ${String(error)}`))
   state(host)
   host.want(CaddyApi)
   return defineExtension({

@@ -421,12 +421,21 @@ export const actions: Record<string, ExtensionAction> = {
     if (!(await host.projects()).some((project) => project.root === root))
       throw new Error(`No Ultimate project at ${root}`)
     let port: number | undefined
+    // Ports another extension published (CaddyApi) while its server runs are taken too.
+    const published = Object.entries(
+      (await readJson<Registry>(paths(host.userHome).registry, { routes: {} })).routes,
+    )
+      .filter(([, route]) => route.published && alive(Number(route.owner.split(':')[0])))
+      .map(([key]) => Number(key))
     await updateCaddy(host.userHome, (previous) => {
       const serve = { ...previous.serve }
       if (on) {
-        const taken = new Set(
-          Object.entries(serve).flatMap(([other, entry]) => (other === root ? [] : [entry.port])),
-        )
+        const taken = new Set([
+          ...published,
+          ...Object.entries(serve).flatMap(([other, entry]) =>
+            other === root ? [] : [entry.port],
+          ),
+        ])
         const kept = serve[root]?.port
         port = PORT(kept) && !taken.has(kept) ? kept : nextPort(configOf(previous).port, taken)
         serve[root] = { port }
@@ -619,8 +628,24 @@ export default function caddy(host: ExtensionHost) {
     set({ state: 'off' })
   })
   host.want(TailscaleApi)
-  // A published route belongs to this process, not to this facet's install: it outlives a reload of caddy.
+  // A published route belongs to this process, not to this facet's install: it outlives a reload of caddy, and goes
+  // with the process. Its cleanup needs no service, so it runs after every provider is gone at shutdown.
   const ours = (route: Route) => route.owner.split(':')[0] === String(process.pid)
+  host.resource('caddy:published', () => {
+    host.onClose(async () => {
+      const config = configOf(await settingsOf(host.userHome))
+      const token = config.dns ? await readSecret(host.userHome, TOKEN) : undefined
+      await withRegistry(files, host.userHome, async (registry) => {
+        const mine = Object.keys(registry.routes).filter(
+          (key) => registry.routes[key].published && ours(registry.routes[key]),
+        )
+        if (!mine.length) return
+        for (const key of mine) delete registry.routes[key]
+        if (config.domain && (await running(files))) await apply(files, config, registry, token)
+      })
+    })
+    return true
+  })
   host.implement(CaddyApi, {
     async publish(port, target) {
       const settings = await settingsOf(host.userHome)
@@ -631,6 +656,9 @@ export default function caddy(host: ExtensionHost) {
       if (config.dns && !token) return undefined
       if (!(await probe(files, config.dns))) return undefined
       const key = String(port)
+      // A ticked project keeps its port while it is stopped, so a published service never takes it.
+      const reserved = Object.entries(settings.serve ?? {}).find(([, entry]) => entry.port === port)
+      if (reserved) throw new Error(`Port ${port} is served for ${reserved[0]}`)
       await withRegistry(files, host.userHome, async (registry) => {
         const holder = registry.routes[key]
         if (holder && !(holder.published && ours(holder)))

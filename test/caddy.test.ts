@@ -91,6 +91,7 @@ async function instance(home: string, projectRoot = '/project/a', port = 4801) {
     onClose: (fn: () => Promise<void>) => cleanups.push(fn),
     want: () => undefined,
     implement: (_api: unknown, value: CaddyService) => (service = value),
+    resource: <T>(_key: string, create: () => T) => create(),
   } as unknown as ExtensionHost
   let service: CaddyService | undefined
   caddy(host)
@@ -141,6 +142,25 @@ it("publishes another extension's loopback service on its own port while the ser
   await server.service.unpublish(9480)
   expect(loads.at(-1)).not.toContain(':9480 {')
   expect(loads.at(-1)).toContain('ultimate.example.com:9443 {')
+
+  // A stopped project keeps its ticked port: no published service takes it.
+  await writeFile(
+    join(home, '.ultimate/settings.json'),
+    JSON.stringify({
+      caddy: {
+        domain: 'ultimate.example.com',
+        dns: 'cloudflare',
+        serve: { '/project/a': { port: 9443 }, '/project/stopped': { port: 9481 } },
+      },
+    }),
+  )
+  await expect(server.service.publish(9481, 'http://127.0.0.1:19433')).rejects.toThrow(
+    'Port 9481 is served for /project/stopped',
+  )
+  // Shutdown drops what this process published, after the services are gone.
+  await server.service.publish(9480, 'http://127.0.0.1:19432')
+  await server.close()
+  expect(loads.at(-1)).not.toContain(':9480 {')
 })
 
 it('gives each ticked project the next free port, and keeps it when ticked again', async () => {
