@@ -16,6 +16,7 @@ tools:
     branch,
     web_search,
     web_fetch,
+    review_with_plannotator,
     mcp,
     setup,
     compact,

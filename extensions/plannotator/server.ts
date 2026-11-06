@@ -340,7 +340,12 @@ async function start(
     conversation,
     title,
     mode: repos.length === 1 ? 'single' : mode,
-    repos: repos.map(({ name, path, base }) => ({ name, path, ...(base && { base }) })),
+    // Plannotator's multi-repository view takes no base, so none is shown for it.
+    repos: repos.map(({ name, path, base }) => ({
+      name,
+      path,
+      ...(base && (repos.length === 1 || mode === 'combined') && { base }),
+    })),
     state: 'starting',
     port,
     local,
