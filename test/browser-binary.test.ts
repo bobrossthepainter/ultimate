@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { playwrightChromiums } from '../extensions/browser/server.ts'
+import { playwrightChromiums, sandboxHint } from '../extensions/browser/server.ts'
 import { removeTemps, temp } from './helpers.ts'
 
 afterEach(removeTemps)
@@ -49,4 +49,16 @@ it('finds Playwright Chromium in the Linux cache, newest build first', async () 
     join(cache, 'chromium-998', 'chrome-linux64/chrome'),
   ])
   expect(await playwrightChromiums(home, 'darwin', 'arm64')).toEqual([])
+})
+
+// #16704: in a pod that blocks user namespaces, the launch failed with Playwright's text alone.
+it('names ULTIMATE_CHROMIUM_SANDBOX when Chromium has no usable sandbox', () => {
+  const launch = new Error(
+    'browserType.launch: FATAL:zygote_host_impl_linux.cc:130] No usable sandbox!',
+  )
+  const hinted = sandboxHint(launch) as Error
+  expect(hinted.message).toContain('ULTIMATE_CHROMIUM_SANDBOX=0')
+  expect(hinted.message).toContain(launch.message)
+  const other = new Error('Target page, context or browser has been closed')
+  expect(sandboxHint(other)).toBe(other)
 })
