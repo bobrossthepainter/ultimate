@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import caddy, { actions, caddyfilePath } from '../extensions/caddy/server.ts'
 import type { Status } from '../extensions/caddy/refs.ts'
+import type { CaddyService } from '../extensions/caddy/api.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { createAccess } from '../server/request-security.ts'
 import { projectHome } from '../server/project.ts'
@@ -89,7 +90,9 @@ async function instance(home: string, projectRoot = '/project/a', port = 4801) {
     onOpen: (fn: () => Promise<void>) => openers.push(fn),
     onClose: (fn: () => Promise<void>) => cleanups.push(fn),
     want: () => undefined,
+    implement: (_api: unknown, value: CaddyService) => (service = value),
   } as unknown as ExtensionHost
+  let service: CaddyService | undefined
   caddy(host)
   await Promise.all(openers.map((fn) => fn()))
   const close = async () => {
@@ -98,7 +101,7 @@ async function instance(home: string, projectRoot = '/project/a', port = 4801) {
   closes.unshift(close)
   const status = () =>
     actions.status(null, { host } as Parameters<typeof actions.status>[1]) as Status
-  return { host, access, notices, close, status }
+  return { host, access, notices, close, status, service: service! }
 }
 
 it('routes a ticked project through Caddy and admits its origin, without the token in any config', async () => {
@@ -120,6 +123,24 @@ it('routes a ticked project through Caddy and admits its origin, without the tok
   await server.close()
   expect(server.access.origins()).toEqual([])
   expect(loads.at(-1)).not.toContain(':9443 {')
+})
+
+it("publishes another extension's loopback service on its own port while the server runs", async () => {
+  const { home, loads } = await fixture()
+  const server = await instance(home)
+  expect(await server.service.publish(9480, 'http://127.0.0.1:19432')).toBe(
+    'https://ultimate.example.com:9480',
+  )
+  expect(loads.at(-1)).toContain('ultimate.example.com:9480 {')
+  expect(loads.at(-1)).toContain('reverse_proxy 127.0.0.1:19432')
+  // The project's own route stays, and its port is refused to a published service.
+  expect(loads.at(-1)).toContain('ultimate.example.com:9443 {')
+  await expect(server.service.publish(9443, 'http://127.0.0.1:19433')).rejects.toThrow(
+    'Port 9443 is served for /project/a',
+  )
+  await server.service.unpublish(9480)
+  expect(loads.at(-1)).not.toContain(':9480 {')
+  expect(loads.at(-1)).toContain('ultimate.example.com:9443 {')
 })
 
 it('gives each ticked project the next free port, and keeps it when ticked again', async () => {

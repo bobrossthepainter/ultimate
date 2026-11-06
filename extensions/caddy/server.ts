@@ -17,6 +17,7 @@ import { implementAction } from '../../lib/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ExtensionAction } from '../../server/actions.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
+import { CaddyApi } from './api.ts'
 import {
   ConfigureAction,
   InstallAction,
@@ -31,8 +32,11 @@ import type { Config, Overview, Project, Status } from './refs.ts'
 export const TOKEN = 'CADDY_DNS_API_TOKEN'
 /** `caddy` in user settings: the setup, and the projects ticked "serve by Caddy" by root, with their HTTPS port. */
 type Settings = Partial<Config> & { serve?: Record<string, { port: number }> }
-/** One routed port (the registry's key): the project's root, its loopback target, and the server that owns the route. */
-type Route = { root: string; target: string; owner: string }
+/**
+ * One routed port (the registry's key): the project's root, its loopback target, and the server that owns the route.
+ * A `published` route is another extension's loopback service (`CaddyApi.publish`), kept while its owner runs.
+ */
+type Route = { root: string; target: string; owner: string; published?: true }
 type Registry = { routes: Record<string, Route>; token?: string }
 
 const paths = (userHome: string) => {
@@ -190,7 +194,8 @@ const digest = (token: string | undefined) =>
  * the next project to take, even before the old server removes its route; a route from before ports matches no port.
  */
 const holds = (port: string, route: Route, settings: Settings) =>
-  alive(Number(route.owner.split(':')[0])) && String(settings.serve?.[route.root]?.port) === port
+  alive(Number(route.owner.split(':')[0])) &&
+  (route.published || String(settings.serve?.[route.root]?.port) === port)
 
 async function withRegistry<T>(
   files: Paths,
@@ -355,7 +360,7 @@ export const actions: Record<string, ExtensionAction> = {
     const tailnet = host.want(TailscaleApi)?.status().url
     const routed = new Set(
       Object.entries(registry.routes)
-        .filter(([port, route]) => holds(port, route, settings))
+        .filter(([port, route]) => !route.published && holds(port, route, settings))
         .map(([, route]) => route.root),
     )
     return {
@@ -614,6 +619,38 @@ export default function caddy(host: ExtensionHost) {
     set({ state: 'off' })
   })
   host.want(TailscaleApi)
+  // A published route belongs to this process, not to this facet's install: it outlives a reload of caddy.
+  const ours = (route: Route) => route.owner.split(':')[0] === String(process.pid)
+  host.implement(CaddyApi, {
+    async publish(port, target) {
+      const settings = await settingsOf(host.userHome)
+      const config = configOf(settings)
+      if (temporary || !settings.serve?.[host.projectRoot] || !config.domain) return undefined
+      if (!config.dns && !config.cert) return undefined
+      const token = config.dns ? await readSecret(host.userHome, TOKEN) : undefined
+      if (config.dns && !token) return undefined
+      if (!(await probe(files, config.dns))) return undefined
+      const key = String(port)
+      await withRegistry(files, host.userHome, async (registry) => {
+        const holder = registry.routes[key]
+        if (holder && !(holder.published && ours(holder)))
+          throw new Error(`Port ${port} is served for ${holder.root}`)
+        registry.routes[key] = { root: host.projectRoot, target, owner, published: true }
+        await apply(files, config, registry, token)
+      })
+      return originOf(port, config)
+    },
+    async unpublish(port) {
+      const config = configOf(await settingsOf(host.userHome))
+      const token = config.dns ? await readSecret(host.userHome, TOKEN) : undefined
+      await withRegistry(files, host.userHome, async (registry) => {
+        const route = registry.routes[String(port)]
+        if (!route?.published || !ours(route)) return
+        delete registry.routes[String(port)]
+        if (config.domain && (await running(files))) await apply(files, config, registry, token)
+      })
+    },
+  })
   set(status)
   return defineExtension({ name: 'caddy' })
 }
