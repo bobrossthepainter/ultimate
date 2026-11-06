@@ -68,6 +68,18 @@ export async function browserBinary() {
   )
 }
 
+/**
+ * A launch error that names the opt-out when Chromium cannot build its sandbox (a container blocking user namespaces,
+ * #16704); Playwright's own text names only its `chromiumSandbox` option.
+ */
+export function sandboxHint(error: unknown) {
+  if (!(error instanceof Error) || !error.message.includes('No usable sandbox')) return error
+  return new Error(
+    `Chromium cannot build its sandbox here. Set ULTIMATE_CHROMIUM_SANDBOX=0 in the environment Ultimate starts in to launch it without one: that removes Chromium's sandbox, so the machine or container is the only boundary around pages the agent opens.\n\n${error.message}`,
+    { cause: error },
+  )
+}
+
 /** The PNG's absolute path: `path` against the conversation's cwd, else a new file in the home's screenshots. */
 export function screenshotFile(home: string, cwd: string, path?: string) {
   if (path === undefined) return join(home, 'screenshots', `${Date.now()}-${randomUUID()}.png`)
@@ -415,7 +427,7 @@ export default function browserExtension(host: ExtensionHost) {
           })
           .catch((error) => {
             if (state.launched === launched) state.launched = undefined
-            throw error
+            throw sandboxHint(error)
           })
         state.launched = launched
       }
