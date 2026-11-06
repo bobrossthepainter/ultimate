@@ -250,14 +250,32 @@ async function apply(files: Paths, config: Config, registry: Registry, token: st
  * Changes `caddy` in user settings under a machine-wide lock: every Ultimate's panel writes it, and settings files
  * serialize writes only within one process.
  */
-async function updateCaddy(userHome: string, change: (previous: Settings) => Settings) {
+async function updateCaddy(
+  userHome: string,
+  change: (previous: Settings, published: Set<number>) => Settings,
+) {
+  await allocating(userHome, async (published) => {
+    await updateSettings(userSettingsPath(userHome), (settings) => {
+      settings.caddy = change((settings.caddy ?? {}) as Settings, published)
+    })
+  })
+}
+
+/**
+ * Runs `use` while holding the machine-wide settings lock: ticking a project and publishing a service both give out
+ * ports, so each reads the other's (settings' `serve`, the registry's live published routes) under this one lock.
+ * Taken before the registry lock, never inside it.
+ */
+async function allocating<T>(userHome: string, use: (published: Set<number>) => Promise<T>) {
   const files = paths(userHome)
   await mkdir(files.dir, { recursive: true, mode: 0o700 })
   const lock = await acquireLock(join(files.dir, 'settings.lock'), { pid: process.pid }, 30000)
   try {
-    await updateSettings(userSettingsPath(userHome), (settings) => {
-      settings.caddy = change((settings.caddy ?? {}) as Settings)
-    })
+    const registry = await readJson<Registry>(files.registry, { routes: {} })
+    const published = Object.entries(registry.routes)
+      .filter(([, route]) => route.published && alive(Number(route.owner.split(':')[0])))
+      .map(([key]) => Number(key))
+    return await use(new Set(published))
   } finally {
     await lock.close()
   }
@@ -422,12 +440,7 @@ export const actions: Record<string, ExtensionAction> = {
       throw new Error(`No Ultimate project at ${root}`)
     let port: number | undefined
     // Ports another extension published (CaddyApi) while its server runs are taken too.
-    const published = Object.entries(
-      (await readJson<Registry>(paths(host.userHome).registry, { routes: {} })).routes,
-    )
-      .filter(([, route]) => route.published && alive(Number(route.owner.split(':')[0])))
-      .map(([key]) => Number(key))
-    await updateCaddy(host.userHome, (previous) => {
+    await updateCaddy(host.userHome, (previous, published) => {
       const serve = { ...previous.serve }
       if (on) {
         const taken = new Set([
@@ -656,15 +669,19 @@ export default function caddy(host: ExtensionHost) {
       if (config.dns && !token) return undefined
       if (!(await probe(files, config.dns))) return undefined
       const key = String(port)
-      // A ticked project keeps its port while it is stopped, so a published service never takes it.
-      const reserved = Object.entries(settings.serve ?? {}).find(([, entry]) => entry.port === port)
-      if (reserved) throw new Error(`Port ${port} is served for ${reserved[0]}`)
-      await withRegistry(files, host.userHome, async (registry) => {
-        const holder = registry.routes[key]
-        if (holder && !(holder.published && ours(holder)))
-          throw new Error(`Port ${port} is served for ${holder.root}`)
-        registry.routes[key] = { root: host.projectRoot, target, owner, published: true }
-        await apply(files, config, registry, token)
+      await allocating(host.userHome, async () => {
+        // A ticked project keeps its port while it is stopped, so a published service never takes it. Read again under
+        // the lock: a tick meanwhile may have taken it.
+        const serve = (await settingsOf(host.userHome)).serve ?? {}
+        const reserved = Object.entries(serve).find(([, entry]) => entry.port === port)
+        if (reserved) throw new Error(`Port ${port} is served for ${reserved[0]}`)
+        await withRegistry(files, host.userHome, async (registry) => {
+          const holder = registry.routes[key]
+          if (holder && !(holder.published && ours(holder)))
+            throw new Error(`Port ${port} is served for ${holder.root}`)
+          registry.routes[key] = { root: host.projectRoot, target, owner, published: true }
+          await apply(files, config, registry, token)
+        })
       })
       return originOf(port, config)
     },

@@ -1,13 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineEntry, defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { arr, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { implementAction } from '../../lib/actions.ts'
-import { closeOutput, spawnGroup, stopGroup, sweepPidFiles } from '../../lib/process-group.ts'
+import {
+  closeOutput,
+  identify,
+  spawnGroup,
+  stopGroup,
+  sweepPidFiles,
+} from '../../lib/process-group.ts'
 import type { Group } from '../../lib/process-group.ts'
 import { strEnum } from '../../lib/schema.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -43,9 +49,19 @@ const paths = (userHome: string) => {
     // PLANNOTATOR_COMMAND names another binary; tests point it at a stub.
     binary: process.env.PLANNOTATOR_COMMAND ?? join(dir, `plannotator-${VERSION}`),
     data: join(dir, 'data'),
-    sessions: join(dir, 'sessions'),
+    /**
+     * One folder per server process, `sessions/<pid>-<start>` (`identify`, so a reused pid is told apart), holding its
+     * sessions' pid files and folders.
+     */
+    owners: join(dir, 'sessions'),
+    sessions: join(dir, 'sessions', owner()),
   }
 }
+
+/** Who process `pid` is, as a folder name: its pid and start time, or its pid alone once it is gone. */
+const ownerOf = (pid: number) => `${pid}-${(identify(pid) ?? 'gone').replace(/[^A-Za-z0-9]/g, '')}`
+let self: string | undefined
+const owner = () => (self ??= ownerOf(process.pid))
 
 /** The result Plannotator prints with `--json` when the user decides; `message` is its Markdown feedback. */
 type Decision = { decision: 'approved' | 'annotated' | 'dismissed'; message?: string }
@@ -68,6 +84,11 @@ type Running = Session & {
   group?: Group
   folder?: string
   published?: number
+  /**
+   * The startup's acquisitions (Caddy route, folder, process) while they are under way: teardown waits for them to
+   * settle, so whatever they made after Stop is removed too. It never rejects.
+   */
+  acquiring?: Promise<void>
   ended?: Promise<void>
   freed?: boolean
 }
@@ -88,14 +109,23 @@ function state(host: ExtensionHost) {
 }
 
 /**
- * What a crashed server left: its sessions' process groups and folders. Once per process, before it starts any session
- * (`start` awaits it), so it never touches this server's own.
+ * What crashed servers left: the process groups and folders under `sessions/<pid>` of every server whose process is
+ * gone. Every Ultimate of this user shares the folder, so a live server's sessions are never touched. Once per process,
+ * before it starts any session (`start` awaits it).
  */
 function swept(host: ExtensionHost) {
   return host.resource('plannotator:sweep', async () => {
-    const dir = paths(host.userHome).sessions
-    await sweepPidFiles(dir)
-    await rm(dir, { recursive: true, force: true })
+    const { owners } = paths(host.userHome)
+    const folders = await readdir(owners).catch(
+      // No folder yet: nothing was ever left.
+      () => [] as string[],
+    )
+    for (const name of folders) {
+      const pid = Number(name.split('-')[0])
+      if (!Number.isSafeInteger(pid) || ownerOf(pid) === name) continue
+      await sweepPidFiles(join(owners, name))
+      await rm(join(owners, name), { recursive: true, force: true })
+    }
   })
 }
 
@@ -316,6 +346,8 @@ function finish(
         grace: 3000,
         pidFile: join(paths(host.userHome).sessions, `${session.id}.pid`),
       })
+    // Stop during startup: what it is acquiring settles first, so its route, folder and process are known and removed.
+    await session.acquiring
     if (session.published !== undefined)
       try {
         await host.want(CaddyApi)?.unpublish(session.published)
@@ -423,6 +455,8 @@ async function start(
   const stopped = () => {
     if (session.ended) throw new Error('The Plannotator session was stopped while it started')
   }
+  const acquired = Promise.withResolvers<void>()
+  session.acquiring = acquired.promise
   try {
     const publish = PUBLISH + PORTS.indexOf(port)
     const url = await host.want(CaddyApi)?.publish(publish, local)
@@ -457,8 +491,11 @@ async function start(
     session.state = 'running'
   } catch (error) {
     session.error ??= String(error instanceof Error ? error.message : error).slice(0, 1000)
+    acquired.resolve()
     await finish(host, session, session.ended ? session.state : 'failed')
     throw error
+  } finally {
+    acquired.resolve()
   }
   return view(session)
 }
