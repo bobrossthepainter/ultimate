@@ -1,5 +1,4 @@
-import { mkdtempSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Protocol } from '../exec/api.ts'
@@ -11,12 +10,29 @@ import type { Target } from './ssh.ts'
 
 export const reloadOnSettings = true
 
+const socketsKey = Symbol.for('ultimate.ssh-exec.sockets')
+
+/**
+ * The control socket directory of this process, kept across facet reloads and removed at exit. The harness keeps the
+ * envs it built across reloads (a settings change), so a directory per facet load, deleted on close, left them failing
+ * with "cannot create control socket" (ultimate-k8s #1662). A reload evaluates this module again, hence `globalThis`.
+ * It needs a short path: ssh refuses one of 108 bytes or more, which a deep TMPDIR (the lander's checks set one under
+ * the project home) reaches. So /tmp, never tmpdir() (#7522).
+ */
+function socketsDir() {
+  const state = globalThis as unknown as Record<symbol, string | undefined>
+  if (!state[socketsKey]) {
+    const dir = mkdtempSync('/tmp/ultimate-ssh-')
+    process.once('exit', () => rmSync(dir, { recursive: true, force: true }))
+    state[socketsKey] = dir
+  }
+  return state[socketsKey]
+}
+
 export default async function sshExec(host: ExtensionHost) {
   // Only the machine's own settings name targets: a project must not send this machine's commands anywhere.
   const targets = targetsOf((await readSettings(userSettingsPath(host.userHome)))['ssh-exec'])
-  // Control sockets belong to this process alone and need a short path: ssh refuses one of 108 bytes or more, which
-  // a deep TMPDIR (the lander's checks set one under the project home) reaches. So /tmp, never tmpdir() (#7522).
-  const sockets = mkdtempSync('/tmp/ultimate-ssh-')
+  const sockets = socketsDir()
   const statuses = new Map<string, TargetStatus>(
     targets.map((target) => [
       target.id,
@@ -91,7 +107,7 @@ export default async function sshExec(host: ExtensionHost) {
       () => undefined,
     )
   host.onClose(async () => {
-    // Commands still running keep their connection until they end; new ones open their own under the next sockets.
+    // Commands still running keep their connection until they end; new ones open a fresh one at the same path.
     await Promise.all(
       targets.map((target) =>
         release(target, sockets).catch(
@@ -100,7 +116,6 @@ export default async function sshExec(host: ExtensionHost) {
         ),
       ),
     )
-    await rm(sockets, { recursive: true, force: true })
   })
   return { name: 'ssh-exec' }
 }

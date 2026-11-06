@@ -8,7 +8,12 @@ import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/conte
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { stopGroup } from '../../lib/process-group.ts'
 import { createExec, localProtocol } from '../../extensions/exec/exec.ts'
+import { Protocol } from '../../extensions/exec/api.ts'
 import type { ExecTargets } from '../../extensions/exec/api.ts'
+import { SshExecApi } from '../../extensions/ssh-exec/api.ts'
+import type { SshExecService } from '../../extensions/ssh-exec/api.ts'
+import sshExec from '../../extensions/ssh-exec/server.ts'
+import type { ExtensionHost } from '../../server/extensions.ts'
 import { sshProtocol } from '../../extensions/ssh-exec/ssh.ts'
 import type { Target } from '../../extensions/ssh-exec/ssh.ts'
 import { temp, until } from '../helpers.ts'
@@ -119,6 +124,11 @@ describe.skipIf(!existsSync(sshd))('ssh-exec against a local sshd', () => {
         // No shared connection left.
       }
     await rm(sockets, { recursive: true, force: true })
+    // The extension's own directory goes at process exit, which a test worker never reaches.
+    const loaded = (globalThis as Record<symbol, string | undefined>)[
+      Symbol.for('ultimate.ssh-exec.sockets')
+    ]
+    if (loaded) await rm(loaded, { recursive: true, force: true })
   })
 
   it('runs a cwd under the root over SSH and one outside it here, with cwd, arguments and variables intact', async () => {
@@ -236,6 +246,46 @@ describe.skipIf(!existsSync(sshd))('ssh-exec against a local sshd', () => {
     abort.abort()
     expect(await call).toMatchObject({ ok: false, error: { code: 'aborted' } })
     await until(() => !running(marker))
+  })
+
+  it('keeps an env built before a facet reload running over SSH', async () => {
+    // The harness keeps the env it built for a directory across facet reloads, such as a settings change; the first
+    // facet's close deleted the control socket directory under it (ultimate-k8s #1662).
+    const home = join(dir, 'home')
+    await mkdir(join(home, '.ultimate'), { recursive: true })
+    await writeFile(
+      join(home, '.ultimate/settings.json'),
+      JSON.stringify({ 'ssh-exec': { targets: [{ ...target, id: 'reloaded' }] } }),
+    )
+    const load = async () => {
+      const apis = new Map<unknown, unknown>()
+      const cleanups: (() => Promise<void>)[] = []
+      await sshExec({
+        userHome: home,
+        implement: (api: unknown, value: unknown) => apis.set(api, value),
+        onClose: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
+      } as unknown as ExtensionHost)
+      // Its first connection, so the command below neither races it nor runs before the release.
+      const ssh = apis.get(SshExecApi) as SshExecService
+      await until(() => ssh.status()[0]?.state === 'ready')
+      const protocol = apis.get(Protocol) as ExecTargets
+      return { protocol, close: () => Promise.all(cleanups.map((cleanup) => cleanup())) }
+    }
+    const first = await load()
+    const env = first.protocol.env(first.protocol.targets()[0], target.root)
+    await first.close()
+    const second = await load()
+    try {
+      let output = ''
+      const done = await env.exec(
+        'echo "${SSH_CONNECTION:+ssh}"',
+        { onOutput: (text) => (output += text) },
+        BACKGROUND_CONTEXT,
+      )
+      expect({ done, output }).toMatchObject({ done: { ok: true }, output: 'ssh\n' })
+    } finally {
+      await second.close()
+    }
   })
 
   it('refuses a host whose key is unknown or changed', async () => {
