@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { removeTemps, temp } from '../helpers.ts'
@@ -43,6 +43,23 @@ it('reports a clean extension as clean', async () => {
   const { text, details } = await checkExtensions(resolve('.'), [join(root, 'demo/server.ts')])
   expect(details).toMatchObject({ files: 1, format: 0, lint: 0, types: 0 })
   expect(text).toContain('All clean')
+})
+
+it('checks linked extension folders and refuses links that reach outside extension code', async () => {
+  const root = await extension({ 'server.ts': clean })
+  const linked = join(await temp(), '.ultimate/extensions/linked')
+  await mkdir(linked, { recursive: true })
+  await writeFile(join(linked, 'server.ts'), 'export const n: number = 1\n')
+  await symlink(linked, join(root, 'linked'))
+  const { details } = await checkExtensions(resolve('.'), [root])
+  expect(details.files).toBe(2)
+  const outside = join(await temp(), 'outside.ts')
+  await writeFile(outside, 'export const  x = 1\n')
+  await symlink(outside, join(root, 'demo/outside.ts'))
+  await expect(checkExtensions(resolve('.'), [root], { fix: true })).rejects.toThrow(
+    'links outside',
+  )
+  expect(await readFile(outside, 'utf8')).toBe('export const  x = 1\n')
 })
 
 it('refuses relative paths and paths outside an extensions folder', async () => {

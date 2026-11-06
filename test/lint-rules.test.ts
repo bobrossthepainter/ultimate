@@ -76,6 +76,11 @@ it('rejects spawning in extension code that bypasses the exec service, but allow
   rule.ImportDeclaration(imported('../../lib/process-group.ts', 'groupAlive'))
   rule.ImportDeclaration(imported('../../lib/git.ts', 'isolatable'))
   rule.ImportDeclaration({ ...imported('node:child_process', 'ChildProcess'), importKind: 'type' })
+  rule.ImportDeclaration({
+    type: 'ImportDeclaration',
+    source: { type: 'Literal', value: 'node:child_process' },
+    specifiers: [{ imported: { type: 'Identifier', name: 'ChildProcess' }, importKind: 'type' }],
+  })
   expect(f.reports).toHaveLength(6)
 })
 

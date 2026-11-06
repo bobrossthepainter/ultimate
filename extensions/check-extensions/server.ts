@@ -3,7 +3,7 @@
  * this process (extension code always loads from the host's filesystem), so it works the same locally, in a pod and
  * over remote SSH.
  */
-import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { arr, bool, obj, opt, str } from '@earendil-works/pi-schema'
@@ -40,16 +40,21 @@ function rootOf(clone: string, path: string) {
   return undefined
 }
 
-/** The `.ts` and `.tsx` files at `path`, a file or a directory (without `node_modules`). */
-async function sources(path: string): Promise<string[]> {
+/**
+ * The `.ts` and `.tsx` files at `path`, a file or a directory (without `node_modules`), by the names under `path`.
+ * Links are followed as extension discovery follows them (a linked extension folder is loaded, so it is checked);
+ * `seen` holds the real directories visited, so a link cycle ends.
+ */
+async function sources(path: string, seen = new Set<string>()): Promise<string[]> {
   if (!(await stat(path)).isDirectory())
     return ['.ts', '.tsx'].includes(extname(path)) ? [path] : []
+  const real = await realpath(path)
+  if (seen.has(real)) return []
+  seen.add(real)
   const found: string[] = []
-  for (const entry of await readdir(path, { withFileTypes: true })) {
-    if (entry.name === 'node_modules') continue
-    const child = join(path, entry.name)
-    if (entry.isDirectory()) found.push(...(await sources(child)))
-    else if (['.ts', '.tsx'].includes(extname(entry.name))) found.push(child)
+  for (const entry of await readdir(path)) {
+    if (entry === 'node_modules') continue
+    found.push(...(await sources(join(path, entry), seen)))
   }
   return found
 }
@@ -120,7 +125,20 @@ export async function checkExtensions(
   }
   const vp = join(clone, 'node_modules/.bin/vp')
   const options = { cwd: clone, signal, timeout: TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 }
-  const targets = [...roots.keys()]
+  // Every file checked, by its name under its extension root: the formatter gets exactly these, never a folder, so
+  // `fix` writes only extension source files.
+  const files = new Map<string, string>()
+  for (const [path, root] of roots)
+    for (const file of await sources(path)) {
+      // A link may point anywhere: what it reaches must be extension code too, or `fix` would format other files.
+      if (!rootOf(clone, await realpath(file)))
+        throw new Error(
+          `${file} links outside a .ultimate/extensions/ folder; check its target instead`,
+        )
+      if (!files.has(file)) files.set(file, root)
+    }
+  if (!files.size) throw new Error('No .ts or .tsx files in the given paths')
+  const targets = [...files.keys()]
   if (fix) await exec(vp, ['fmt', '--write', ...targets], options)
 
   const format: string[] = []
@@ -140,18 +158,17 @@ export async function checkExtensions(
     // Each checked file under the name lint sees it by: staged when outside the clone, so the tsconfig above applies.
     const staged = new Map<string, string>()
     const stages = new Map<string, string>()
-    for (const [path, root] of roots)
-      for (const file of await sources(path)) {
-        if (root.startsWith(clone + sep)) {
-          staged.set(file, file)
-          continue
-        }
-        const config = file.endsWith('.tsx') ? 'tsconfig.web.json' : 'tsconfig.json'
-        const key = `${root}\0${config}`
-        if (!stages.has(key))
-          stages.set(key, await stage(join(base, String(stages.size)), clone, root, config))
-        staged.set(join(stages.get(key)!, relative(root, file)), file)
+    for (const [file, root] of files) {
+      if (root.startsWith(clone + sep)) {
+        staged.set(file, file)
+        continue
       }
+      const config = file.endsWith('.tsx') ? 'tsconfig.web.json' : 'tsconfig.json'
+      const key = `${root}\0${config}`
+      if (!stages.has(key))
+        stages.set(key, await stage(join(base, String(stages.size)), clone, root, config))
+      staged.set(join(stages.get(key)!, relative(root, file)), file)
+    }
 
     let diagnostics: Diagnostic[] = []
     if (staged.size) {

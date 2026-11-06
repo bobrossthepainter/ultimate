@@ -179,14 +179,16 @@ export default {
           ImportDeclaration(node: Node) {
             const names = banned(typeof node.source?.value === 'string' ? node.source.value : '')
             if (!names || node.importKind === 'type') return
+            // `import { type X } from …` brings in no value; a bare `import '…'` (no specifiers) runs the module.
+            const values = (node.specifiers ?? []).filter((one) => one.importKind !== 'type')
             if (
-              names === true ||
-              node.specifiers?.some(
-                (specifier) =>
-                  specifier.importKind !== 'type' &&
-                  (specifier.type === 'ImportNamespaceSpecifier' ||
-                    names.includes(specifier.imported?.name ?? '')),
-              )
+              (names === true && (values.length > 0 || !node.specifiers?.length)) ||
+              (names !== true &&
+                values.some(
+                  (one) =>
+                    one.type === 'ImportNamespaceSpecifier' ||
+                    names.includes(one.imported?.name ?? ''),
+                ))
             )
               context.report({ node, message })
           },
