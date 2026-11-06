@@ -262,7 +262,6 @@ async function launch(host: ExtensionHost, session: Running, args: string[], cwd
     PLANNOTATOR_DATA_DIR: files.data,
     PLANNOTATOR_PORT: String(session.port),
     PLANNOTATOR_SHARE: 'disabled',
-    PLANNOTATOR_AI: 'disabled',
     PLANNOTATOR_GIT_REMOTE_CHECK: '0',
     // Plannotator refuses a Host header other than its own: the Caddy domain only when the session is published there.
     ...(session.published !== undefined && {

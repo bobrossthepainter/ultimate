@@ -98,10 +98,11 @@ it('reviews several repositories as one patch and hands the feedback back as the
     expect(call.env).toMatchObject({
       BROWSER: 'none',
       PLANNOTATOR_SHARE: 'disabled',
-      PLANNOTATOR_AI: 'disabled',
       PLANNOTATOR_GIT_REMOTE_CHECK: '0',
       PLANNOTATOR_PORT: '19432',
     })
+    // The user wants Plannotator's AI features (Ask AI through Pi, Review Agents): nothing turns them off.
+    expect(call.env.PLANNOTATOR_AI).toBeUndefined()
     // Committed and untracked work of both, each under its own name.
     for (const line of [
       '+++ b/alpha/f.txt',

@@ -26,9 +26,13 @@ What a session shows:
 - **Several, `live`:** Plannotator's own multi-repository view of a folder of links to them. It shows only their
   uncommitted changes and last commits, and takes no base (Plannotator refuses `--base` there).
 
-Every session runs with `BROWSER=none`, sharing and AI features off (`PLANNOTATOR_SHARE`, `PLANNOTATOR_AI`), no
-`git ls-remote` (`PLANNOTATOR_GIT_REMOTE_CHECK=0`), and `updateCheck: false` in its config, so it asks GitHub for no
-release record. It runs on this machine, like Caddy: a project whose commands run elsewhere (ssh-exec) reviews files
+Every session runs with `BROWSER=none`, sharing off (`PLANNOTATOR_SHARE`), no `git ls-remote`
+(`PLANNOTATOR_GIT_REMOTE_CHECK=0`), and `updateCheck: false` in its config, so it asks GitHub for no release record.
+Its AI features stay on: **AI Chat** (Ask AI) answers through a provider the user picks from those installed here
+(Pi, Claude or Codex; the choice is kept in its data folder), and **Review Agents** and **Guided Review** run the
+`claude` or `codex` CLI. Questions and diff context go to that provider. Since Ultimate starts the session, Pi answers
+as a separate agent that sees the diff, not as the conversation that asked (Plannotator's "Ask this session" works
+only when Pi or Claude Code itself opens it). It runs on this machine, like Caddy: a project whose commands run elsewhere (ssh-exec) reviews files
 this machine can read, and the patch is built through the exec service.
 
 ## Reaching it
