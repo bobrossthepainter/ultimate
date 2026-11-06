@@ -131,10 +131,10 @@ function swept(host: ExtensionHost) {
 
 /** A string argument that cannot be read as an option by git or Plannotator. */
 function plain(value: unknown, name: string) {
-  if (typeof value !== 'string' || !value.trim())
-    throw new Error(`${name} must be a non-empty string`)
-  if (value.startsWith('-') || /[\0\n\r]/.test(value)) throw new Error(`${name} is not a valid ref`)
-  return value.trim()
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text) throw new Error(`${name} must be a non-empty string`)
+  if (text.startsWith('-') || /[\0\n\r]/.test(text)) throw new Error(`${name} is not a valid ref`)
+  return text
 }
 
 /**
@@ -168,22 +168,21 @@ async function locate(host: ExtensionHost, item: ReviewItem) {
   base ??= await defaultBranch(host, top)
   if (ref && !base)
     throw new Error(`${top} has no origin/main or main to compare ${ref} with; give a base`)
-  for (const name of [ref, base])
-    if (name)
-      await exec
-        .git(top, 'rev-parse', '--verify', '--quiet', '--end-of-options', `${name}^{commit}`)
-        .catch(() => {
-          throw new Error(`${name} is not a commit in ${top}`)
-        })
+  // Every name is resolved once to its commit: Git and Plannotator later get only these ids, never the agent's text.
+  const commit = (name: string) =>
+    exec
+      .git(top, 'rev-parse', '--verify', '--quiet', '--end-of-options', `${name}^{commit}`)
+      .catch(() => {
+        throw new Error(`${name} is not a commit in ${top}`)
+      })
+  const resolved = {
+    ...(ref && { ref, refCommit: await commit(ref) }),
+    ...(base && { base, baseCommit: await commit(base) }),
+  }
   // A linked worktree's common directory is the main repository's `.git`: its folder names the repository.
-  const common = await exec
-    .git(top, 'rev-parse', '--path-format=absolute', '--git-common-dir')
-    .catch(
-      // An old Git without --path-format: the checkout's own folder names it.
-      () => '',
-    )
+  const common = await exec.git(top, 'rev-parse', '--path-format=absolute', '--git-common-dir')
   const label = basename(common) === '.git' ? basename(dirname(common)) : basename(top)
-  return { path: top, label, ...(ref && { ref }), base }
+  return { path: top, label, ...resolved }
 }
 
 /** The ref to compare with by default: `origin`'s default branch, else `origin/main` or `origin/master`, else local ones. */
@@ -218,10 +217,7 @@ export async function branchItems(
       if (typeof entry?.repo !== 'string' || !entry.repo)
         throw new Error('Each of repos names a repo')
       const dir = isAbsolute(entry.repo) ? entry.repo : resolve(host.projectRoot, entry.repo)
-      for (const [ref, full] of [
-        [name, `refs/heads/${name}`],
-        [`origin/${name}`, `refs/remotes/origin/${name}`],
-      ])
+      for (const full of [`refs/heads/${name}`, `refs/remotes/origin/${name}`])
         if (
           await host
             .need(Exec)
@@ -231,7 +227,12 @@ export async function branchItems(
               () => '',
             )
         )
-          return { repo: dir, ref, ...(entry.base !== undefined && { base: entry.base }) }
+          // The full name: a short one would let a same-named tag win when it is resolved later.
+          return {
+            repo: dir,
+            ref: full,
+            ...(entry.base !== undefined && { base: entry.base }),
+          }
       return dir
     }),
   )
@@ -258,27 +259,31 @@ export function names(labels: string[]) {
  * multi-repository view writes them: a `ref`'s commits since the merge base, read from Git alone, or else the working
  * tree's commits, staged, unstaged and untracked changes.
  */
-async function combinedPatch(host: ExtensionHost, repos: SessionRepo[]) {
+async function combinedPatch(
+  host: ExtensionHost,
+  repos: (SessionRepo & { refCommit?: string; baseCommit?: string })[],
+) {
   const exec = host.need(Exec)
   const parts: string[] = []
   for (const repo of repos) {
     const prefix = [`--src-prefix=a/${repo.name}/`, `--dst-prefix=b/${repo.name}/`]
     const options = { timeout: 60000, maxBuffer: 64 * 1024 * 1024 }
-    const head = repo.ref ?? 'HEAD'
-    const base = repo.base
-      ? await exec.git(repo.path, 'merge-base', '--end-of-options', repo.base, head)
+    const head = repo.refCommit ?? 'HEAD'
+    const base = repo.baseCommit
+      ? await exec.git(repo.path, 'merge-base', '--end-of-options', repo.baseCommit, head)
       : undefined
     const diff = ['diff', '--no-color', '--no-ext-diff', '-M', ...prefix]
+    // locate() gives a ref always a base, so a ref's diff has both sides.
     const tracked = await exec.run(
       repo.path,
       'git',
-      repo.ref
-        ? [...diff, base ?? `${repo.ref}^`, repo.ref, '--']
-        : [...diff, ...(base ? [base] : ['HEAD'])],
+      repo.refCommit
+        ? [...diff, base!, repo.refCommit, '--']
+        : [...diff, ...(base ? [base] : ['HEAD']), '--'],
       options,
     )
     parts.push(tracked.stdout)
-    if (repo.ref) continue
+    if (repo.refCommit) continue
     const untracked = await exec.run(
       repo.path,
       'git',
@@ -515,10 +520,11 @@ async function start(
     title,
     mode: repos.length === 1 && !refs ? 'single' : mode,
     // Plannotator's multi-repository view takes no base, so none is shown for it.
+    // A branch found by `branch` is shown by its short name (refs/remotes/origin/x → origin/x).
     repos: repos.map(({ name, path, ref, base }) => ({
       name,
       path,
-      ...(ref && { ref }),
+      ...(ref && { ref: ref.replace(/^refs\/(heads|remotes)\//, '') }),
       ...(base && (repos.length === 1 || mode === 'combined') && { base }),
     })),
     state: 'starting',
@@ -546,7 +552,7 @@ async function start(
     let cwd: string
     if (session.mode === 'single') {
       const [repo] = repos
-      args = [...(repo.base ? ['--base', repo.base] : []), '--title', title, repo.path]
+      args = [...(repo.baseCommit ? ['--base', repo.baseCommit] : []), '--title', title, repo.path]
       cwd = repo.path
     } else {
       session.folder = join(files.sessions, session.id)

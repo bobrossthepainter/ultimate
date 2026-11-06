@@ -35,8 +35,9 @@ it('finds one branch across repositories, local first, then origin, and names th
   expect(
     await branchItems(host, branch, [{ repo: local }, { repo: 'remote', base: 'origin/main' }]),
   ).toEqual([
-    { repo: local, ref: branch },
-    { repo: remote, ref: `origin/${branch}`, base: 'origin/main' },
+    // Full names: a tag of the same name would otherwise win when the ref is resolved.
+    { repo: local, ref: `refs/heads/${branch}` },
+    { repo: remote, ref: `refs/remotes/origin/${branch}`, base: 'origin/main' },
   ])
   await expect(
     branchItems(host, branch, [{ repo: local }, { repo: none }, { repo: join(home, 'missing') }]),
