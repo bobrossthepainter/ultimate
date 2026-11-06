@@ -42,10 +42,10 @@ export default defineConfig({
       {
         // Project commands go through the exec service. Ultimate's own host-local work spawns here: the exec service and
         // its ssh protocol, Caddy, Tailscale, updates, previews, automation scripts, Claude Code, the editor launcher,
-        // the lander's checks and disk usage (extensions/exec/README.md).
+        // the lander's checks and disk usage, and checking extension code with the clone's tools (extensions/exec/README.md).
         files: ['extensions/**', '**/.ultimate/extensions/**'],
         excludeFiles: [
-          'extensions/{automations,caddy,claude-code,exec,instance,lineage,ssh-exec,tailscale,update,upstream-sync,workspaces}/**',
+          'extensions/{automations,caddy,check-extensions,claude-code,exec,instance,lineage,ssh-exec,tailscale,update,upstream-sync,workspaces}/**',
         ],
         rules: { 'ultimate/no-unrouted-exec': 'error' },
       },
