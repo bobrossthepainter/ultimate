@@ -205,6 +205,15 @@ it('draws versions in one architect under the branch, and sends feedback to the 
         '3'
       ],
     ).toBeUndefined()
+    // A chat keeps the version it was opened at, also once a newer chat exists (the review's P1).
+    await draw()
+    expect((await action('chat', { branch })).data.result.chat).not.toBe(opened)
+    await (await chat.submit({ type: 'input', content: 'Suggest one.' }, context)).wait(context)
+    expect(
+      Object.keys(
+        (await server.harness.snapshot(DraftsStore, branch as ConversationId, context))!.versions,
+      ),
+    ).toEqual(['3'])
     // It woke the coordinator as a typed message would.
     expect(entries.at(-1)?.kind).toBe('pi.assistant')
     const unknown = await post(server, '/api/extensions/architect/actions/send', {

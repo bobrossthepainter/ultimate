@@ -72,8 +72,8 @@ export const Index = defineDoc<ArchitectureIndex>({
   fork: 'initial',
   initial: () => ({ branches: {} }),
 })
-/** On an architect conversation: the branch it draws; `chat` on an architecture chat forked from it. */
-const Of = defineDoc<{ branch?: number; chat?: true }>({
+/** On an architect conversation: the branch it draws; `chat` on an architecture chat: the version it was opened at. */
+const Of = defineDoc<{ branch?: number; chat?: number }>({
   kind: 'architect.of',
   checkpointWhen: () => false,
   version: 1,
@@ -200,6 +200,11 @@ export function checkComment(comment: unknown, version: ArchitectureVersion): Ar
     throw new Error('part must name the part by its ID')
   if (kind !== 'diagram' && kind !== 'edge' && !shown.mermaid.includes(part as string))
     throw new Error(`${shown.id} has no part ${String(part)}`)
+  // Edges go by the ID Mermaid draws them with, as the surface reads it from a click (parts.tsx).
+  if (kind === 'edge' && !/^(?:L|id)_.+_\d+$/.test(part as string))
+    throw new Error(
+      'An edge part is its Mermaid ID, such as L_surface_doc_0 (flowchart) or id_a_b_0 (class)',
+    )
   if (label !== undefined && typeof label !== 'string') throw new Error('label must be text')
   return {
     diagram: shown.id,
@@ -575,7 +580,7 @@ async function chat(host: ExtensionHost, branch: ConversationId, fresh: boolean,
       title: `Architecture chat · ${title}`,
     })
     await host.need(ConversationsApi).setAutomaticSummaries(tx, fork.id, false)
-    Object.assign(await tx.doc(Of, fork.id), { branch, chat: true })
+    Object.assign(await tx.doc(Of, fork.id), { branch, chat: latest.version })
     Object.assign(await tx.doc(Chat, branch), { id: fork.id, version: latest.version })
     return fork.id
   }, ctx)
@@ -615,48 +620,38 @@ export const actions = {
       (item) => item.version === number,
     )
     if (!version) throw new Error(`#${branch} has no version ${number}`)
-    const pending = (await host.harness().snapshot(DraftsStore, branch, context))?.versions[
+    const recipient = (await host.harness().snapshot(DraftsStore, branch, context))?.versions[
       String(number)
-    ]
-    if (!pending?.comments.length) throw new Error(`No comments pending on v${number}`)
-    const id = pending.to ?? branch
+    ]?.to
+    const id = recipient ?? branch
     if (!conversationExists(host, id)) throw new Error(`No conversation #${id}`)
-    const feedback: ArchitectureComments = {
-      branch,
-      version: number,
-      comments: pending.comments.map(({ id: _id, by: _by, ...comment }) => comment),
-      ...(pending.note.trim() ? { note: pending.note.trim() } : {}),
-    }
     const conversation = (await host.harness().conversation(id as ConversationId, context))!
-    const content = commentsText(feedback, version)
-    const submission = await conversation.submit(
-      {
+    // One commit reads the pending feedback, admits it as the recipient's input and clears it: an edit made meanwhile
+    // is either in what was sent or still pending, and a crash leaves both or neither.
+    await host.harness().commit(async (tx) => {
+      const store = await tx.doc(DraftsStore, branch)
+      const pending = store.versions[String(number)]
+      if (!pending?.comments.length) throw new Error(`No comments pending on v${number}`)
+      if ((pending.to ?? branch) !== id) throw new Error('The recipient changed: send again')
+      const feedback: ArchitectureComments = {
+        branch,
+        version: number,
+        comments: pending.comments.map(({ id: _id, by: _by, ...comment }) => comment),
+        ...(pending.note.trim() ? { note: pending.note.trim() } : {}),
+      }
+      const content = commentsText(feedback, version)
+      const submission = await conversation.submit(tx, {
         type: 'input',
         content,
         entry: { kind: CommentsEntry.kind, data: feedback },
         // The user's input: it steers a busy recipient as a typed message would.
         whenBusy: 'steer',
-      },
-      context,
-    )
-    // In a commit of its own right after the input's, as review's send: a crash in between loses only the event and
-    // leaves the sent comments pending. Comments added meanwhile stay.
-    const admitted = await submission.status(context)
-    const sent = new Set(pending.comments.map((comment) => comment.id))
-    await host.harness().commit(async (tx) => {
-      const store = await tx.doc(DraftsStore, branch)
-      const drafts = store.versions[String(number)]
-      if (drafts) {
-        drafts.comments = drafts.comments.filter((comment) => !sent.has(comment.id))
-        if (drafts.note === pending.note) drafts.note = ''
-        if (!drafts.comments.length && !drafts.note) delete store.versions[String(number)]
-      }
+      })
+      delete store.versions[String(number)]
       await host.emit(tx, UserInputEvent, {
         conversation: id,
         kind: 'review',
-        ...(admitted.entry === undefined
-          ? { submission: submission.id }
-          : { entry: admitted.entry }),
+        submission,
         length: content.length,
         ...device,
       })
@@ -705,7 +700,7 @@ export default (host: ExtensionHost) =>
             const receipt = await tx.doc(Receipt, api.taskId)
             if (receipt.text !== undefined) return receipt.text
             const { branch, chat: chatting } = await tx.doc(Of, api.conversationId)
-            if (branch === undefined || chatting)
+            if (branch === undefined || chatting !== undefined)
               throw new Error('Only an architect conversation started by Draw can publish')
             const state = await tx.doc(Versions, branch as ConversationId)
             const version: ArchitectureVersion = {
@@ -733,7 +728,7 @@ export default (host: ExtensionHost) =>
         // The receipt commits with the change: a replay after a restart applies nothing twice.
         replay: 'safe',
         description:
-          "Propose feedback for the branch's coordinator as pending comments the user reviews in the Architecture tab, on the version you were opened at. add {diagram, kind: node|edge|participant|diagram, part?, text}: a comment on a part by its ID in the Mermaid source (an edge as its source and target IDs joined with '->', e.g. 'surface->doc'), or on the whole diagram; update {id, text} and delete {id} change only comments you added; list shows every pending comment with its id. The user sends the list; you never send it.",
+          "Propose feedback for the branch's coordinator as pending comments the user reviews in the Architecture tab, on the version you were opened at. add {diagram, kind: node|edge|participant|diagram, part?, text}: a comment on a part by its ID in the Mermaid source (an edge as Mermaid names it: L_<source>_<target>_<n> in a flowchart, n counting from 0 per pair, e.g. L_surface_doc_0), or on the whole diagram; update {id, text} and delete {id} change only comments you added; list shows every pending comment with its id. The user sends the list; you never send it.",
         parameters: obj({
           action: strEnum(['add', 'update', 'delete', 'list'] as const),
           diagram: opt(str()),
@@ -746,15 +741,13 @@ export default (host: ExtensionHost) =>
           const text = await api.commit(async (tx) => {
             const receipt = await tx.doc(Receipt, api.taskId)
             if (receipt.text !== undefined) return receipt.text
-            const { branch, chat: chatting } = await tx.doc(Of, api.conversationId)
-            const opened =
-              branch === undefined ? undefined : await tx.doc(Chat, branch as ConversationId)
-            if (branch === undefined || !chatting || opened?.version === undefined)
+            // The version this chat was opened at, kept on the chat: a newer chat on the branch does not move it.
+            const { branch, chat: version } = await tx.doc(Of, api.conversationId)
+            if (branch === undefined || version === undefined)
               throw new Error(
                 'Only an architecture chat opened from the Architecture tab can comment',
               )
             const key = branch as ConversationId
-            const version = opened.version
             const pending = () =>
               tx
                 .doc(DraftsStore, key)
