@@ -36,6 +36,6 @@ The user comments on parts by ID, and versions are compared by ID, so IDs are th
 
 ## Mermaid
 
-Write plain Mermaid that parses: quote labels with punctuation (`id["send (user only)"]`), no HTML, no `click` lines, no `%%{init}%%` or theme settings, no `style` lines. Label edges only when the verb adds something (`-->|publishes|`).
+Write plain Mermaid that parses: quote labels with punctuation (`id["send (user only)"]`); in sequence diagrams, message and note text has no `;` or `#` (a `;` ends the statement), so write "and" or a comma instead; no HTML, no `click` lines, no `%%{init}%%` or theme settings, no `style` lines. Label edges only when the verb adds something (`-->|publishes|`).
 
 The style follows show-me (humanlayer/skills, MIT): the smallest visual that makes the point, short text next to each visual.
