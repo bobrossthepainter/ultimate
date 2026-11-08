@@ -200,11 +200,6 @@ export function checkComment(comment: unknown, version: ArchitectureVersion): Ar
     throw new Error('part must name the part by its ID')
   if (kind !== 'diagram' && kind !== 'edge' && !shown.mermaid.includes(part as string))
     throw new Error(`${shown.id} has no part ${String(part)}`)
-  // Edges go by the ID Mermaid draws them with, as the surface reads it from a click (parts.tsx).
-  if (kind === 'edge' && !/^(?:L|id)_.+_\d+$/.test(part as string))
-    throw new Error(
-      'An edge part is its Mermaid ID, such as L_surface_doc_0 (flowchart) or id_a_b_0 (class)',
-    )
   if (label !== undefined && typeof label !== 'string') throw new Error('label must be text')
   return {
     diagram: shown.id,
@@ -728,7 +723,7 @@ export default (host: ExtensionHost) =>
         // The receipt commits with the change: a replay after a restart applies nothing twice.
         replay: 'safe',
         description:
-          "Propose feedback for the branch's coordinator as pending comments the user reviews in the Architecture tab, on the version you were opened at. add {diagram, kind: node|edge|participant|diagram, part?, text}: a comment on a part by its ID in the Mermaid source (an edge as Mermaid names it: L_<source>_<target>_<n> in a flowchart, n counting from 0 per pair, e.g. L_surface_doc_0), or on the whole diagram; update {id, text} and delete {id} change only comments you added; list shows every pending comment with its id. The user sends the list; you never send it.",
+          "Propose feedback for the branch's coordinator as pending comments the user reviews in the Architecture tab, on the version you were opened at. add {diagram, kind: node|edge|participant|diagram, part?, text}: a comment on a part by its ID in the Mermaid source (an edge by the ID Mermaid draws it with: its explicit ID when the source gives one, else L_<source>_<target>_<n> in a flowchart, n counting from 0 per pair, e.g. L_surface_doc_0), or on the whole diagram; update {id, text} and delete {id} change only comments you added; list shows every pending comment with its id. The user sends the list; you never send it.",
         parameters: obj({
           action: strEnum(['add', 'update', 'delete', 'list'] as const),
           diagram: opt(str()),
