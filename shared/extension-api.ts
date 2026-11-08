@@ -74,6 +74,7 @@ export const defaultOff: readonly string[] = [
   'voice-live',
   // 'threads',
   'voice-chatgpt',
+  'push',
 ]
 
 /** Who provides and who consumes each API, as `host.catalogue()` reports it. */
