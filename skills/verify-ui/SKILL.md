@@ -9,9 +9,10 @@ Never claim a UI change works without an image of it.
 
 ## Where to look
 
-- `web/` and built-in `extensions/` changes in the host's own checkout reload in the running host: omit `url`.
-- A worktree, a branch or a project `.ultimate/extensions/` change does not reach the host: start a preview of the
-  checkout (`instance start`) and pass its URL. `server/` or `shared/` changes need a fresh preview.
+- `web/`, built-in `extensions/` and the host project's own `.ultimate/extensions/` changes in the host's own checkout
+  reload in the running host: omit `url`.
+- A change in a separate checkout or worktree does not reach the host: start a preview of the checkout
+  (`instance start`) and pass its URL. `server/` or `shared/` changes need a fresh preview.
 
 ## How
 
