@@ -2,7 +2,7 @@ import mermaid from 'mermaid'
 import { CodeIcon, WorkflowIcon } from 'lucide-react'
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { errorMessage, useStore } from '@/sdk'
+import { cn, errorMessage, useStore } from '@/sdk'
 
 /** A theme token as `#rrggbb`: Mermaid derives shades from its colours and cannot read `oklch()` or `var()`. */
 function token(name: string) {
@@ -27,6 +27,16 @@ function config(theme: 'dark' | 'light') {
   return {
     startOnLoad: false,
     securityLevel: 'strict',
+    // Without it a parse error also leaves Mermaid's error graphic at the end of the page.
+    suppressErrorRendering: true,
+    flowchart: { nodeSpacing: 30, rankSpacing: 36, padding: 10, minNodeWidth: 60 },
+    fontSize: 13,
+    sequence: {
+      width: 110,
+      height: 40,
+      actorMargin: 40,
+      messageMargin: 30,
+    },
     theme: 'base',
     fontFamily,
     themeVariables: {
@@ -57,6 +67,16 @@ function config(theme: 'dark' | 'light') {
   } as const
 }
 
+/**
+ * The SVG at most its own size: Mermaid scales every diagram to the column's width, which blows small ones up.
+ */
+function natural(svg: string) {
+  const element = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement
+  const width = element.getAttribute('viewBox')?.split(/\s+/)[2]
+  if (width) element.setAttribute('width', width)
+  return new XMLSerializer().serializeToString(element)
+}
+
 // Mermaid keeps one global configuration and render scratch space: renders run one at a time.
 let queue: Promise<unknown> = Promise.resolve()
 let configured: string | undefined
@@ -67,7 +87,7 @@ function draw(id: string, code: string, theme: 'dark' | 'light') {
       mermaid.initialize(config(theme))
       configured = theme
     }
-    return mermaid.render(id, code)
+    return mermaid.render(id, code).then(({ svg }) => natural(svg))
   })
   queue = next.catch(() => {
     // A failed diagram is reported by its own block; the next render must still run.
@@ -84,7 +104,7 @@ export default function Diagram({ code, core }: { code: string; core: ReactNode 
   useEffect(() => {
     let cancelled = false
     draw(id, code, theme).then(
-      ({ svg }) => !cancelled && setResult({ svg }),
+      (svg) => !cancelled && setResult({ svg }),
       (error: unknown) => !cancelled && setResult({ error: errorMessage(error) }),
     )
     return () => {
@@ -95,34 +115,53 @@ export default function Diagram({ code, core }: { code: string; core: ReactNode 
     return (
       <div className="space-y-1">
         {core}
-        <p className="font-mono text-[11px] text-error">Mermaid: {result.error.split('\n')[0]}</p>
+        <p className="font-mono text-[11px] text-error">
+          Mermaid:{' '}
+          {result.error
+            .split('\n')
+            .filter((line, index, lines) => index === 0 || index === lines.length - 1)
+            .join(' · ')}
+        </p>
       </div>
     )
   if (!result?.svg || source)
     return (
-      <div className="relative">
+      <div className="group relative">
         {core}
-        {result?.svg && <Toggle onClick={() => setSource(false)} source />}
+        {result?.svg && <Toggle className="right-9" onClick={() => setSource(false)} source />}
       </div>
     )
   return (
-    <div className="group relative w-full overflow-x-auto rounded-md border bg-terminal p-3">
-      <div
-        className="flex justify-center [&_svg]:h-auto [&_svg]:max-w-full"
-        // Mermaid's own output at securityLevel strict, sanitised by its DOMPurify pass.
-        dangerouslySetInnerHTML={{ __html: result.svg }}
-      />
-      <Toggle onClick={() => setSource(true)} source={false} />
+    <div className="group relative">
+      <div className="w-full rounded-md border bg-terminal p-3">
+        <div
+          className="flex justify-center [&_svg]:h-auto [&_svg]:max-w-full"
+          // Mermaid's own output at securityLevel strict, sanitised by its DOMPurify pass.
+          dangerouslySetInnerHTML={{ __html: result.svg }}
+        />
+      </div>
+      <Toggle className="right-1" onClick={() => setSource(true)} source={false} />
     </div>
   )
 }
 
-function Toggle({ onClick, source }: { onClick: () => void; source: boolean }) {
+function Toggle({
+  className,
+  onClick,
+  source,
+}: {
+  className: string
+  onClick: () => void
+  source: boolean
+}) {
   const Icon = source ? WorkflowIcon : CodeIcon
   return (
     <Button
       aria-label={source ? 'Show diagram' : 'Show source'}
-      className="absolute top-1 right-9 size-7 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+      className={cn(
+        'absolute top-1 size-7 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+        className,
+      )}
       onClick={onClick}
       size="icon"
       title={source ? 'Show diagram' : 'Show source'}
