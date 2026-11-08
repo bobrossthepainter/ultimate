@@ -63,6 +63,7 @@ export const defaultOff: readonly string[] = [
   'parallel',
   'brave',
   'plannotator',
+  'architect',
   'tailscale',
   'ssh-exec',
   'lifecycle',
