@@ -65,11 +65,12 @@ it('draws versions in one architect under the branch, and sends feedback to the 
     const busy = async (id: number) =>
       (await server.harness.snapshot(LiveDoc, id as ConversationId, context))?.run !== undefined
     const draw = async () => {
+      // Counted before posting: the architect may take its brief before the response returns.
+      const before = briefs.length
       const response = await post(server, '/api/extensions/architect/actions/draw', {
         args: { conversation: branch },
       })
       expect(response.status).toBe(200)
-      const before = briefs.length
       await until(
         async () => briefs.length > before && !(await busy(response.data.result.architect)),
       )

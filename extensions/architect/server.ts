@@ -7,7 +7,7 @@ import {
   defineExtension,
   defineTask,
   defineTool,
-  LiveDoc,
+  ConversationBusy,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
@@ -57,6 +57,14 @@ const Of = defineDoc<{ branch?: number }>({
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
+  initial: () => ({}),
+})
+/** What one `architecture_publish` call published, on its tool task. */
+const Receipt = defineDoc<{ text?: string }>({
+  kind: 'architect.receipt',
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'task',
   initial: () => ({}),
 })
 export const docs = [Versions, Index]
@@ -324,14 +332,6 @@ async function draw(
   const branch = await branchOf(host, requested, ctx)
   if (!conversationExists(host, branch))
     throw new Error('conversation must be an existing conversation id')
-  const existing = (await host.harness().snapshot(Versions, branch as ConversationId, ctx))
-    ?.architect
-  if (
-    options.ifIdle &&
-    existing !== undefined &&
-    (await host.harness().snapshot(LiveDoc, existing as ConversationId, ctx))?.run
-  )
-    return { architect: existing, started: false }
   const definition = (
     await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
   ).definitions.find((item) => item.name === 'architect')
@@ -376,15 +376,22 @@ async function draw(
     state.architect = child.id
     return child.id
   }, ctx)
-  const submission = await (await host.harness().conversation(architect, ctx))!.submit(
-    {
-      type: 'input',
-      content: text,
-      whenBusy: 'followUp',
-      ...(options.requestId ? { requestId: options.requestId } : {}),
-    },
-    ctx,
-  )
+  let submission
+  try {
+    submission = await (await host.harness().conversation(architect, ctx))!.submit(
+      {
+        type: 'input',
+        content: text,
+        // A Draw while the architect still draws starts nothing; the admission checks it atomically.
+        whenBusy: options.ifIdle ? 'reject' : 'followUp',
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+      },
+      ctx,
+    )
+  } catch (error) {
+    if (error instanceof ConversationBusy) return { architect: architect as number, started: false }
+    throw error
+  }
   return { architect: architect as number, started: true, submission, branch }
 }
 
@@ -456,7 +463,7 @@ export default (host: ExtensionHost) =>
       defineTool({
         name: 'architecture_publish',
         deferred: true,
-        // The memo records the published version in the commit that appends it.
+        // Its receipt records the published version in the commit that appends it.
         replay: 'safe',
         description:
           "Publish this architect's version of its branch's architecture: a title, a one-line summary and up to 6 Mermaid diagrams, each with a stable lowercase id (kept across versions), short notes and a map of part IDs (node IDs, or a sequence diagram's participants) to what each part is. Mark changed parts with :::added, :::changed or :::removed. With nothing architectural changed, publish no diagrams and say so in the summary.",
@@ -477,10 +484,11 @@ export default (host: ExtensionHost) =>
           ),
         }),
         execute: async (args, api, ctx) => {
-          const done = await api.memo<string>('published', ctx)
-          if (done) return result(done)
           const diagrams = checkDiagrams(args.diagrams)
           const text = await api.commit(async (tx) => {
+            // The receipt commits with the version: a replay after a restart finds it and appends nothing.
+            const receipt = await tx.doc(Receipt, api.taskId)
+            if (receipt.text !== undefined) return receipt.text
             const branch = (await tx.doc(Of, api.conversationId)).branch
             if (branch === undefined)
               throw new Error('Only an architect conversation started by Draw can publish')
@@ -498,9 +506,10 @@ export default (host: ExtensionHost) =>
               version: version.version,
               at: version.at,
             }
-            return `Published version ${version.version} of #${branch} with ${diagrams.length} diagram${diagrams.length === 1 ? '' : 's'}.`
+            receipt.text = `Published version ${version.version} of #${branch} with ${diagrams.length} diagram${diagrams.length === 1 ? '' : 's'}.`
+            return receipt.text
           }, ctx)
-          return result(await api.memo('published', text, ctx))
+          return result(text)
         },
       }),
       defineTool({

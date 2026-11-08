@@ -82,8 +82,8 @@ export function Canvas({
   useLayoutEffect(() => {
     const root = host.current?.querySelector('svg')
     if (!root || !svg || !onPick) return
+    for (const hit of root.querySelectorAll('[data-architect-hit]')) hit.remove()
     for (const path of root.querySelectorAll('.edgePaths path[data-id]')) {
-      if (path.hasAttribute('data-architect-hit')) continue
       const hit = path.cloneNode() as SVGPathElement
       hit.setAttribute('data-architect-hit', '')
       hit.removeAttribute('id')
