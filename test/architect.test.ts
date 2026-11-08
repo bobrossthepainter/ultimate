@@ -5,7 +5,7 @@ import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
-import { Index, Versions } from '../extensions/architect/server.ts'
+import { DraftsStore, Index, Versions } from '../extensions/architect/server.ts'
 import { context } from '../server/harness.ts'
 import { fauxServer, post, removeTemp, temp, until } from './helpers.ts'
 
@@ -57,6 +57,26 @@ it('draws versions in one architect under the branch, and sends feedback to the 
           { stopReason: 'toolUse' },
         )
       }
+      // In the architecture chat: propose a comment, then try to publish, which only Draw's architect may.
+      if (
+        transcript.messages.findLast((message) => message.role !== 'system')?.role === 'user' &&
+        transcript.messages.some(
+          (message) => message.role === 'user' && message.content === 'Suggest one.',
+        )
+      )
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('architecture_comment', {
+              action: 'add',
+              diagram: 'components',
+              kind: 'node',
+              part: 'doc',
+              text: 'Split the index from the versions.',
+            }),
+            fauxToolCall('architecture_publish', { title: 'x', summary: 'x', diagrams: [] }),
+          ],
+          { stopReason: 'toolUse' },
+        )
       return fauxAssistantMessage('Adds the surface.')
     }
     server.host.faux!.setResponses([route])
@@ -107,25 +127,63 @@ it('draws versions in one architect under the branch, and sends feedback to the 
         })
       ).data.result.architect,
     ).toBe(first.architect)
-    await server.harness.waitForIdle(context)
+    await until(async () => briefs.length === 3 && !(await busy(first.architect)))
 
-    const sent = await post(server, '/api/extensions/architect/actions/send', {
-      args: {
-        conversation: branch,
-        branch,
-        version: 2,
-        note: 'Mostly naming.',
-        comments: [
-          {
+    const action = (name: string, args: unknown) =>
+      post(server, `/api/extensions/architect/actions/${name}`, { args })
+    const edit = (change: unknown) => action('edit', { branch, version: 3, edit: change })
+    expect(
+      (
+        await edit({
+          op: 'add',
+          comment: {
             diagram: 'components',
             kind: 'node',
             part: 'surface',
             label: 'Surface',
             text: 'Why a tab?',
           },
-        ],
-      },
-    })
+        })
+      ).status,
+    ).toBe(200)
+    await edit({ op: 'note', note: 'Mostly naming.' })
+    expect(
+      JSON.stringify(
+        (
+          await edit({
+            op: 'add',
+            comment: { diagram: 'components', kind: 'node', part: 'nope', text: 'x' },
+          })
+        ).data,
+      ),
+    ).toContain('has no part nope')
+
+    // The architecture chat: a fork of the architect at its latest answer, under the branch, reused until a new version.
+    const opened = (await action('chat', { branch })).data.result.chat as number
+    expect((await action('chat', { branch: first.architect })).data.result.chat).toBe(opened)
+    const chat = (await server.harness.conversation(opened as ConversationId, context))!
+    const chatRecord = await server.harness.commit(
+      (tx) => tx.conversation(opened as ConversationId),
+      context,
+    )
+    expect(chatRecord?.parent?.conversationId).toBe(first.architect)
+    await (await chat.submit({ type: 'input', content: 'Suggest one.' }, context)).wait(context)
+    const chatEntries = (await chat.context(context)).entries
+    // The chat proposes comments; only Draw's architect publishes.
+    const published = chatEntries
+      .flatMap((entry) => (entry.kind === 'pi.tool-result' ? (entry.model ?? []) : []))
+      .findLast(
+        (message) => message.role === 'toolResult' && message.toolName === 'architecture_publish',
+      )
+    expect(published).toMatchObject({ isError: true })
+    const pending = (await server.harness.snapshot(DraftsStore, branch as ConversationId, context))!
+      .versions['3']
+    expect(pending.comments.map((comment) => [comment.part, comment.by])).toEqual([
+      ['surface', undefined],
+      ['doc', opened],
+    ])
+
+    const sent = await action('send', { branch, version: 3 })
     expect(sent.status).toBe(200)
     await server.harness.waitForIdle(context)
     const conversation = (await server.harness.conversation(branch as ConversationId, context))!
@@ -135,20 +193,22 @@ it('draws versions in one architect under the branch, and sends feedback to the 
     const message = feedback[0].model?.[0]
     expect(message && 'content' in message ? message.content : undefined).toBe(
       [
-        'Architecture feedback on v2 of #' + branch + "'s diagrams (1 comment)",
+        'Architecture feedback on v3 of #' + branch + "'s diagrams (2 comments)",
         'Mostly naming.',
         '**Components** · `surface` (node: Surface)\nWhy a tab?',
+        '**Components** · `doc` (node: architect.versions)\nSplit the index from the versions.',
       ].join('\n\n'),
     )
+    // Sending clears what it sent.
+    expect(
+      (await server.harness.snapshot(DraftsStore, branch as ConversationId, context))!.versions[
+        '3'
+      ],
+    ).toBeUndefined()
     // It woke the coordinator as a typed message would.
     expect(entries.at(-1)?.kind).toBe('pi.assistant')
     const unknown = await post(server, '/api/extensions/architect/actions/send', {
-      args: {
-        conversation: branch,
-        branch,
-        version: 9,
-        comments: [{ diagram: 'components', kind: 'diagram', label: '', text: 'x' }],
-      },
+      args: { branch, version: 9 },
     })
     expect(JSON.stringify(unknown.data)).toContain('has no version 9')
   } finally {

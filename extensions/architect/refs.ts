@@ -54,8 +54,25 @@ export type ArchitectureComments = {
   note?: string
 }
 
+/**
+ * A comment not sent yet. `id` tells drafts on the same part apart; `by` is the architecture chat that suggested it,
+ * absent for the user's own.
+ */
+export type Draft = ArchitectureComment & { id: string; by?: number }
+/** A version's pending feedback: its comments, the overall note, and the recipient the user picked, if any. */
+export type Drafts = { comments: Draft[]; note: string; to?: number }
+/** The pending feedback of a branch, on the branch: by version number. */
+export type ArchitectureDrafts = { versions: Record<string, Drafts> }
+
+/** A branch's architecture chat, on the branch: the conversation and the version it was forked at. */
+export type ArchitectureChat = { id?: number; version?: number }
+
 /** A branch's versions, on the branch's conversation. */
 export const ArchitectureDoc = docRef<Architecture>('architect.versions')
+/** A branch's pending feedback, on the branch's conversation. */
+export const DraftsDoc = docRef<ArchitectureDrafts>('architect.drafts')
+/** A branch's architecture chat, on the branch's conversation. */
+export const ChatDoc = docRef<ArchitectureChat>('architect.chat')
 /** The branches that have versions, on the root conversation. */
 export const ArchitectureIndexDoc = docRef<ArchitectureIndex>('architect.index')
 
@@ -69,12 +86,40 @@ export const DrawAction = actionRef<
   { architect: number; started: boolean }
 >('architect', 'draw')
 
+/** One change to a version's pending feedback. */
+export type DraftEdit =
+  | { op: 'add'; comment: ArchitectureComment }
+  | { op: 'update'; id: string; text: string }
+  | { op: 'delete'; id: string }
+  | { op: 'note'; note: string }
+  | { op: 'to'; to: number }
+  | { op: 'clear' }
+
 /**
- * User only: `{ conversation, branch, version, comments, note? }` → `{ conversation }`: one `architect.comments`
- * input into `conversation` (the branch's coordinator unless the user picked another), which wakes or steers it like a
- * typed message. At most 50 comments of at most 4,000 characters each; throws on an unknown conversation or version.
+ * User only: `{ branch, version, edit }` → `{ id? }` (the new draft's id for `add`): change the version's pending
+ * feedback in `architect.drafts`. At most 50 comments of at most 4,000 characters; throws on an unknown version or id.
  */
-export const SendAction = actionRef<
-  { conversation: number } & ArchitectureComments,
-  { conversation: number }
->('architect', 'send')
+export const EditAction = actionRef<
+  { branch: number; version: number; edit: DraftEdit },
+  { id?: string }
+>('architect', 'edit')
+
+/**
+ * User only: `{ branch, version }` → `{ conversation }`: send the version's pending feedback as one
+ * `architect.comments` input into its recipient (`to`, else the branch's coordinator), which wakes or steers it like a
+ * typed message, and clear the comments sent. Throws on an unknown version or with no comments pending.
+ */
+export const SendAction = actionRef<{ branch: number; version: number }, { conversation: number }>(
+  'architect',
+  'send',
+)
+
+/**
+ * User only: `{ branch, fresh? }` → `{ chat }`: the branch's architecture chat, a copy of its architect at its latest
+ * answer, made on first use (or again with `fresh`, or once a newer version exists). Throws while the branch has no
+ * version or its architect still draws.
+ */
+export const ChatAction = actionRef<{ branch: number; fresh?: boolean }, { chat: number }>(
+  'architect',
+  'chat',
+)
