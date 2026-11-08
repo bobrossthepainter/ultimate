@@ -4,6 +4,7 @@ import {
   GitCompareArrowsIcon,
   LoaderIcon,
   MessageSquareIcon,
+  MessagesSquareIcon,
   PencilIcon,
   SparklesIcon,
   Trash2Icon,
@@ -41,11 +42,12 @@ import {
 } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { Canvas, Composer, popoverAt } from './canvas.tsx'
+import { ChatPanel, DiscussButton } from './chat.tsx'
 import type { Writing } from './canvas.tsx'
-import { newId, useDrafts, where } from './drafts.tsx'
+import { useDrafts, where } from './drafts.tsx'
 import type { Draft, Drafts } from './drafts.tsx'
 import { Footer, Sent } from './footer.tsx'
-import { clearMark, useMark, useView } from './link.tsx'
+import { clearMark, useChatOpen, useMark, useView } from './link.tsx'
 import type { View } from './link.tsx'
 import { Frame, Legend, Loading, Notice } from './frame.tsx'
 import { changeCounts, changes } from './parts.tsx'
@@ -95,7 +97,7 @@ function BranchPicker({
     <Popover onOpenChange={setOpen} open={open}>
       <PopoverTrigger asChild>
         <button
-          className="flex h-7 max-w-80 min-w-0 cursor-pointer items-center gap-1.5 rounded-md border border-border/70 px-2 text-[12.5px] hover:bg-accent/60"
+          className="flex h-7 max-w-80 min-w-0 shrink cursor-pointer items-center gap-1.5 overflow-hidden rounded-md border max-md:max-w-28 border-border/70 px-2 text-[12.5px] hover:bg-accent/60"
           data-architect-branch={branch}
           title="Choose a branch"
           type="button"
@@ -344,10 +346,15 @@ function PendingItem({
 }) {
   return (
     <li
-      className="group/draft rounded-md border border-border/70 border-l-2 border-l-brand/50 bg-muted/30 px-2 py-1"
+      className={cn(
+        'group/draft rounded-md border border-border/70 border-l-2 bg-muted/30 px-2 py-1',
+        draft.by === undefined ? 'border-l-brand/50' : 'border-dashed border-l-brand/50',
+      )}
       data-architect-draft-item={draft.id}
+      data-architect-suggested={draft.by}
     >
       <div className="flex items-center gap-1.5">
+        {draft.by !== undefined && <Suggested />}
         <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-muted-foreground">
           {where(draft)}
         </span>
@@ -374,6 +381,19 @@ function PendingItem({
         {draft.text}
       </p>
     </li>
+  )
+}
+
+/** The mark of a comment the architecture chat suggested: the user's to keep, edit or delete. */
+function Suggested() {
+  return (
+    <span
+      className="flex shrink-0 items-center gap-0.5 rounded-sm bg-brand/12 px-1 font-mono text-[10px] text-brand"
+      title="Suggested by the architecture chat"
+    >
+      <MessagesSquareIcon className="size-2.5" />
+      chat
+    </span>
   )
 }
 
@@ -461,6 +481,7 @@ export default function ArchitectureSurface() {
   const change = (next: Partial<View>) => setView((previous) => ({ ...previous, ...next }))
   const phone = useViewport() === 'phone'
   const now = useNow(60_000)
+  const [chatting, setChat] = useChatOpen()
   if (!index || (branch !== undefined && !doc))
     return (
       <Frame>
@@ -514,6 +535,9 @@ export default function ArchitectureSurface() {
           )}
           <span className="mx-0.5 h-4 w-px shrink-0 bg-border/70" />
           <Draw architect={doc?.architect} branch={branch} />
+          {latest && (
+            <DiscussButton branch={branch} onToggle={() => setChat(!chatting)} open={chatting} />
+          )}
         </>
       }
     >
@@ -533,6 +557,14 @@ export default function ArchitectureSurface() {
         />
       ) : (
         <Notice>No versions yet: Draw asks the architect for the first.</Notice>
+      )}
+      {chatting && latest && (
+        <ChatPanel
+          branch={branch}
+          latest={latest.version}
+          onClose={() => setChat(false)}
+          phone={phone}
+        />
       )}
     </Frame>
   )
@@ -577,7 +609,7 @@ function Version({
   view: View
   onView: (next: Partial<View>) => void
 }) {
-  const [drafts, update] = useDrafts(branch, version.version)
+  const [drafts, edit] = useDrafts(branch, version.version)
   const to = drafts.to ?? branch
   const [writing, setWriting] = useState<Writing>()
   const [sending, setSending] = useState(false)
@@ -606,47 +638,28 @@ function Version({
     onView({ diagram: id })
   }
   const editing = writing?.id ? drafts.comments.find((draft) => draft.id === writing.id) : undefined
-  const save = (text: string) => {
-    if (!writing) return false
+  const save = async (text: string) => {
+    if (!writing) return
     const { part } = writing
-    const kept = update((all) => ({
-      ...all,
-      comments: editing
-        ? all.comments.map((draft) => (draft.id === editing.id ? { ...draft, text } : draft))
-        : [
-            ...all.comments,
-            {
-              id: newId(),
-              diagram: diagram.id,
-              kind: part.kind,
-              ...(part.kind === 'diagram' ? {} : { part: part.part }),
-              label: part.label,
-              text,
-            },
-          ],
-    }))
-    if (kept) setWriting(undefined)
-    return kept
+    if (editing) await edit({ op: 'update', id: editing.id, text })
+    else
+      await edit({
+        op: 'add',
+        comment: {
+          diagram: diagram.id,
+          kind: part.kind,
+          ...(part.kind === 'diagram' ? {} : { part: part.part }),
+          label: part.label,
+          text,
+        },
+      })
+    setWriting(undefined)
   }
   const send = async () => {
     setSending(true)
     setSent(undefined)
-    const ids = new Set(drafts.comments.map((draft) => draft.id))
-    const note = drafts.note
     try {
-      const result = await api.action(SendAction, {
-        conversation: to,
-        branch,
-        version: version.version,
-        comments: drafts.comments.map(({ id: _id, ...comment }) => comment),
-        ...(note.trim() && { note }),
-      })
-      update((all) => ({
-        ...all,
-        comments: all.comments.filter((draft) => !ids.has(draft.id)),
-        note: all.note === note ? '' : all.note,
-      }))
-      setSent(result)
+      setSent(await api.action(SendAction, { branch, version: version.version }))
     } catch (failure) {
       setSent({ error: errorMessage(failure) })
     } finally {
@@ -697,8 +710,8 @@ function Version({
         error={sent && 'error' in sent ? sent.error : undefined}
         onSend={() => void send()}
         sending={sending}
+        edit={edit}
         to={to}
-        update={update}
       />
     ) : sent && !('error' in sent) ? (
       <Sent
@@ -717,12 +730,7 @@ function Version({
           current={diagram}
           diagrams={version.diagrams}
           drafts={drafts}
-          onDelete={(draft) =>
-            update((all) => ({
-              ...all,
-              comments: all.comments.filter((item) => item.id !== draft.id),
-            }))
-          }
+          onDelete={(draft) => edit({ op: 'delete', id: draft.id })}
           onEdit={(draft) => setWriting({ part: partOf(draft), x: 24, y: 24, id: draft.id })}
           onPick={pick}
         />

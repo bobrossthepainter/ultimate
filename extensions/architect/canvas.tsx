@@ -1,4 +1,4 @@
-import { MessageSquareIcon } from 'lucide-react'
+import { MessageSquareIcon, MessagesSquareIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
@@ -96,24 +96,33 @@ export function Canvas({
     }
   }, [svg, onPick])
   // A marker at the top right of each part with a draft (and of the part a link pointed at), placed over the SVG.
-  const draftKey = drafts.map((draft) => `${draft.kind}:${draft.part}`).join('|')
-  const [markers, setMarkers] = useState<{ key: string; x: number; y: number; link: boolean }[]>([])
+  const draftKey = drafts
+    .map((draft) => `${draft.kind}:${draft.part}:${draft.by === undefined ? 'own' : 'chat'}`)
+    .join('|')
+  const [markers, setMarkers] = useState<
+    { key: string; x: number; y: number; link: boolean; chat: boolean }[]
+  >([])
   useLayoutEffect(() => {
     const root = host.current?.querySelector('svg')
     const box = frame.current
     if (!root || !svg || !box) return undefined
     const place = () => {
       const origin = box.getBoundingClientRect()
-      const parts = drafts.flatMap((draft) =>
-        draft.kind !== 'diagram' && draft.part ? [{ kind: draft.kind, part: draft.part }] : [],
-      )
+      // The user's own drafts first: a part with both shows the solid marker.
+      const parts = drafts
+        .toSorted((a, b) => Number(a.by !== undefined) - Number(b.by !== undefined))
+        .flatMap((draft) =>
+          draft.kind !== 'diagram' && draft.part
+            ? [{ part: { kind: draft.kind, part: draft.part }, chat: draft.by !== undefined }]
+            : [],
+        )
       const wanted = [
-        ...(marked ? [{ part: marked, link: true }] : []),
-        ...parts.map((part) => ({ part, link: false })),
+        ...(marked ? [{ part: marked, link: true, chat: false }] : []),
+        ...parts.map((item) => ({ ...item, link: false })),
       ]
       const seen = new Set<string>()
       setMarkers(
-        wanted.flatMap(({ part, link }) => {
+        wanted.flatMap(({ part, link, chat }) => {
           const key = `${part.kind}:${part.part}`
           if (seen.has(key)) return []
           seen.add(key)
@@ -124,20 +133,22 @@ export function Canvas({
             .querySelector(`.edgeLabel [data-id="${CSS.escape(part.part)}"]`)
             ?.getBoundingClientRect()
           if (part.kind === 'edge' && caption && caption.width > 0)
-            return [{ key, x: caption.right - origin.left, y: caption.top - origin.top, link }]
+            return [
+              { key, x: caption.right - origin.left, y: caption.top - origin.top, link, chat },
+            ]
           if (part.kind === 'edge' && path instanceof SVGPathElement) {
             const middle = path.getPointAtLength(path.getTotalLength() / 2)
             const at = new DOMPoint(middle.x, middle.y).matrixTransform(
               path.getScreenCTM() ?? undefined,
             )
-            return [{ key, x: at.x - origin.left, y: at.y - origin.top, link }]
+            return [{ key, x: at.x - origin.left, y: at.y - origin.top, link, chat }]
           }
           // A participant is drawn twice (top and bottom): mark the top box.
           const rect = elements
             .map((element) => element.getBoundingClientRect())
             .toSorted((a, b) => a.top - b.top)[0]
           if (!rect) return []
-          return [{ key, x: rect.right - origin.left, y: rect.top - origin.top, link }]
+          return [{ key, x: rect.right - origin.left, y: rect.top - origin.top, link, chat }]
         }),
       )
     }
@@ -189,14 +200,23 @@ export function Canvas({
         markers.map((marker) => (
           <span
             className={cn(
-              'pointer-events-none absolute flex size-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-brand text-background shadow-sm',
+              'pointer-events-none absolute flex size-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-sm',
+              // The chat's suggestions are outlined: the user's own are solid.
+              marker.chat
+                ? 'border border-brand bg-background text-brand'
+                : 'bg-brand text-background',
               marker.link && 'ring-2 ring-brand/40 ring-offset-1 ring-offset-background',
             )}
             data-architect-marker={marker.key}
+            data-architect-marker-chat={marker.chat || undefined}
             key={`${marker.key}:${marker.link}`}
             style={{ left: marker.x, top: marker.y }}
           >
-            <MessageSquareIcon className="size-2.5" />
+            {marker.chat ? (
+              <MessagesSquareIcon className="size-2.5" />
+            ) : (
+              <MessageSquareIcon className="size-2.5" />
+            )}
           </span>
         ))}
     </div>
@@ -204,8 +224,8 @@ export function Canvas({
 }
 
 /**
- * The comment popover at the clicked part: what it is on, the text, Cancel and Add (⌘↵). `onSubmit` returns false when
- * the draft could not be kept; it then stays open with the text and says why.
+ * The comment popover at the clicked part: what it is on, the text, Cancel and Add (⌘↵). While `onSubmit` saves it
+ * stays open; when the save fails it keeps the text and says why.
  */
 export function Composer({
   title,
@@ -219,15 +239,26 @@ export function Composer({
   label?: string
   initial?: string
   submit: string
-  onSubmit: (text: string) => boolean
+  onSubmit: (text: string) => Promise<unknown>
   onCancel: () => void
 }) {
   const [text, setText] = useState(initial)
-  const [refused, setRefused] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string>()
   const field = useRef<HTMLTextAreaElement>(null)
   useEffect(() => field.current?.focus({ preventScroll: true }), [])
-  const ready = text.trim().length > 0 && text.length <= limits.text
-  const save = () => setRefused(!onSubmit(text.trim()))
+  const ready = !saving && text.trim().length > 0 && text.length <= limits.text
+  const save = () => {
+    setSaving(true)
+    setError(undefined)
+    onSubmit(text.trim()).then(
+      () => setSaving(false),
+      (failure: unknown) => {
+        setSaving(false)
+        setError(errorMessage(failure))
+      },
+    )
+  }
   return (
     <form
       className="w-[min(22rem,calc(100vw-2rem))] rounded-md border border-brand/40 bg-card font-sans shadow-lg"
@@ -270,9 +301,13 @@ export function Composer({
             {text.length} / {limits.text}
           </span>
         ) : (
-          refused && (
-            <span className="mr-auto font-mono text-[11px] text-error" role="alert">
-              Too long to keep as a draft
+          error && (
+            <span
+              className="mr-auto min-w-0 truncate font-mono text-[11px] text-error"
+              role="alert"
+              title={error}
+            >
+              {error}
             </span>
           )
         )}
@@ -280,7 +315,7 @@ export function Composer({
           Cancel
         </Button>
         <Button disabled={!ready} size="xs" type="submit">
-          {submit}
+          {saving ? 'Saving…' : submit}
         </Button>
       </div>
     </form>

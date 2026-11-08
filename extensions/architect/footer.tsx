@@ -1,11 +1,12 @@
 import { ArrowRightIcon, CheckIcon, CircleAlertIcon, MessageSquareIcon, XIcon } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { cn, plural } from '@/sdk'
+import { cn, errorMessage, plural } from '@/sdk'
 import { Address } from '../messages/ui.tsx'
 import { Recipient } from '../review/ui.tsx'
 import { limits } from './drafts.tsx'
 import type { Drafts } from './drafts.tsx'
+import type { DraftEdit } from './refs.ts'
 
 /**
  * The pending feedback under the diagram, as Review's: its count, an optional overall note, Discard, the recipient and
@@ -13,21 +14,27 @@ import type { Drafts } from './drafts.tsx'
  */
 export function Footer({
   drafts,
-  update,
+  edit,
   to,
   sending,
   error,
   onSend,
 }: {
   drafts: Drafts
-  update: (change: (drafts: Drafts) => Drafts) => boolean
+  edit: (change: DraftEdit) => Promise<unknown>
   to?: number
   sending: boolean
   error?: string
   onSend: () => void
 }) {
   const [noting, setNoting] = useState(false)
-  const [full, setFull] = useState(false)
+  // The note as typed: it reaches the server on blur, not on every key.
+  const [note, setNote] = useState<string>()
+  const [failed, setFailed] = useState<string>()
+  const run = (change: DraftEdit) => {
+    setFailed(undefined)
+    edit(change).catch((failure: unknown) => setFailed(errorMessage(failure)))
+  }
   const count = drafts.comments.length
   if (count === 0) return null
   const over = count > limits.comments
@@ -40,26 +47,24 @@ export function Footer({
         <textarea
           aria-label="Overall note"
           className="mb-2 block max-h-40 min-h-12 w-full resize-y rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground/50 focus:border-brand/50"
-          onChange={(event) => {
-            const note = event.target.value
-            setFull(!update((all) => ({ ...all, note })))
+          onBlur={() => {
+            if (note !== undefined && note !== drafts.note) run({ op: 'note', note })
+            setNote(undefined)
           }}
+          onChange={(event) => setNote(event.target.value)}
           placeholder="An overall note (optional)"
-          value={drafts.note}
+          value={note ?? drafts.note}
         />
       )}
-      {full && (
-        <p className="mb-2 font-mono text-[11.5px] text-error" role="alert">
-          Too long to keep as a draft: shorten the note, or send first
-        </p>
-      )}
-      {error && (
+      {(error || failed) && (
         <p
           className="mb-2 flex items-start gap-1.5 font-mono text-[11.5px] text-error"
           role="alert"
         >
           <CircleAlertIcon className="mt-px size-3.5 shrink-0" />
-          <span className="min-w-0 break-words">Not sent: {error}</span>
+          <span className="min-w-0 break-words">
+            {error ? `Not sent: ${error}` : `Not saved: ${failed}`}
+          </span>
         </p>
       )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -83,14 +88,14 @@ export function Footer({
           <Button
             onClick={() => {
               setNoting(false)
-              update((all) => ({ ...all, comments: [], note: '' }))
+              run({ op: 'clear' })
             }}
             size="xs"
             variant="ghost"
           >
             Discard
           </Button>
-          <Recipient onChange={(id) => update((all) => ({ ...all, to: id }))} value={to} />
+          <Recipient onChange={(id) => run({ op: 'to', to: id })} value={to} />
           <Button disabled={sending || over || to === undefined} onClick={onSend} size="xs">
             {sending ? 'Sending…' : `Send (${count})`}
             <ArrowRightIcon />
