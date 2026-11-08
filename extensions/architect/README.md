@@ -48,14 +48,21 @@ diagram (by id) between the two versions in place, or shows both side by side (n
 diagrams reads "Nothing architectural changed" with its summary. A source Mermaid cannot parse shows its error and
 source.
 
+**Discuss** opens the architecture chat (`chat.tsx`) beside the diagram, which stays visible and clickable; on a phone
+it covers the diagram until closed. The first open makes the chat (`chat` action); its header names the version it
+was opened at, and once a newer version exists it offers **New chat on vN** (`fresh`). Its suggested comments land in
+the same pending list, marked **chat** with a dashed edge and an outlined marker on their part; the user edits,
+deletes and sends them like their own.
+
 ## Feedback
 
 Clicking a node, an edge or (in a sequence diagram) a participant opens a comment on it by its ID; the diagram's title
 takes a comment on the whole diagram. `parts.tsx` maps a click back to the source ID, verified on Mermaid 12.3.0:
 flowchart, class, ER and state nodes by their group's id (`<svg>-flowchart-<id>-<n>`, `-classId-`, `-entity-`,
 `-state-`), edges by `data-id` (`L_<a>_<b>_<n>`, `id_<a>_<b>_<n>`), participants by the `name` on their boxes and stick
-figures. A part with a draft carries a marker, and clicking it again edits that draft. Drafts are durable UI state per
-branch and version. **Send** posts the `send` action: one `architect.comments` input into the recipient (the branch's coordinator unless the **to** picker says
+figures. A part with a draft carries a marker, and clicking it again edits that draft. Drafts live on the branch
+(`architect.drafts`, changed with the `edit` action) per version, so the chat's suggestions and the user's own share
+one list. **Send** posts the `send` action: one `architect.comments` input into the recipient (the branch's coordinator unless the **to** picker says
 otherwise), which wakes or steers it like a typed message. The model reads:
 
 ```text

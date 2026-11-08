@@ -14,7 +14,7 @@ export function Frame({ controls, children }: { controls?: ReactNode; children: 
         </span>
         {controls}
       </Header>
-      <div className="flex min-h-0 flex-1">{children}</div>
+      <div className="relative flex min-h-0 flex-1">{children}</div>
       <StatusLine />
     </>
   )

@@ -10,6 +10,9 @@ export type View = { branch?: number; version?: number; diagram?: string; compar
 
 export const useView = () => useExtensionUiState<View>('view', {})
 
+/** Whether the architecture chat is open beside the diagrams. */
+export const useChatOpen = () => useExtensionUiState<boolean>('chat', false)
+
 /** A request to show the surface at a place: from a comment card's chip or a command. */
 type Request = View & { mark?: Pick<Part, 'kind' | 'part'> }
 
