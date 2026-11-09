@@ -57,6 +57,18 @@ function launch() {
     .catch(failed)
 }
 
+/** Closes the shown notifications whose tags are in `tags`. */
+export function closeAnswered(registration: ServiceWorkerRegistration, tags: Set<string>) {
+  // WebKit (iOS) has no `getNotifications`; calling it threw and took down the facet (reported from #49).
+  if (typeof registration.getNotifications !== 'function') return
+  registration
+    .getNotifications()
+    .then((shown) => {
+      for (const notification of shown) if (tags.has(notification.tag)) notification.close()
+    })
+    .catch((error: unknown) => console.warn('Closing answered notifications', error))
+}
+
 /** How often a shown page says so; the server skips a browser seen in the last 15 s. */
 const presentMs = 10_000
 
@@ -100,13 +112,7 @@ function Pusher() {
     .join(' ')
   useEffect(() => {
     if (!settled || !registration) return
-    const tags = new Set(settled.split(' '))
-    registration
-      .getNotifications()
-      .then((shown) => {
-        for (const notification of shown) if (tags.has(notification.tag)) notification.close()
-      })
-      .catch((error: unknown) => console.warn('Closing answered notifications', error))
+    closeAnswered(registration, new Set(settled.split(' ')))
   }, [settled, registration])
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return undefined
@@ -130,7 +136,7 @@ function Pusher() {
 /** Why this browser cannot get pushes, or nothing. */
 function blocked() {
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window))
-    return "This browser can't receive push notifications; install Ultimate as an app first."
+    return "This browser can't receive push notifications; install Ultimate as an app first (on iPhone and iPad: Share, Add to Home Screen)."
   if (Notification.permission === 'denied')
     return 'Notifications are blocked for this app; allow them in its settings.'
   return undefined
