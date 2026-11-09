@@ -414,12 +414,7 @@ type PlanShape = {
 }
 
 /** The architect's brief for the next version of `branch`. */
-async function brief(
-  host: ExtensionHost,
-  branch: number,
-  reason: string | undefined,
-  ctx: Context,
-) {
+async function brief(host: ExtensionHost, branch: number, ctx: Context) {
   const workspace = await host.need(WorkspacesApi).get(branch as ConversationId, ctx)
   const title = host.conversations().find((c) => c.id === branch)?.title ?? `#${branch}`
   const planToken = host.doc('ultimate.plan')
@@ -455,7 +450,6 @@ async function brief(
         ]
   return [
     `Draw version ${(previous?.version ?? 0) + 1} of the architecture of branch #${branch} "${title}".`,
-    ...(reason ? [`Why now: ${reason}`] : []),
     where.join('\n'),
     epics.length
       ? `## Plan\n\n${clip(
@@ -499,14 +493,9 @@ async function brief(
 
 /**
  * Start the architect of `branch` on a new version: its conversation (made on first use, under the branch) gets the
- * brief as input. `ifIdle` starts nothing while it still draws.
+ * brief as input. Starts nothing while it still draws. Only the user draws (Draw, ⌘K): no agent has a tool for it.
  */
-async function draw(
-  host: ExtensionHost,
-  requested: number,
-  options: { reason?: string; requestId?: string; ifIdle?: boolean },
-  ctx: Context,
-) {
+async function draw(host: ExtensionHost, requested: number, ctx: Context) {
   const branch = await branchOf(host, requested, ctx)
   if (!conversationExists(host, branch))
     throw new Error('conversation must be an existing conversation id')
@@ -519,7 +508,7 @@ async function draw(
   )
   const workspace = await host.need(WorkspacesApi).get(branch as ConversationId, ctx)
   const title = host.conversations().find((c) => c.id === branch)?.title ?? `#${branch}`
-  const text = await brief(host, branch, options.reason, ctx)
+  const text = await brief(host, branch, ctx)
   const cwd = workspace?.state === 'ready' ? workspace.path : host.projectRoot
   const architect = await host.harness().commit(async (tx) => {
     const state = await tx.doc(Versions, branch as ConversationId)
@@ -554,15 +543,13 @@ async function draw(
     state.architect = child.id
     return child.id
   }, ctx)
-  let submission
   try {
-    submission = await (await host.harness().conversation(architect, ctx))!.submit(
+    await (await host.harness().conversation(architect, ctx))!.submit(
       {
         type: 'input',
         content: text,
         // A Draw while the architect still draws starts nothing; the admission checks it atomically.
-        whenBusy: options.ifIdle ? 'reject' : 'followUp',
-        ...(options.requestId ? { requestId: options.requestId } : {}),
+        whenBusy: 'reject',
       },
       ctx,
     )
@@ -570,7 +557,7 @@ async function draw(
     if (error instanceof ConversationBusy) return { architect: architect as number, started: false }
     throw error
   }
-  return { architect: architect as number, started: true, submission, branch }
+  return { architect: architect as number, started: true }
 }
 
 /** The branch of a `{ branch, version }` argument, or throws. */
@@ -678,12 +665,7 @@ export const actions = {
     const id = record(args) ? args.conversation : undefined
     if (typeof id !== 'number' || !Number.isSafeInteger(id) || !conversationExists(host, id))
       throw new Error('conversation must be an existing conversation id')
-    const { architect, started } = await draw(
-      host,
-      id,
-      { reason: 'The user asked for a new version.', ifIdle: true },
-      context,
-    )
+    const { architect, started } = await draw(host, id, context)
     return { architect, started }
   }),
   edit: implementAction(EditAction, async (args, { host }) => {
@@ -979,46 +961,6 @@ export default (host: ExtensionHost) =>
             return done
           }, ctx)
           return result(text)
-        },
-      }),
-      defineTool({
-        name: 'draw_architecture',
-        deferred: true,
-        // Rerun after a restart: the same request id finds the brief already given and waits for it again.
-        replay: 'safe',
-        description:
-          "Have the architect draw a new version of this branch's architecture diagrams for the user (the Architecture tab) and wait for it: once your plan is set, and again before workspace submit. Returns the architect's summary.",
-        parameters: obj({
-          reason: opt(
-            str({ description: 'Why now, in a few words: "plan set", "before submit".' }),
-          ),
-        }),
-        execute: async (args, api, ctx) => {
-          const started = await draw(
-            host,
-            api.conversationId,
-            {
-              ...(args.reason ? { reason: args.reason } : {}),
-              requestId: `architect:${api.taskId}:${api.callId}`,
-            },
-            ctx,
-          )
-          if (!('submission' in started) || !started.submission)
-            throw new Error('The architect did not start')
-          const settled = await started.submission.wait(ctx)
-          const answer =
-            settled.answer === undefined
-              ? undefined
-              : await host.harness().commit((tx) => tx.entry(settled.answer), ctx)
-          const latest = (
-            await host.harness().snapshot(Versions, started.branch as ConversationId, ctx)
-          )?.versions.at(-1)
-          const summary = answer ? textOf(answer).trim() : ''
-          return result(
-            settled.status === 'done'
-              ? `Architect #${started.architect}: ${summary || '(no answer)'}${latest ? `\nLatest version: v${latest.version} "${latest.title}" with ${latest.diagrams.length} diagram${latest.diagrams.length === 1 ? '' : 's'}.` : '\nNo version published.'}`
-              : `Architect #${started.architect} ended without an answer (${settled.reason ?? 'unanswered'}).`,
-          )
         },
       }),
     ],

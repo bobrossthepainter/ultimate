@@ -605,8 +605,8 @@ function NoBranch() {
         <WorkflowIcon className="mx-auto mb-3 size-6 text-muted-foreground/50" />
         <p className="text-[14px] text-foreground/90">No architecture drawn yet</p>
         <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
-          A coordinator has its architect draw once its plan is set. You can ask for one now for the
-          conversation on screen.
+          The architect draws a branch only when you ask. Draw one now for the conversation on
+          screen.
         </p>
         {conversationId !== undefined && (
           <div className="mt-4 flex justify-center">

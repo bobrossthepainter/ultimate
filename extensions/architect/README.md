@@ -10,12 +10,8 @@ ships with the extension, so the definition exists only while the extension is o
 conversation, a child of the branch (owned by an `architect.anchor` task, so the sidebar shows it under the branch),
 made on its first run and reused after, its cwd the branch's worktree (the project checkout once that is gone).
 
-A run starts in one of two ways:
-
-- **Draw**, in the surface or ⌘K **Draw architecture**: the `draw` action. It returns at once; a Draw while the
-  architect still draws starts nothing.
-- **`draw_architecture`**, a deferred tool the coordinator definition adds (`.ultimate/agents/coordinator.md`): once
-  the plan is set and again before `workspace submit`. It waits for the architect and returns its summary.
+A run starts only when the user asks: **Draw**, in the surface or ⌘K **Draw architecture** (the `draw` action). It
+returns at once; a Draw while the architect still draws starts nothing. No agent has a tool to draw.
 
 Its brief names the branch, its worktree and target (the architect reads `git diff <target>...HEAD` and uncommitted
 work itself), the committed changed files (`git diff --stat`, which asks for implementation views), the branch's plan, its coordinator's latest answer, and the previous version as JSON, so diagram and
