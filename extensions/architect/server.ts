@@ -28,6 +28,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { Exec } from '../exec/api.ts'
+import { parseError } from './parse.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import {
@@ -854,6 +855,10 @@ export default (host: ExtensionHost) =>
         }),
         execute: async (args, api, ctx) => {
           const diagrams = checkDiagrams(args.diagrams)
+          for (const diagram of diagrams) {
+            const error = await parseError(diagram.mermaid)
+            if (error) throw new Error(`Mermaid cannot draw ${diagram.id}: ${error}`)
+          }
           const sources = await grounding(
             host,
             (await host.harness().snapshot(Of, api.conversationId, ctx))?.branch,

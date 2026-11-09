@@ -78,6 +78,17 @@ it('draws versions in one architect under the branch, and sends feedback to the 
           { stopReason: 'toolUse' },
         )
       }
+      if (last?.role === 'user' && last.content === 'Publish a broken shape.')
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('architecture_publish', {
+              title: 'x',
+              summary: 'x',
+              diagrams: [{ ...diagram, mermaid: 'flowchart LR\n  doc[("Versions") ]:::added' }],
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        )
       if (last?.role === 'user' && last.content === 'Publish a missing source.')
         return fauxAssistantMessage(
           [
@@ -180,6 +191,14 @@ it('draws versions in one architect under the branch, and sends feedback to the 
       .findLast((message) => message.role === 'toolResult')
     expect(JSON.stringify(failed)).toContain('No such file in the branch')
     expect(JSON.stringify(failed)).toContain('src/gone.ts')
+    // A source Mermaid cannot parse publishes nothing either (#22557: it showed only its parse error).
+    await (
+      await architect.submit({ type: 'input', content: 'Publish a broken shape.' }, context)
+    ).wait(context)
+    const broken = (await architect.context(context)).entries
+      .flatMap((entry) => (entry.kind === 'pi.tool-result' ? (entry.model ?? []) : []))
+      .findLast((message) => message.role === 'toolResult')
+    expect(JSON.stringify(broken)).toContain('Mermaid cannot draw components')
     expect(
       (await server.harness.snapshot(Versions, branch as ConversationId, context))!.versions,
     ).toHaveLength(2)
