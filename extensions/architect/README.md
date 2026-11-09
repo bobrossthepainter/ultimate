@@ -41,7 +41,7 @@ the Mermaid source plus that part map, so another renderer can take it over late
 `useCase` through the actual classes, interfaces and functions, once the branch has code. `code` maps part IDs (nodes,
 participants, and edges by their explicit `e1@-->` ID) to `{ source?: { path, symbol?, line? }, status, evidence }`:
 `implemented` (needs a source) or `proposed`, `static` (read) or `runtime` (seen in a trace). Publishing checks that
-every source path is a file of the branch's checkout (`git ls-files`, untracked included) and records the version's
+every source path is a file committed on the branch (`git ls-tree HEAD`; uncommitted code is drawn proposed) and records the version's
 `code`: the Review spec of the branch's change (`branch:<name>`, while it has a worktree), the paths it changes, and the
 branch the rest is on.
 

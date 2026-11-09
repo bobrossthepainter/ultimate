@@ -43,6 +43,8 @@ it('draws versions in one architect under the branch, and sends feedback to the 
   await mkdir(join(project, 'src'))
   await writeFile(join(project, 'src/publish.ts'), 'export {}\n')
   await git(project, 'init', '-q', '-b', 'main')
+  await git(project, 'add', 'src')
+  await git(project, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-qm', 'src')
   await mkdir(join(home, '.ultimate'), { recursive: true })
   await writeFile(
     join(home, '.ultimate/settings.json'),
@@ -189,7 +191,7 @@ it('draws versions in one architect under the branch, and sends feedback to the 
     const failed = (await architect.context(context)).entries
       .flatMap((entry) => (entry.kind === 'pi.tool-result' ? (entry.model ?? []) : []))
       .findLast((message) => message.role === 'toolResult')
-    expect(JSON.stringify(failed)).toContain('No such file in the branch')
+    expect(JSON.stringify(failed)).toContain('No such file committed on the branch')
     expect(JSON.stringify(failed)).toContain('src/gone.ts')
     // A source Mermaid cannot parse publishes nothing either (#22557: it showed only its parse error).
     await (

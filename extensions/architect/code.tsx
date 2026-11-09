@@ -45,7 +45,7 @@ export function PartSource({ code, where }: { code: PartCode; where?: Architectu
     <a
       className={cn(chipClass, 'hover:border-brand/50 hover:text-foreground')}
       data-architect-source={label}
-      href={`https://${github}/blob/${where.ref}/${source.path}${source.line ? `#L${source.line}` : ''}`}
+      href={`https://${github}/blob/${encodeURIComponent(where.ref)}/${source.path.split('/').map(encodeURIComponent).join('/')}${source.line ? `#L${source.line}` : ''}`}
       rel="noreferrer"
       target="_blank"
       title={`Open ${label} on ${github}, at ${where.ref}`}

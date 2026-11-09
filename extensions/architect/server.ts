@@ -766,13 +766,12 @@ async function grounding(
   const cwd = ready ? workspace.path : host.projectRoot
   const git = host.need(Exec).git
   const lines = (text: string) => text.split('\n').filter(Boolean)
-  const known = new Set(
-    lines(await git(cwd, 'ls-files', '--cached', '--others', '--exclude-standard')),
-  )
+  // The files committed at HEAD: what Review and GitHub open, so an uncommitted or deleted file never becomes a link.
+  const known = new Set(lines(await git(cwd, 'ls-tree', '-r', '--name-only', 'HEAD')))
   const missing = [...paths].filter((path) => !known.has(path))
   if (missing.length)
     throw new Error(
-      `No such file in the branch's checkout: ${missing.join(', ')}. Give source paths relative to the repository root, as git ls-files lists them.`,
+      `No such file committed on the branch: ${missing.join(', ')}. Give source paths relative to the repository root, of committed files; draw uncommitted code as proposed.`,
     )
   if (!ready)
     return {
@@ -854,6 +853,12 @@ export default (host: ExtensionHost) =>
           ),
         }),
         execute: async (args, api, ctx) => {
+          // A replay after a restart returns what was published before checking anything against the checkout again.
+          const published = await api.commit(
+            async (tx) => (await tx.doc(Receipt, api.taskId)).text,
+            ctx,
+          )
+          if (published !== undefined) return result(published)
           const diagrams = checkDiagrams(args.diagrams)
           for (const diagram of diagrams) {
             const error = await parseError(diagram.mermaid)
