@@ -8,6 +8,8 @@
 - `test/claude-code-native-tool.test.ts` — imports pi-claude-code's patched piToolName and its TurnRelay. Drop with the patch when upstream accepts a tool_use named without its MCP prefix.
 - `test/claude-code-tool-ids.test.ts` — imports pi-claude-code's patched prepareFrames. Drop with the patch when upstream normalises other providers' tool ids.
 - `test/claude-code-slash-replay.test.ts` — imports pi-claude-code's patched rewriteInitialRequest and TurnRelay. Drop with the patch when upstream accepts a string first user message on replay and reports the relay error's message.
+- `test/claude-code-discovery.test.ts` — drives pi-claude-code's discoverClaudeModels through the patched useSpawn() with a child that exits before its output ends. Drop with the patch when upstream settles childExit() for a child that already exited.
+- `test/claude-code-turn-relay.test.ts` — drives pi-claude-code's patched TurnRelay, which retries a request whose connection fails in transport before any response byte (PR #113, anthropics/claude-code#106197). Drop with the patch when upstream retries these failures.
 - `lib/compaction.ts` — inlines Pi's unexported createCompaction so a caller's checks and manual compaction creation share one transaction (lineage's tally compaction). Drop when Pi exposes atomic compaction admission.
 - `extensions/claude-code/server.ts` — calls the patched useSpawn() of pi-claude-code's claude-cli.ts so Claude Code starts from the process helper. Drop with the patch when upstream accepts a spawn function.
 - `extensions/lineage/rewind.ts` — copies pi-durable's unexported normalizeToolPath (unicode spaces, a leading @) so going back resolves edit and write paths exactly as those tools do, then resolves them with the exported NodeExecutionEnv.absolutePath (home directory and file URLs). Drop when Pi exports resolveToolPath's normalization.
@@ -39,6 +41,32 @@
 
 On a Pi upgrade, run `rg "Pi upstream:"` and recheck each marked item against the new version; test/e2e/pi-upstream.test.ts checks that every tracked marker matches the installed package version and its path appears in this list, and the backticked path each entry starts with is tracked and contains a marker; backticks later in an entry are prose.
 Delete copies and patches that Pi now exports or fixes, then update the remaining markers and this list after verification.
+
+## Searching Pi's code
+
+The Pi packages live under `node_modules/@earendil-works/<pkg>` (pnpm symlinks). Only pi-claude-code ships its TypeScript
+source; the others ship type declarations and compiled JS, so start in the `.d.ts` files, whose doc comments carry the
+contracts.
+
+| Package           | Types and compiled JS          | Also                                 |
+| ----------------- | ------------------------------ | ------------------------------------ |
+| `pi-durable`      | `dist/*.d.ts`, `dist/*.js`     | `README.md`, `CHANGELOG.md`          |
+| `pi-ai`           | `dist/*.d.ts`, `dist/*.js`     | `README.md`                          |
+| `pi-coding-agent` | `dist/*.d.ts`, `dist/*.js`     | `README.md`, `docs/`, `examples/`    |
+| `pi-claude-code`  | none: `src/*.ts` is the source | `README.md`, `ARCHITECTURE.md`       |
+| `chord`           | `dist/*.d.ts`, `dist/*.js`     | `README.md`, `docs/`, `CHANGELOG.md` |
+| `pi-schema`       | `dist/*.d.ts`, `dist/*.js`     | `README.md`, `CHANGELOG.md`          |
+| `pi-codemode`     | `dist/*.d.ts`, `dist/*.js`     | `README.md`                          |
+| `pi-mcp`          | `dist/*.d.ts`, `dist/*.js`     | `README.md`, `CHANGELOG.md`          |
+
+A search from the repository root skips them, because `node_modules` is gitignored and its entries are symlinks. Follow
+symlinks, override the ignore files, and skip nested dependencies and source maps:
+
+```bash
+rg -L --no-ignore -g '!node_modules' -g '!*.map' -n '<term>' node_modules/@earendil-works
+```
+
+Narrow it to one package with `node_modules/@earendil-works/<pkg>`.
 
 ## Reference
 
