@@ -52,8 +52,8 @@ const swatches = [
   ['removed', 'border-dashed border-diff-del bg-diff-del/20'],
 ] as const
 
-/** What the three change colours mean, and that parts take comments. */
-export function Legend() {
+/** What the three change colours mean (and the dashed outline of proposed parts, when shown), and that parts take comments. */
+export function Legend({ proposed = false }: { proposed?: boolean }) {
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground md:px-4">
       {swatches.map(([name, swatch]) => (
@@ -62,8 +62,14 @@ export function Legend() {
           {name}
         </span>
       ))}
+      {proposed && (
+        <span className="flex items-center gap-1.5" title="Planned, not in the code yet">
+          <span className="size-2.5 rounded-[3px] border border-dashed border-muted-foreground opacity-75" />
+          proposed
+        </span>
+      )}
       <span className="ml-auto text-muted-foreground/60 max-md:hidden">
-        click a part or a title to comment
+        click a part to see its source or comment
       </span>
     </div>
   )

@@ -6,6 +6,10 @@ import { actionRef, docRef } from '../../shared/extension-api.ts'
  * its earlier self. `mermaid` is the source as the architect wrote it, with stable node IDs and `:::added`,
  * `:::changed` or `:::removed` on the parts that changed; `parts` maps each part ID (a node, or a sequence diagram's
  * participant) to what it is, in a few words.
+ *
+ * `level` says what it draws: `overview` (components, flows, stored shapes) or `implementation`, the call path of one
+ * `useCase` through the code's actual classes, interfaces and functions. `code` maps part IDs (nodes, participants and
+ * edges) to where each lives in the source and how sure it is, beside the Mermaid drawing.
  */
 export type ArchitectureDiagram = {
   id: string
@@ -13,7 +17,28 @@ export type ArchitectureDiagram = {
   mermaid: string
   notes: string[]
   parts: Record<string, string>
+  /** Both absent on diagrams published before implementation views: an overview without code. */
+  level?: 'overview' | 'implementation'
+  useCase?: string
+  code?: Record<string, PartCode>
 }
+
+/**
+ * A part's grounding in code. `source` is a path relative to the repository root, with the symbol and line it names;
+ * `status` is `implemented` (in the code the architect read) or `proposed` (planned, not in code yet); `evidence` is
+ * `static` (read from the source) or `runtime` (seen in an observed trace).
+ */
+export type PartCode = {
+  source?: { path: string; symbol?: string; line?: number }
+  status: 'implemented' | 'proposed'
+  evidence: 'static' | 'runtime'
+}
+
+/**
+ * Where a version's sources were read: the Review `spec` of the branch's change (`branch:<name>`) and the paths it
+ * changes, so a source link opens a changed file there; `ref` is the branch the rest of the code is on.
+ */
+export type ArchitectureCode = { spec?: string; changed: string[]; ref: string }
 
 /** One run of the architect: a title, a one-line summary and its diagrams; none when nothing architectural changed. */
 export type ArchitectureVersion = {
@@ -26,6 +51,8 @@ export type ArchitectureVersion = {
   title: string
   summary: string
   diagrams: ArchitectureDiagram[]
+  /** Where its source links point; absent on versions published before links existed. */
+  code?: ArchitectureCode
 }
 
 /** A branch's architecture, on the branch: its versions, oldest first, and its architect conversation once it has one. */

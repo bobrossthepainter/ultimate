@@ -10,6 +10,8 @@ import { partAt, partElements, withChangeClasses } from './parts.tsx'
 import type { Part } from './parts.tsx'
 import type { ArchitectureDiagram } from './refs.ts'
 
+const kinds = ['node', 'edge', 'participant'] as const
+
 /** The change classes' colours from the theme on screen, as hex for Mermaid. */
 function palette() {
   return {
@@ -31,6 +33,12 @@ const interactive = cn(
   '[&_:is(rect,g).actor:hover]:!stroke-brand [&_g.actor-man:hover_*]:!stroke-brand',
   '[&_[data-architect-hit]]:fill-none [&_[data-architect-hit]]:stroke-transparent [&_[data-architect-hit]]:[stroke-width:14px]',
   '[&_[data-architect-hover]]:!stroke-brand',
+)
+
+/** Parts the code does not have yet, from `code`: dashed and faded, the edges too. */
+const proposedStyle = cn(
+  '[&_[data-architect-proposed]_:is(rect,path,polygon,circle,ellipse)]:![stroke-dasharray:5_3]',
+  '[&_path[data-architect-proposed]]:![stroke-dasharray:5_3] [&_[data-architect-proposed]]:opacity-75',
 )
 
 /** A comment being written: where the click was, on what, and the draft it edits. */
@@ -78,6 +86,16 @@ export function Canvas({
     }
   }, [svgId, source, theme, drawn])
   const svg = result?.key === drawn ? result.svg : undefined
+  // The diagram's proposed parts, marked on the SVG for `proposedStyle`.
+  useLayoutEffect(() => {
+    const root = host.current?.querySelector('svg')
+    if (!root || !svg) return
+    for (const [part, code] of Object.entries(diagram.code ?? {}))
+      if (code.status === 'proposed')
+        for (const kind of kinds)
+          for (const element of partElements(svgId, root, { kind, part }))
+            element.setAttribute('data-architect-proposed', '')
+  }, [svg, svgId, diagram.code])
   // Edges are thin: a wide transparent copy of each takes their clicks and hovers.
   useLayoutEffect(() => {
     const root = host.current?.querySelector('svg')
@@ -178,6 +196,7 @@ export function Canvas({
             '[&_svg]:h-auto',
             // A wide diagram fitted to a phone's width is unreadable: there it may grow to 40rem, and the column scrolls.
             fit ? 'flex justify-center [&_svg]:max-w-full' : 'w-max [&_svg]:!max-w-[40rem]',
+            proposedStyle,
             onPick && interactive,
           )}
           data-architect-canvas={diagram.id}
@@ -230,6 +249,7 @@ export function Canvas({
 export function Composer({
   title,
   label,
+  details,
   initial = '',
   submit,
   onSubmit,
@@ -237,6 +257,8 @@ export function Composer({
 }: {
   title: ReactNode
   label?: string
+  /** What the part is in the code, above the text. */
+  details?: ReactNode
   initial?: string
   submit: string
   onSubmit: (text: string) => Promise<unknown>
@@ -275,6 +297,7 @@ export function Composer({
           {title}
         </span>
       </div>
+      {details}
       {label && (
         <p className="truncate px-3 pt-1.5 text-[12px] text-muted-foreground" title={label}>
           {label}

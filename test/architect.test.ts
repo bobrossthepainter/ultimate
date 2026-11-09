@@ -7,6 +7,7 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
 import { DraftsStore, Index, Versions } from '../extensions/architect/server.ts'
 import { context } from '../server/harness.ts'
+import { git } from '../lib/git.ts'
 import { fauxServer, post, removeTemp, temp, until } from './helpers.ts'
 
 const diagram = {
@@ -15,6 +16,23 @@ const diagram = {
   mermaid: 'flowchart LR\n  surface[Surface]:::added --> doc[(Versions)]',
   notes: ['The surface reads the doc.'],
   parts: { surface: 'the Architecture tab', doc: 'architect.versions' },
+  level: 'overview',
+  code: {},
+}
+// The call path of one use case, grounded in the project's files: one part implemented, one only planned.
+const callPath = {
+  id: 'publish-path',
+  title: 'Publish path',
+  mermaid:
+    'flowchart LR\n  publish["publish()"] e_write@-->|"append(version)"| store["VersionStore"]',
+  parts: { publish: 'the tool', store: 'the store' },
+  level: 'implementation',
+  useCase: 'Publish a version',
+  code: {
+    publish: { source: { path: 'src/publish.ts', symbol: 'publish', line: 3 } },
+    e_write: { source: { path: 'src/publish.ts', line: 4 }, evidence: 'runtime' },
+    store: { status: 'proposed' },
+  },
 }
 
 it('draws versions in one architect under the branch, and sends feedback to the coordinator', async () => {
@@ -22,6 +40,9 @@ it('draws versions in one architect under the branch, and sends feedback to the 
   const project = join(home, 'project')
   await mkdir(join(project, '.ultimate'), { recursive: true })
   await writeFile(join(project, '.ultimate/settings.json'), '{}')
+  await mkdir(join(project, 'src'))
+  await writeFile(join(project, 'src/publish.ts'), 'export {}\n')
+  await git(project, 'init', '-q', '-b', 'main')
   await mkdir(join(home, '.ultimate'), { recursive: true })
   await writeFile(
     join(home, '.ultimate/settings.json'),
@@ -51,12 +72,23 @@ it('draws versions in one architect under the branch, and sends feedback to the 
             fauxToolCall('architecture_publish', {
               title: 'Architect',
               summary: 'Adds the surface.',
-              diagrams: [diagram],
+              diagrams: briefs.length === 1 ? [diagram] : [diagram, callPath],
             }),
           ],
           { stopReason: 'toolUse' },
         )
       }
+      if (last?.role === 'user' && last.content === 'Publish a missing source.')
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('architecture_publish', {
+              title: 'x',
+              summary: 'x',
+              diagrams: [{ ...callPath, code: { publish: { source: { path: 'src/gone.ts' } } } }],
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        )
       // In the architecture chat: propose a comment, then try to publish, which only Draw's architect may.
       if (
         transcript.messages.findLast((message) => message.role !== 'system')?.role === 'user' &&
@@ -109,7 +141,48 @@ it('draws versions in one architect under the branch, and sends feedback to the 
     expect(record?.owner?.conversationId).toBe(branch)
     const versions = (await server.harness.snapshot(Versions, branch as ConversationId, context))!
     expect(versions.versions.map((version) => version.version)).toEqual([1, 2])
-    expect(versions.versions[1]).toMatchObject({ architect: first.architect, diagrams: [diagram] })
+    expect(versions.versions[0].diagrams).toEqual([diagram])
+    // An implementation view keeps its level, use case and per-part code, defaults filled in, beside the drawing.
+    expect(versions.versions[1]).toMatchObject({
+      architect: first.architect,
+      code: { changed: [], ref: 'main' },
+    })
+    expect(versions.versions[1].diagrams).toEqual([
+      diagram,
+      {
+        ...callPath,
+        notes: [],
+        code: {
+          publish: {
+            source: { path: 'src/publish.ts', symbol: 'publish', line: 3 },
+            status: 'implemented',
+            evidence: 'static',
+          },
+          e_write: {
+            source: { path: 'src/publish.ts', line: 4 },
+            status: 'implemented',
+            evidence: 'runtime',
+          },
+          store: { status: 'proposed', evidence: 'static' },
+        },
+      },
+    ])
+    // A source the checkout does not have publishes nothing and says which.
+    const architect = (await server.harness.conversation(
+      first.architect as ConversationId,
+      context,
+    ))!
+    await (
+      await architect.submit({ type: 'input', content: 'Publish a missing source.' }, context)
+    ).wait(context)
+    const failed = (await architect.context(context)).entries
+      .flatMap((entry) => (entry.kind === 'pi.tool-result' ? (entry.model ?? []) : []))
+      .findLast((message) => message.role === 'toolResult')
+    expect(JSON.stringify(failed)).toContain('No such file in the branch')
+    expect(JSON.stringify(failed)).toContain('src/gone.ts')
+    expect(
+      (await server.harness.snapshot(Versions, branch as ConversationId, context))!.versions,
+    ).toHaveLength(2)
     expect(
       (await server.harness.snapshot(Index, ROOT_CONVERSATION_ID, context))!.branches[
         String(branch)

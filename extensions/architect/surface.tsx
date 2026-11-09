@@ -1,6 +1,7 @@
 import {
   CheckIcon,
   ChevronDownIcon,
+  CodeIcon,
   GitCompareArrowsIcon,
   LoaderIcon,
   MessageSquareIcon,
@@ -43,6 +44,7 @@ import {
 import { ConversationRef } from '../conversations/ui.tsx'
 import { Canvas, Composer, popoverAt } from './canvas.tsx'
 import { ChatPanel, DiscussButton } from './chat.tsx'
+import { PartSource } from './code.tsx'
 import type { Writing } from './canvas.tsx'
 import { useDrafts, where } from './drafts.tsx'
 import type { Draft, Drafts } from './drafts.tsx'
@@ -265,44 +267,61 @@ function DiagramList({
   onDelete: (draft: Draft) => void
 }) {
   const mine = drafts.comments.filter((draft) => draft.diagram === current.id)
+  const implementation = diagrams.filter((diagram) => diagram.level === 'implementation')
+  const row = (diagram: ArchitectureDiagram) => {
+    const counts = changeCounts(diagram.mermaid)
+    const pending = drafts.comments.filter((draft) => draft.diagram === diagram.id).length
+    const nested = diagram.level === 'implementation'
+    return (
+      <button
+        aria-current={diagram.id === current.id}
+        className={cn(
+          'flex w-full cursor-pointer items-center gap-2 py-1 pr-3 text-left text-[12.5px] hover:bg-accent/60',
+          nested ? 'pl-5' : 'pl-3',
+          diagram.id === current.id ? 'bg-accent/70 text-foreground' : 'text-foreground/80',
+        )}
+        data-architect-diagram={diagram.id}
+        key={diagram.id}
+        onClick={() => onPick(diagram.id)}
+        title={diagram.useCase}
+        type="button"
+      >
+        {nested && <CodeIcon className="size-3 shrink-0 text-muted-foreground" />}
+        <span className="min-w-0 flex-1 truncate">{diagram.useCase ?? diagram.title}</span>
+        {pending > 0 && (
+          <span className="flex items-center gap-0.5 font-mono text-[10.5px] text-brand">
+            <MessageSquareIcon className="size-3" />
+            {pending}
+          </span>
+        )}
+        <span className="flex shrink-0 items-center gap-0.5">
+          {changes
+            .filter((change) => counts[change] > 0)
+            .map((change) => (
+              <span
+                className={cn('size-1.5 rounded-full', tone[change])}
+                key={change}
+                title={`${counts[change]} ${change}`}
+              />
+            ))}
+        </span>
+      </button>
+    )
+  }
   return (
     <nav className="flex w-64 shrink-0 flex-col overflow-y-auto border-r border-border/70 bg-sidebar py-1.5">
-      {diagrams.map((diagram) => {
-        const counts = changeCounts(diagram.mermaid)
-        const pending = drafts.comments.filter((draft) => draft.diagram === diagram.id).length
-        return (
-          <button
-            aria-current={diagram.id === current.id}
-            className={cn(
-              'flex w-full cursor-pointer items-center gap-2 px-3 py-1 text-left text-[12.5px] hover:bg-accent/60',
-              diagram.id === current.id ? 'bg-accent/70 text-foreground' : 'text-foreground/80',
-            )}
-            data-architect-diagram={diagram.id}
-            key={diagram.id}
-            onClick={() => onPick(diagram.id)}
-            type="button"
+      {diagrams.filter((diagram) => diagram.level !== 'implementation').map(row)}
+      {implementation.length > 0 && (
+        <>
+          <h3
+            className="mt-2.5 mb-0.5 px-3 section-label"
+            title="How the code collaborates, one use case at a time"
           >
-            <span className="min-w-0 flex-1 truncate">{diagram.title}</span>
-            {pending > 0 && (
-              <span className="flex items-center gap-0.5 font-mono text-[10.5px] text-brand">
-                <MessageSquareIcon className="size-3" />
-                {pending}
-              </span>
-            )}
-            <span className="flex shrink-0 items-center gap-0.5">
-              {changes
-                .filter((change) => counts[change] > 0)
-                .map((change) => (
-                  <span
-                    className={cn('size-1.5 rounded-full', tone[change])}
-                    key={change}
-                    title={`${counts[change]} ${change}`}
-                  />
-                ))}
-            </span>
-          </button>
-        )
-      })}
+            implementation
+          </h3>
+          {implementation.map(row)}
+        </>
+      )}
       {current.notes.length > 0 && (
         <section className="mt-3 border-t border-border/60 px-3 pt-2.5">
           <h3 className="mb-1 section-label">notes</h3>
@@ -431,6 +450,14 @@ function DiagramTitle({
           type="button"
         >
           <span className="truncate">{diagram.title}</span>
+          {diagram.level === 'implementation' && (
+            <span
+              className="shrink-0 rounded border border-border/70 px-1 font-mono text-[10.5px] font-normal text-muted-foreground"
+              title={`The call path of “${diagram.useCase}” through the code`}
+            >
+              implementation
+            </span>
+          )}
           <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/title:opacity-100 pointer-coarse:opacity-60" />
         </button>
       ) : (
@@ -672,6 +699,11 @@ function Version({
   const composer = writing && (
     <div className="absolute z-20" style={popoverAt(writing.x, writing.y, width)}>
       <Composer
+        details={
+          writing.part.kind !== 'diagram' && diagram.code?.[writing.part.part] ? (
+            <PartSource code={diagram.code[writing.part.part]} where={version.code} />
+          ) : undefined
+        }
         initial={editing?.text}
         key={writing.id ?? `${writing.part.kind}:${writing.part.part}`}
         label={
@@ -832,7 +864,9 @@ function Version({
           </div>
           {composer}
         </div>
-        <Legend />
+        <Legend
+          proposed={Object.values(diagram.code ?? {}).some((code) => code.status === 'proposed')}
+        />
         {footer}
       </div>
     </>
@@ -895,7 +929,7 @@ function PhoneDiagrams({
             onClick={() => onPick(diagram.id)}
             type="button"
           >
-            {diagram.title}
+            {diagram.useCase ?? diagram.title}
           </button>
         ))}
       </div>

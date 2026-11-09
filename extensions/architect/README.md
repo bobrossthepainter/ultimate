@@ -18,7 +18,7 @@ A run starts in one of two ways:
   the plan is set and again before `workspace submit`. It waits for the architect and returns its summary.
 
 Its brief names the branch, its worktree and target (the architect reads `git diff <target>...HEAD` and uncommitted
-work itself), the branch's plan, its coordinator's latest answer, and the previous version as JSON, so diagram and
+work itself), the committed changed files (`git diff --stat`, which asks for implementation views), the branch's plan, its coordinator's latest answer, and the previous version as JSON, so diagram and
 part IDs stay the same across versions.
 
 ## Versions
@@ -28,7 +28,8 @@ part IDs stay the same across versions.
 Only a conversation `draw` made can publish. A version is:
 
 ```ts
-{ version, at, architect, title, summary, diagrams: [{ id, title, mermaid, notes, parts }] }
+{ version, at, architect, title, summary, code?: { spec?, changed, ref },
+  diagrams: [{ id, title, mermaid, notes, parts, level, useCase?, code }] }
 ```
 
 `id` is a slug kept across versions; `mermaid` is the source with stable node IDs and `:::added`, `:::changed` or
@@ -36,13 +37,23 @@ Only a conversation `draw` made can publish. A version is:
 each is. No diagrams means nothing architectural changed. At most 6 diagrams of 20,000 characters each. The format is
 the Mermaid source plus that part map, so another renderer can take it over later.
 
+`level` is `overview` (the default: components, flows, stored shapes) or `implementation`: the call path of one
+`useCase` through the actual classes, interfaces and functions, once the branch has code. `code` maps part IDs (nodes,
+participants, and edges by their explicit `e1@-->` ID) to `{ source?: { path, symbol?, line? }, status, evidence }`:
+`implemented` (needs a source) or `proposed`, `static` (read) or `runtime` (seen in a trace). Publishing checks that
+every source path is a file of the branch's checkout (`git ls-files`, untracked included) and records the version's
+`code`: the Review spec of the branch's change (`branch:<name>`, while it has a worktree), the paths it changes, and the
+branch the rest is on.
+
 ## The surface
 
 **Architecture** (`surface.tsx`, lazy-loaded with Mermaid; ⌘K **Open Architecture**) shows one branch at a time: the
 shown conversation (or the branch its architect draws) when it has versions, else the latest. The header picks the
 branch, the version and a version to **compare** with; **Draw** asks for a new one. The left column lists the version's
-diagrams with their change dots and pending comments, and the chosen diagram's notes and drafts; on a phone they are a
-row of tabs. A diagram renders through `mermaid/ui.tsx` with `classDef added/changed/removed` from the theme's
+diagrams with their change dots and pending comments, the implementation views by use case under an **implementation**
+heading, and the chosen diagram's notes and drafts; on a phone they are a row of tabs. A part with `code` shows its
+source above its comment: a changed file opens in Review at that line in the branch's change, any other on GitHub at
+`ref`; with the part's status and evidence. Proposed parts are drawn dashed and faded, and the legend adds them. A diagram renders through `mermaid/ui.tsx` with `classDef added/changed/removed` from the theme's
 `--diff-add`, `--warning` and `--diff-del` (unless its source defines them), under a legend. Compare flips the same
 diagram (by id) between the two versions in place, or shows both side by side (not on a phone). A version without
 diagrams reads "Nothing architectural changed" with its summary. A source Mermaid cannot parse shows its error and

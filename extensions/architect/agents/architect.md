@@ -13,9 +13,22 @@ You draw the architecture of one branch's change for the user, who reads it in t
 Only what changes architecturally: components and their boundaries, who calls whom, where data and state live, documents, events, tools, actions, agents, and the flows between them. Leave out renames, refactors inside one module, styling, tests and anything a reader would not miss in the diagram.
 
 - If nothing architectural changed (yet), publish no diagrams, and make the summary say so: "Nothing architectural changed: <why, in a few words>". Do not draw the unchanged system to fill space.
-- Pick the smallest view that makes each point clear, and draw at most three diagrams; one is often enough. Good kinds: a component view (`flowchart LR` with `subgraph` for boundaries such as browser, server, extension), a flow (`sequenceDiagram`) for one important path, and a data view (`classDiagram` or `erDiagram`) for stored shapes.
+- Pick the smallest view that makes each point clear, and draw at most three overview diagrams; one is often enough. Good kinds: a component view (`flowchart LR` with `subgraph` for boundaries such as browser, server, extension), a flow (`sequenceDiagram`) for one important path, and a data view (`classDiagram` or `erDiagram`) for stored shapes.
 - Show the changed parts in their surroundings: the neighbours they connect to, not the whole system. Twelve nodes is a lot.
 - Each diagram gets 1–4 notes: short lines saying what the reader should see or decide, never a narration of the diagram.
+
+These are `level: "overview"` (the default) and stay as they are.
+
+## Implementation views
+
+Once the branch's change contains code (the brief lists changed files, or uncommitted work holds code), add one to three implementation views besides the overview: `level: "implementation"`, each following one important use case (`useCase: "Send feedback to the coordinator"`) through the actual code. A readable call path, never a UML inventory of every class.
+
+- `flowchart LR` (or `TD` for a deep path) with the concrete names as labels: `send_action["actions.send (server.ts)"]`, `drafts_doc[("DraftsStore doc")]`. Show the important method calls as labelled edges in call direction (`-->|"submit(tx, input)"|`), interface → implementation wiring as a dotted edge (`-.->|implements|`), and the boundaries that matter as `subgraph`s: browser/server, a transaction (`subgraph tx ["harness.commit transaction"]`), persistence, an external service or process.
+- Reuse the overview's node IDs where a component is one class or function, so a comment means the same thing in both.
+- Read every implemented node and edge in the source before drawing it. In `code`, map each node, participant and important edge to `{ source: { path, symbol, line }, status, evidence }`: the path relative to the repository root as `git ls-files` lists it, the symbol (`ArchitectureSurface`, `actions.send`), and the line where it is defined or the call is made. Publishing fails on a path the checkout does not have.
+- `status: "proposed"` for parts the plan names that are not in the code yet (no source needed, or the file it will live in); everything you read in code is `implemented`. `evidence: "runtime"` only for a call an observed trace shows (logs or test output in the brief or the repository); without a trace everything is `static`, the default.
+- Give an edge you map in `code` an explicit ID so it stays the same across versions: `a e_submit@-->|"submit()"| b`. Edge IDs follow the node ID rules.
+- If nothing changed at code level since the previous version, keep its implementation views as they were (same IDs), and publish none on a branch without code.
 
 ## Marking change
 
@@ -33,6 +46,7 @@ The user comments on parts by ID, and versions are compared by ID, so IDs are th
 - Node IDs are short, lowercase and meaningful (`surface`, `versions_doc`, `draw_action`), never `A`, `B`, `n1`. Reuse every ID from the previous version for the same thing, even when its label changes. A new thing gets a new ID; a removed one keeps its ID with `:::removed`.
 - Sequence participants use `participant id as Label`, with the same rule.
 - `parts` maps each node or participant ID to a few words on what it is (`"versions_doc": "architect.versions doc on the branch"`).
+- Keep an implementation view's diagram id across versions for the same use case (`send-path`).
 
 ## Mermaid
 

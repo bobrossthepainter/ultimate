@@ -20,13 +20,14 @@ import type {
   JsonObject,
   Tx,
 } from '@earendil-works/pi-durable'
-import { arr, map, obj, opt, str } from '@earendil-works/pi-schema'
+import { arr, int, map, obj, opt, str } from '@earendil-works/pi-schema'
 import { strEnum } from '../../lib/schema.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { Exec } from '../exec/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import {
@@ -42,6 +43,8 @@ import {
 import type {
   Architecture,
   ArchitectureChat,
+  ArchitectureCode,
+  PartCode,
   ArchitectureComment,
   ArchitectureDrafts,
   DraftEdit,
@@ -144,6 +147,57 @@ const record = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 const slug = /^[a-z0-9][a-z0-9-]{0,40}$/
 
+/** `input` as a diagram's `code` map, every key a part named in `mermaid`, or throws naming what is wrong. */
+function checkCode(input: unknown, mermaid: string, at: string): Record<string, PartCode> {
+  if (input === undefined) return {}
+  if (!record(input) || Object.keys(input).length > limits.parts)
+    throw new Error(`${at} must map at most ${limits.parts} part IDs to their code`)
+  const code: Record<string, PartCode> = {}
+  for (const [part, value] of Object.entries(input)) {
+    const where = `${at}.${part}`
+    // Edges count too, by the explicit ID the source gives them (`a e1@--> b`): the click on one reports it.
+    if (!mermaid.includes(part))
+      throw new Error(
+        `${where}: no part ${part} in the Mermaid source (give an edge an ID: a e1@--> b)`,
+      )
+    if (!record(value)) throw new Error(`${where} must be an object`)
+    const { source, status = 'implemented', evidence = 'static' } = value
+    if (status !== 'implemented' && status !== 'proposed')
+      throw new Error(`${where}.status must be implemented or proposed`)
+    if (evidence !== 'static' && evidence !== 'runtime')
+      throw new Error(`${where}.evidence must be static or runtime`)
+    if (status === 'implemented' && source === undefined)
+      throw new Error(`${where}: an implemented part needs its source`)
+    let checked: PartCode['source']
+    if (source !== undefined) {
+      if (!record(source)) throw new Error(`${where}.source must be { path, symbol?, line? }`)
+      const { path, symbol, line } = source
+      if (
+        typeof path !== 'string' ||
+        !path ||
+        path.length > 300 ||
+        path.startsWith('/') ||
+        path.split('/').includes('..')
+      )
+        throw new Error(`${where}.source.path must be a path relative to the repository root`)
+      if (symbol !== undefined && (typeof symbol !== 'string' || !symbol || symbol.length > 200))
+        throw new Error(`${where}.source.symbol must be a short name`)
+      if (
+        line !== undefined &&
+        (typeof line !== 'number' || !Number.isSafeInteger(line) || line < 1)
+      )
+        throw new Error(`${where}.source.line must be a line number`)
+      checked = {
+        path,
+        ...(symbol === undefined ? {} : { symbol }),
+        ...(line === undefined ? {} : { line }),
+      }
+    }
+    code[part] = { ...(checked ? { source: checked } : {}), status, evidence }
+  }
+  return code
+}
+
 /** `input` as a version's diagrams, or throws naming what is wrong. */
 export function checkDiagrams(input: unknown): ArchitectureDiagram[] {
   if (!Array.isArray(input)) throw new Error('diagrams must be a list')
@@ -152,7 +206,16 @@ export function checkDiagrams(input: unknown): ArchitectureDiagram[] {
   return input.map((diagram, index) => {
     const at = `diagrams[${index}]`
     if (!record(diagram)) throw new Error(`${at} must be an object`)
-    const { id, title, mermaid, notes = [], parts = {} } = diagram
+    const {
+      id,
+      title,
+      mermaid,
+      notes = [],
+      parts = {},
+      level = 'overview',
+      useCase,
+      code,
+    } = diagram
     if (typeof id !== 'string' || !slug.test(id))
       throw new Error(`${at}.id must be a lowercase slug such as components`)
     if (ids.has(id)) throw new Error(`${at}.id ${id} is used twice`)
@@ -172,12 +235,21 @@ export function checkDiagrams(input: unknown): ArchitectureDiagram[] {
       throw new Error(`${at}.parts must map at most ${limits.parts} part IDs to text`)
     for (const [part, text] of Object.entries(parts))
       if (typeof text !== 'string') throw new Error(`${at}.parts.${part} must be text`)
+    if (level !== 'overview' && level !== 'implementation')
+      throw new Error(`${at}.level must be overview or implementation`)
+    if (useCase !== undefined && (typeof useCase !== 'string' || useCase.length > 200))
+      throw new Error(`${at}.useCase must be a short line`)
+    if (level === 'implementation' && !useCase?.trim())
+      throw new Error(`${at}: an implementation view needs its useCase`)
     return {
       id,
       title: title.trim(),
       mermaid,
       notes: (notes as string[]).map((note) => note.trim()).filter(Boolean),
       parts: parts as Record<string, string>,
+      level,
+      ...(useCase?.trim() ? { useCase: useCase.trim() } : {}),
+      code: checkCode(code, mermaid, `${at}.code`),
     }
   })
 }
@@ -360,6 +432,16 @@ async function brief(
     await host.harness().snapshot(Versions, branch as ConversationId, ctx)
   )?.versions.at(-1)
   const assessment = await latestAnswer(host, branch, ctx)
+  const changed =
+    workspace?.state === 'ready'
+      ? await host
+          .need(Exec)
+          .git(workspace.path, 'diff', '--stat=120', `${workspace.target}...HEAD`)
+          .catch(
+            // A worktree mid-setup or with an unknown target: the brief still names the command to read it.
+            () => '',
+          )
+      : undefined
   const where =
     workspace?.state === 'ready'
       ? [
@@ -389,6 +471,13 @@ async function brief(
           12_000,
         )}`
       : '## Plan\n\nNone yet.',
+    ...(changed === undefined
+      ? []
+      : [
+          changed
+            ? `## Changed files (committed)\n\n\`\`\`\n${clip(changed, 6000)}\n\`\`\`\n\nCode changed: publish the implementation views for its important use cases besides the overview.`
+            : '## Changed files (committed)\n\nNothing committed yet: unless uncommitted work holds code, publish no implementation view.',
+        ]),
     assessment
       ? `## The coordinator's latest answer\n\n${clip(assessment, 8000)}`
       : "## The coordinator's latest answer\n\nNone yet.",
@@ -655,6 +744,50 @@ export const actions = {
   }),
 }
 
+/**
+ * Where `diagrams`' sources were read for `branch`: its worktree's change as a Review spec, the files it changes and
+ * the branch the rest is on. Throws naming a source path the checkout does not have, so every link is grounded.
+ */
+async function grounding(
+  host: ExtensionHost,
+  branch: number | undefined,
+  diagrams: ArchitectureDiagram[],
+  ctx: Context,
+): Promise<ArchitectureCode | undefined> {
+  const paths = new Set(
+    diagrams.flatMap((diagram) =>
+      Object.values(diagram.code ?? {}).flatMap((part) => (part.source ? [part.source.path] : [])),
+    ),
+  )
+  if (!paths.size || branch === undefined) return undefined
+  const workspace = await host.need(WorkspacesApi).get(branch as ConversationId, ctx)
+  const ready = workspace?.state === 'ready'
+  const cwd = ready ? workspace.path : host.projectRoot
+  const git = host.need(Exec).git
+  const lines = (text: string) => text.split('\n').filter(Boolean)
+  const known = new Set(
+    lines(await git(cwd, 'ls-files', '--cached', '--others', '--exclude-standard')),
+  )
+  const missing = [...paths].filter((path) => !known.has(path))
+  if (missing.length)
+    throw new Error(
+      `No such file in the branch's checkout: ${missing.join(', ')}. Give source paths relative to the repository root, as git ls-files lists them.`,
+    )
+  if (!ready)
+    return {
+      changed: [],
+      ref: await git(cwd, 'symbolic-ref', '--short', 'HEAD').catch(
+        // A detached checkout has no branch: links point at its commit.
+        () => git(cwd, 'rev-parse', 'HEAD'),
+      ),
+    }
+  return {
+    spec: `branch:${workspace.branch}`,
+    changed: lines(await git(cwd, 'diff', '--name-only', `${workspace.target}...HEAD`)),
+    ref: workspace.target,
+  }
+}
+
 const result = (text: string, structured?: JsonObject) => ({
   output: [{ type: 'text' as const, text }],
   ...(structured ? { structuredContent: structured } : {}),
@@ -671,7 +804,7 @@ export default (host: ExtensionHost) =>
         // Its receipt records the published version in the commit that appends it.
         replay: 'safe',
         description:
-          "Publish this architect's version of its branch's architecture: a title, a one-line summary and up to 6 Mermaid diagrams, each with a stable lowercase id (kept across versions), short notes and a map of part IDs (node IDs, or a sequence diagram's participants) to what each part is. Mark changed parts with :::added, :::changed or :::removed. With nothing architectural changed, publish no diagrams and say so in the summary.",
+          "Publish this architect's version of its branch's architecture: a title, a one-line summary and up to 6 Mermaid diagrams, each with a stable lowercase id (kept across versions), short notes and a map of part IDs (node IDs, or a sequence diagram's participants) to what each part is. Mark changed parts with :::added, :::changed or :::removed. An implementation view (level implementation, its useCase) maps its parts in `code` to their source (path relative to the repository root, symbol, line), status (implemented or proposed) and evidence (static or runtime); every implemented part needs a source that exists. With nothing architectural changed, publish no diagrams and say so in the summary.",
         parameters: obj({
           title: str({ minLength: 1, maxLength: 120 }),
           summary: str({ minLength: 1, maxLength: 400 }),
@@ -684,12 +817,49 @@ export default (host: ExtensionHost) =>
               mermaid: str({ description: 'Mermaid source with stable node IDs.' }),
               notes: opt(arr(str())),
               parts: opt(map(str(), { description: 'Part ID → what it is, in a few words.' })),
+              level: opt(
+                strEnum(['overview', 'implementation'] as const, {
+                  description:
+                    'overview (default): components, flows, stored shapes; implementation: the call path of one use case through the actual code.',
+                }),
+              ),
+              useCase: opt(
+                str({
+                  description:
+                    'The use case an implementation view follows, in a few words ("Send feedback to the coordinator").',
+                }),
+              ),
+              code: opt(
+                map(
+                  obj({
+                    source: opt(
+                      obj({
+                        path: str({ description: 'Relative to the repository root.' }),
+                        symbol: opt(str({ description: 'Class, interface, function or method.' })),
+                        line: opt(int({ minimum: 1 })),
+                      }),
+                    ),
+                    status: opt(strEnum(['implemented', 'proposed'] as const)),
+                    evidence: opt(strEnum(['static', 'runtime'] as const)),
+                  }),
+                  {
+                    description:
+                      'Part ID (node, participant, or an edge by its explicit ID) → its source, status (default implemented) and evidence (default static).',
+                  },
+                ),
+              ),
             }),
             { maxItems: limits.diagrams },
           ),
         }),
         execute: async (args, api, ctx) => {
           const diagrams = checkDiagrams(args.diagrams)
+          const sources = await grounding(
+            host,
+            (await host.harness().snapshot(Of, api.conversationId, ctx))?.branch,
+            diagrams,
+            ctx,
+          )
           const text = await api.commit(async (tx) => {
             // The receipt commits with the version: a replay after a restart finds it and appends nothing.
             const receipt = await tx.doc(Receipt, api.taskId)
@@ -705,6 +875,7 @@ export default (host: ExtensionHost) =>
               title: args.title.trim(),
               summary: args.summary.trim(),
               diagrams,
+              ...(sources ? { code: sources } : {}),
             }
             state.versions.push(version)
             ;(await tx.doc(Index, ROOT_CONVERSATION_ID)).branches[String(branch)] = {
