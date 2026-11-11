@@ -53,7 +53,6 @@
     "extensions/sidebar/landings.ts",
     "extensions/subagents/landing.ts",
     "extensions/onboarding/onboarded.ts",
-    "extensions/sidebar/label.ts",
     "extensions/tasks/kinds.ts",
     "extensions/sidebar/listed.ts",
     "extensions/side-chat/logic.ts",
@@ -76,6 +75,7 @@
     "lib/message-state.ts",
     "lib/source-frames.ts",
     "extensions/subagents/message-types.ts",
-    "test/web"
+    "test/web",
+    "extensions/*/test/web"
   ]
 }

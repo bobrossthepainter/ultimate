@@ -45,7 +45,8 @@ Extensions outside the clone import exactly what built-ins import (`@/sdk`, `@/c
 `lucide-react`, any package installed in the clone): Ultimate resolves those from its clone, and Tailwind picks up their
 classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`; for extensions of
 other projects, the `check_extensions` tool ([check-extensions](../../extensions/check-extensions/README.md)) formats, lints and
-type-checks them with the clone's config. Then try them in the browser. Agents live in the same three places
+type-checks them with the clone's config. Never copy an extension into the clone to check it: the running host would
+load it. Then try them in the browser. Agents live in the same three places
 (`agents/`); an enabled extension may also ship an `agents/` folder. Those definitions load as built-ins before
 user/project definitions and overlays, and disappear when the extension is disabled. Skills load as [Discovery and settings](../settings.md) describes, later scopes winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
 [Surfaces](surfaces.md)).
