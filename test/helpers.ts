@@ -146,8 +146,15 @@ export async function sourceCopy(parent: string) {
   const root = await temp('source-', parent)
   await cp(resolve('.'), root, {
     recursive: true,
-    filter: (path) =>
-      !['.git', 'node_modules'].includes(path.slice(resolve('.').length + 1).split('/')[0]),
+    // An extension's test/ folder is no part of the server a fixture runs, and each copied file is one more inotify
+    // watch for its Vite: with them, parallel fixtures hit the machine's watch limit (ENOSPC in the lander run of #25424).
+    filter: (path) => {
+      const parts = path.slice(resolve('.').length + 1).split('/')
+      return (
+        !['.git', 'node_modules'].includes(parts[0]) &&
+        !(parts[0] === 'extensions' && parts[2] === 'test' && parts.length === 3)
+      )
+    },
   })
   await linkDependencies(root)
   const config = join(root, 'vite.config.ts')
