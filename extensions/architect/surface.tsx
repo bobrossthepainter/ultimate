@@ -53,7 +53,7 @@ import { clearMark, useChatOpen, useMark, useView } from './link.tsx'
 import type { View } from './link.tsx'
 import { Frame, Legend, Loading, Notice } from './frame.tsx'
 import { changeCounts, changes } from './parts.tsx'
-import { ArchitectureDoc, ArchitectureIndexDoc, DrawAction, SendAction } from './refs.ts'
+import { ArchitectureDoc, ArchitectureIndexDoc, AskAction, DrawAction, SendAction } from './refs.ts'
 import type { ArchitectureDiagram, ArchitectureVersion } from './refs.ts'
 
 const tone = { added: 'bg-diff-add', changed: 'bg-warning', removed: 'bg-diff-del' } as const
@@ -648,6 +648,7 @@ function Version({
   const stage = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(800)
   const { switchConversation, showSurface } = useUltimate()
+  const [, setChat] = useChatOpen()
   useEffect(() => {
     const element = stage.current
     if (!element) return undefined
@@ -682,6 +683,29 @@ function Version({
       })
     setWriting(undefined)
   }
+  // The text as a question to the architecture chat, about this part; the chat opens beside the diagram, made first when
+  // there is none. Asked only after the action returns, so the panel never makes a second chat meanwhile.
+  const ask = async (text: string) => {
+    if (!writing) return
+    const { part } = writing
+    try {
+      await api.action(AskAction, {
+        branch,
+        version: version.version,
+        comment: {
+          diagram: diagram.id,
+          kind: part.kind,
+          ...(part.kind === 'diagram' ? {} : { part: part.part }),
+          label: part.label,
+          text,
+        },
+      })
+      setWriting(undefined)
+    } finally {
+      // A chat opened at an older version refuses; the open panel offers the new chat it needs.
+      setChat(true)
+    }
+  }
   const send = async () => {
     setSending(true)
     setSent(undefined)
@@ -711,6 +735,7 @@ function Version({
             ? undefined
             : (diagram.parts[writing.part.part] ?? writing.part.label)
         }
+        onAsk={ask}
         onCancel={() => setWriting(undefined)}
         onSubmit={save}
         submit={editing ? 'Save' : 'Add'}

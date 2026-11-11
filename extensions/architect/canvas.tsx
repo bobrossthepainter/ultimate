@@ -1,4 +1,4 @@
-import { MessageSquareIcon, MessagesSquareIcon } from 'lucide-react'
+import { MessageSquareIcon, MessagesSquareIcon, SparklesIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
@@ -243,8 +243,9 @@ export function Canvas({
 }
 
 /**
- * The comment popover at the clicked part: what it is on, the text, Cancel and Add (⌘↵). While `onSubmit` saves it
- * stays open; when the save fails it keeps the text and says why.
+ * The comment popover at the clicked part: what it is on, the text, Cancel, Ask AI (`onAsk`: the text as a question to
+ * the architecture chat instead of a comment) and Add (⌘↵). While either runs it stays open; when it fails it keeps
+ * the text and says why.
  */
 export function Composer({
   title,
@@ -253,6 +254,7 @@ export function Composer({
   initial = '',
   submit,
   onSubmit,
+  onAsk,
   onCancel,
 }: {
   title: ReactNode
@@ -262,21 +264,22 @@ export function Composer({
   initial?: string
   submit: string
   onSubmit: (text: string) => Promise<unknown>
+  onAsk?: (text: string) => Promise<unknown>
   onCancel: () => void
 }) {
   const [text, setText] = useState(initial)
-  const [saving, setSaving] = useState(false)
+  const [saving, setSaving] = useState<'submit' | 'ask'>()
   const [error, setError] = useState<string>()
   const field = useRef<HTMLTextAreaElement>(null)
   useEffect(() => field.current?.focus({ preventScroll: true }), [])
   const ready = !saving && text.trim().length > 0 && text.length <= limits.text
-  const save = () => {
-    setSaving(true)
+  const save = (how: 'submit' | 'ask' = 'submit') => {
+    setSaving(how)
     setError(undefined)
-    onSubmit(text.trim()).then(
-      () => setSaving(false),
+    ;(how === 'ask' ? onAsk! : onSubmit)(text.trim()).then(
+      () => setSaving(undefined),
       (failure: unknown) => {
-        setSaving(false)
+        setSaving(undefined)
         setError(errorMessage(failure))
       },
     )
@@ -337,8 +340,22 @@ export function Composer({
         <Button onClick={onCancel} size="xs" type="button" variant="ghost">
           Cancel
         </Button>
+        {onAsk && (
+          <Button
+            data-architect-ask=""
+            disabled={!ready}
+            onClick={() => save('ask')}
+            size="xs"
+            title="Ask the architecture chat about this part instead of adding a comment"
+            type="button"
+            variant="outline"
+          >
+            <SparklesIcon />
+            {saving === 'ask' ? 'Asking…' : 'Ask AI'}
+          </Button>
+        )}
         <Button disabled={!ready} size="xs" type="submit">
-          {saving ? 'Saving…' : submit}
+          {saving === 'submit' ? 'Saving…' : submit}
         </Button>
       </div>
     </form>

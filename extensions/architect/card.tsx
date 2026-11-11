@@ -1,10 +1,55 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { WorkflowIcon } from 'lucide-react'
-import { Fold, plural, useDocOf } from '@/sdk'
+import { Fold, plural, UserView, useDocOf } from '@/sdk'
 import { where } from './drafts.tsx'
 import { openArchitecture } from './link.tsx'
 import { ArchitectureDoc } from './refs.ts'
-import type { ArchitectureComments } from './refs.ts'
+import type { ArchitectureComments, ArchitectureQuestion } from './refs.ts'
+
+/**
+ * A question the user asked the architecture chat about a part, in the chat's transcript: their words as their turn,
+ * under a chip naming the part (`Components · node surface · v3`) that opens the surface with it marked. The part's
+ * context the model reads stays out of sight.
+ */
+export function QuestionCard({ entry }: { entry: EntryRecord }) {
+  const question = entry.data as ArchitectureQuestion
+  const { branch, version, diagram, kind, part } = question
+  const doc = useDocOf(branch, ArchitectureDoc)
+  const title =
+    doc?.versions
+      .find((item) => item.version === version)
+      ?.diagrams.find((item) => item.id === diagram)?.title ?? diagram
+  const message = entry.model?.[0]
+  if (message?.role !== 'user') return null
+  return (
+    <div className="mt-3 flex flex-col items-end first:mt-0" data-architect-question={entry.id}>
+      <button
+        className="-mb-1.5 flex max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded border border-border/70 bg-background/60 px-1.5 py-0.5 font-mono text-[11px] hover:border-brand/50 hover:text-foreground"
+        data-architect-chip={`${diagram}:${part ?? ''}`}
+        onClick={() =>
+          openArchitecture({
+            branch,
+            version,
+            diagram,
+            ...(kind !== 'diagram' && part && { mark: { kind, part } }),
+          })
+        }
+        title="Open in Architecture"
+        type="button"
+      >
+        <WorkflowIcon className="size-3 shrink-0 text-brand" />
+        <span className="min-w-0 truncate text-foreground/85">{title}</span>
+        {kind !== 'diagram' && (
+          <span className="min-w-0 truncate text-muted-foreground">· {where(question)}</span>
+        )}
+        <span className="shrink-0 text-muted-foreground">· v{version}</span>
+      </button>
+      <div className="w-full">
+        <UserView entry={entry} message={message} text={question.text} />
+      </div>
+    </div>
+  )
+}
 
 /**
  * Feedback the user sent on a version, in its recipient's transcript: on the user's side, like their typed messages,

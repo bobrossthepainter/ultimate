@@ -34,6 +34,7 @@ import { WorkspacesApi } from '../workspaces/api.ts'
 import {
   ArchitectureDoc,
   ArchitectureIndexDoc,
+  AskAction,
   ChatAction,
   ChatDoc,
   DraftsDoc,
@@ -51,6 +52,7 @@ import type {
   DraftEdit,
   Drafts,
   ArchitectureComments,
+  ArchitectureQuestion,
   ArchitectureDiagram,
   ArchitectureIndex,
   ArchitectureVersion,
@@ -118,6 +120,8 @@ export const docs = [Versions, Index, DraftsStore, Chat]
 
 /** Feedback the user sent on a version: the input its recipient reads as `commentsText`; card.tsx renders it. */
 export const CommentsEntry = defineEntry<ArchitectureComments>('architect.comments')
+/** A question the user asked the architecture chat about a part: the input it reads as `questionText`; card.tsx renders it. */
+export const QuestionEntry = defineEntry<ArchitectureQuestion>('architect.question')
 
 /** Owns a branch's architect conversation, so the sidebar shows it under the branch; done at once, as subagents' anchor. */
 const Anchor = defineTask<null, { phase: 'done' }, null>({
@@ -365,6 +369,26 @@ export function commentsText(feedback: ArchitectureComments, version?: Architect
       return `${where}\n${comment.text}`
     }),
   ].join('\n\n')
+}
+
+/** What the architecture chat's model reads for a question on a part: the part and what is known of it, then the question. */
+export function questionText(question: ArchitectureQuestion, diagram: ArchitectureDiagram) {
+  const { kind, part, label, code: partCode, text } = question
+  const what =
+    kind === 'diagram'
+      ? `the whole diagram **${diagram.title}**`
+      : `${kind} ${code(part!)}${label && label !== part ? ` (${label})` : ''} in **${diagram.title}**`
+  const source = partCode?.source
+  return [
+    `The user asks about ${what} (diagram \`${diagram.id}\`, ${diagram.level === 'implementation' ? `implementation view${diagram.useCase ? ` of "${diagram.useCase}"` : ''}` : 'overview'}) on v${question.version} of #${question.branch}'s diagrams.`,
+    ...(kind !== 'diagram' && diagram.parts[part!] ? [`Drawn as: ${diagram.parts[part!]}`] : []),
+    ...(partCode
+      ? [
+          `Code: ${source ? `${code(`${source.path}${source.line ? `:${source.line}` : ''}`)}${source.symbol ? ` (${code(source.symbol)})` : ''}, ` : ''}${partCode.status}, ${partCode.evidence} evidence`,
+        ]
+      : []),
+    `Question:\n${text}`,
+  ].join('\n')
 }
 
 const conversationExists = (host: ExtensionHost, id: number) =>
@@ -658,7 +682,7 @@ async function chat(host: ExtensionHost, branch: ConversationId, fresh: boolean,
   }, ctx)
 }
 
-export const userActions = ['send', 'edit', 'chat']
+export const userActions = ['send', 'edit', 'chat', 'ask']
 
 export const actions = {
   draw: implementAction(DrawAction, async (args, { host }) => {
@@ -680,6 +704,47 @@ export const actions = {
       throw new Error('branch must be an existing conversation id')
     const branch = (await branchOf(host, id, context)) as ConversationId
     return { chat: await chat(host, branch, record(args) && args.fresh === true, context) }
+  }),
+  ask: implementAction(AskAction, async (args, { host, device }) => {
+    const { branch, version: number } = target(host, args)
+    const version = (await host.harness().snapshot(Versions, branch, context))?.versions.find(
+      (item) => item.version === number,
+    )
+    if (!version) throw new Error(`#${branch} has no version ${number}`)
+    const comment = checkComment(record(args) ? args.comment : undefined, version)
+    const diagram = version.diagrams.find((item) => item.id === comment.diagram)!
+    const partCode = comment.part === undefined ? undefined : diagram.code?.[comment.part]
+    const question: ArchitectureQuestion = {
+      ...comment,
+      branch,
+      version: number,
+      ...(partCode && { code: partCode }),
+    }
+    // An open chat is asked as it is; one opened at an older version may not have the part, so it needs a new chat
+    // (the panel offers it), never a silent replacement.
+    const current = await host.harness().snapshot(Chat, branch, context)
+    const open = current?.id !== undefined && conversationExists(host, current.id)
+    if (open && current.version !== undefined && current.version < number)
+      throw new Error(`The chat was opened at v${current.version}: start a new chat on v${number}`)
+    const id = open ? current.id : await chat(host, branch, false, context)
+    const conversation = (await host.harness().conversation(id as ConversationId, context))!
+    const content = questionText(question, diagram)
+    await host.harness().commit(async (tx) => {
+      const submission = await conversation.submit(tx, {
+        type: 'input',
+        content,
+        entry: { kind: QuestionEntry.kind, data: question },
+        whenBusy: 'steer',
+      })
+      await host.emit(tx, UserInputEvent, {
+        conversation: id,
+        kind: 'prompt',
+        submission,
+        length: content.length,
+        ...device,
+      })
+    }, context)
+    return { chat: id }
   }),
   send: implementAction(SendAction, async (args, { host, device }) => {
     const { branch, version: number } = target(host, args)
