@@ -261,6 +261,31 @@ it('draws versions in one architect under the branch, and sends feedback to the 
       context,
     )
     expect(chatRecord?.parent?.conversationId).toBe(first.architect)
+    // Ask AI: a question on a part goes to the chat as the user's input, carrying the part and its code.
+    const asked = await action('ask', {
+      branch,
+      version: 3,
+      comment: { diagram: 'publish-path', kind: 'node', part: 'publish', text: 'Why here?' },
+    })
+    expect(asked.data.result.chat).toBe(opened)
+    await server.harness.waitForIdle(context)
+    const question = (await chat.context(context)).entries.find(
+      (entry) => entry.kind === 'architect.question',
+    )
+    expect(question?.data).toMatchObject({
+      branch,
+      version: 3,
+      diagram: 'publish-path',
+      part: 'publish',
+      label: 'the tool',
+      text: 'Why here?',
+      code: { source: { path: 'src/publish.ts', symbol: 'publish', line: 3 } },
+    })
+    const asking = question?.model?.[0]
+    const prompt = asking && 'content' in asking ? JSON.stringify(asking.content) : ''
+    expect(prompt).toContain('node `publish` (the tool) in **Publish path**')
+    expect(prompt).toContain('`src/publish.ts:3` (`publish`), implemented, static evidence')
+    expect(prompt).toContain('Question:\\nWhy here?')
     await (await chat.submit({ type: 'input', content: 'Suggest one.' }, context)).wait(context)
     const chatEntries = (await chat.context(context)).entries
     // The chat proposes comments; only Draw's architect publishes.

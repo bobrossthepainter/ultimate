@@ -1,7 +1,7 @@
 import { WorkflowIcon } from 'lucide-react'
 import { lazy, Suspense } from 'react'
 import { api, defineWebExtension, getState } from '@/sdk'
-import { CommentsCard } from './card.tsx'
+import { CommentsCard, QuestionCard } from './card.tsx'
 import { Frame, Loading } from './frame.tsx'
 import { ArchitectureLink, openArchitecture } from './link.tsx'
 import { DrawAction } from './refs.ts'
@@ -61,5 +61,5 @@ export default defineWebExtension({
     },
   ],
   slots: { overlay: [ArchitectureLink] },
-  entries: { 'architect.comments': CommentsCard },
+  entries: { 'architect.comments': CommentsCard, 'architect.question': QuestionCard },
 })

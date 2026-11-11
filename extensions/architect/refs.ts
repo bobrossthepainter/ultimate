@@ -82,6 +82,17 @@ export type ArchitectureComments = {
 }
 
 /**
+ * A question the user asked the architecture chat about one part of a version, as the data of its
+ * `architect.question` entry: the part as a comment names it, the question as `text`, and the part's code when it has
+ * any.
+ */
+export type ArchitectureQuestion = ArchitectureComment & {
+  branch: number
+  version: number
+  code?: PartCode
+}
+
+/**
  * A comment not sent yet. `id` tells drafts on the same part apart; `by` is the architecture chat that suggested it,
  * absent for the user's own.
  */
@@ -150,3 +161,14 @@ export const ChatAction = actionRef<{ branch: number; fresh?: boolean }, { chat:
   'architect',
   'chat',
 )
+
+/**
+ * User only: `{ branch, version, comment }` → `{ chat }`: ask the branch's architecture chat `comment.text` about the
+ * part `comment` names on `version`, as the user's input with the part as context; nothing goes into the pending
+ * comments. Makes the chat as `chat` does when there is none; throws when it was opened at an older version than
+ * `version`, which needs a new chat first.
+ */
+export const AskAction = actionRef<
+  { branch: number; version: number; comment: ArchitectureComment },
+  { chat: number }
+>('architect', 'ask')

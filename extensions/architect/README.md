@@ -82,8 +82,16 @@ Why a tab?
 The recipient's transcript shows it as a card on the user's side (`card.tsx`); each comment's chip opens the surface at
 that version and diagram, the part marked.
 
+**Ask AI** in the same popover sends the text to the architecture chat as a question instead (the `ask` action),
+opening the chat and making it first when there is none; nothing goes into the pending list. The chat's model reads the
+part (diagram, kind, ID, label, what it draws, its `code` source, status and evidence) above the question; the
+transcript shows the user's words under a chip for the part (`Publish path · node publish · v3`). A chat opened at an
+older version refuses, and the panel offers **New chat on vN**.
+
 ## Actions (`refs.ts`)
 
 - `draw { conversation }` → `{ architect, started }`: the conversation may be the branch or its architect.
 - `send { conversation, branch, version, comments, note? }` (user only) → `{ conversation }`. At most 50 comments of
   at most 4,000 characters; throws on an unknown conversation or version.
+- `ask { branch, version, comment }` (user only) → `{ chat }`: `comment` names the part as a draft does, its `text`
+  is the question.
