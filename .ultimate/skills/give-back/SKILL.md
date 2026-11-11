@@ -6,8 +6,8 @@ description: Prepare one fork divergence marked "candidate" in .ultimate/FORK.md
 # Give a fork concept back upstream
 
 This repository is a fork: `origin` is the fork, `upstream` is HazAT/ultimate. `.ultimate/FORK.md` lists each local
-divergence with the paths it touches (`Touches`) and its `Upstream` status (`local-only`, `candidate`,
-`given back as PR #N`). This skill turns one `candidate` row into one pull request. It is the sender's side of
+divergence as a `###` section with the paths it touches (`Touches`), `Why`, and its `Upstream` status (`local-only`,
+`candidate`, `given back as PR #N`). This skill turns one `candidate` section into one pull request. It is the sender's side of
 `.ultimate/skills/assess-outside-pr`: the PR should pass that checklist before upstream reads it.
 
 `CONTRIBUTING.md` is the policy: one pull request per idea, check the open ones first, features are titled
@@ -16,7 +16,7 @@ repository is outside the standing push permission: nothing leaves this machine 
 
 ## 1. Pick the concept
 
-Take one `candidate` row; its `Change` cell names it, its `Touches` cell scopes it. Choose a short slug for it
+Take one section whose `Upstream` field is `candidate`; its heading names it, its `Touches` field scopes it. Choose a short slug for it
 (`supervisor-network-flags`). Then:
 
 ```bash
@@ -26,7 +26,7 @@ gh pr list --repo HazAT/ultimate --state all --search "<keywords>"
 ```
 
 If an open or merged pull request already covers the idea, stop and report it. If the concept only makes sense with
-another candidate (it calls code that row adds), say so and propose giving them back together or in order.
+another candidate (it calls code that section adds), say so and propose giving them back together or in order.
 
 ## 2. A clean worktree off upstream main
 
@@ -41,7 +41,7 @@ cd <home>/give-back/<slug> && pnpm install --frozen-lockfile --prefer-offline
 ## 3. Extract by path, not by commit
 
 The fork's commits often bundle several concepts, so cherry-picking carries the others along. Diff the fork against
-upstream over the row's paths instead, and rebuild the concept as one fresh commit:
+upstream over the section's paths instead, and rebuild the concept as one fresh commit:
 
 ```bash
 git diff upstream/main origin/main -- <paths from Touches> > /tmp/give-back-<slug>.diff
@@ -108,6 +108,6 @@ afterwards without the user's OK.
 
 ## 8. Record it
 
-In your own lineage workspace (not the give-back worktree), set the row's `Upstream` cell to
-`given back as PR #N` with the link, commit and `workspace submit` as usual. Remove the give-back worktree
+In your own lineage workspace (not the give-back worktree), set the section's `Upstream`
+field to `given back as PR #N` with the link, commit and `workspace submit` as usual. Remove the give-back worktree
 (`git worktree remove <home>/give-back/<slug>`) and keep the branch for follow-up pushes to the pull request.

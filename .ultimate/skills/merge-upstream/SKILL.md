@@ -22,13 +22,14 @@ git fetch upstream && git remote set-head upstream --auto
 
 1. In the branch worktree: `git fetch upstream`, then `git merge upstream/main`. Always a normal merge commit, never a
    rebase, reset, squash or force push: the fork's history and upstream's stay intact, so the next merge is cheap.
-2. Read `.ultimate/FORK.md` first. Each divergence it lists is intended: in a conflict on one of its paths, keep the
+2. Read `.ultimate/FORK.md` first. Each divergence it lists (one `###` section, with its paths under `Touches`) is
+   intended: in a conflict on one of its paths, keep the
    fork's side and take upstream's other changes around it.
 3. Resolve on your own what is mechanical (both sides touching neighbouring lines, an import list, a renamed caller).
    Bring the rest to @ultimate as decisions: upstream reworked something the fork changed, or a divergence upstream
    now covers in its own way (it may be dropped).
-4. Update `.ultimate/FORK.md` for every divergence the merge touched: changed, now upstream (remove it), or
-   newly needed. Commit it with the merge.
+4. Update `.ultimate/FORK.md` for every divergence the merge touched: changed (edit its section's fields), now
+   upstream (remove its section), or newly needed (add a section at the end). Commit it with the merge.
 5. Run `pnpm install --frozen-lockfile` in the worktree when the lockfile changed, then `pnpm check` and the tests
    covering the conflicts. `workspace submit`; the lander runs everything and pushes to origin.
 
