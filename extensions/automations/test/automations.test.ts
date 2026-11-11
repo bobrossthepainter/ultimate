@@ -154,7 +154,11 @@ it('fires every 2s into distinct answered conversations and supports pause, resu
     7000,
   )
   await f.action('pause', { id: a.id })
-  const runs = (await f.records())[0].runs
+  // Under load a fire can land while a run is still going: it is recorded as skipped, and a fired run may still be
+  // running when the pause lands (lander failures on #26420). Let it finish and count only real runs.
+  const real = async () => (await f.records())[0].runs.filter((r) => r.status !== 'skipped')
+  await until(async () => (await real()).every((r) => r.status === 'done'))
+  const runs = await real()
   expect(new Set(runs.map((r) => r.conversationId)).size).toBe(runs.length)
   for (const run of runs) {
     expect(run.answer).toBe('Answer: Scheduled report')
@@ -169,14 +173,16 @@ it('fires every 2s into distinct answered conversations and supports pause, resu
     expect((await f.opened.harness.snapshot(Metadata, child.id, context))?.label).toBe('automation')
   }
   await vi.advanceTimersByTimeAsync(2200)
-  expect((await f.records())[0].runs).toHaveLength(runs.length)
+  expect((await f.records())[0].runs.filter((r) => r.status !== 'skipped')).toHaveLength(
+    runs.length,
+  )
   await f.action('run', { id: a.id })
-  await until(async () => (await f.records())[0].runs.at(-1)?.status === 'done')
-  expect((await f.records())[0].runs).toHaveLength(runs.length + 1)
+  await until(async () => (await real()).at(-1)?.status === 'done')
+  expect(await real()).toHaveLength(runs.length + 1)
   await f.action('resume', { id: a.id })
   await until(async () => {
-    const current = (await f.records())[0].runs
-    return current.length === runs.length + 2 && current.at(-1)?.status === 'done'
+    const current = await real()
+    return current.length >= runs.length + 2 && current.at(-1)?.status === 'done'
   }, 3500)
   await f.action('delete', { id: a.id })
   expect(await f.records()).toEqual([])
