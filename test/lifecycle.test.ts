@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { join, resolve } from 'node:path'
 import { defineExtension, defineTask } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'

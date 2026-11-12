@@ -1,4 +1,4 @@
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import type { Execution } from './harness.ts'
 import type { Device } from '../shared/events.ts'
 import type { ExtensionHost } from './extensions.ts'
