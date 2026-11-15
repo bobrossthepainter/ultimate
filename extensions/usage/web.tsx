@@ -610,11 +610,7 @@ function Here({ range, unit }: { range: Range; unit: Unit }) {
 }
 
 function OneSpoke({ spoke, range, unit }: { spoke: Spoke; range: Range; unit: Unit }) {
-  const state = useAction(SpokeAction, {
-    project: spoke.project,
-    ...(spoke.machine !== undefined && { machine: spoke.machine }),
-    ...range,
-  })
+  const state = useAction(SpokeAction, { url: spoke.url, ...range })
   return (
     <State state={state}>
       {(report) => (
@@ -658,7 +654,7 @@ function All({ range, unit }: { range: Range; unit: Unit }) {
 
 const HERE = 'here'
 const ALL = 'all'
-const spokeId = (spoke: Spoke) => `${spoke.project}@${spoke.machine ?? ''}`
+const spokeId = (spoke: Spoke) => spoke.url
 
 function useSince(days: number | undefined) {
   return useMemo(() => {

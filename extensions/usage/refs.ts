@@ -56,8 +56,11 @@ export type Report = {
   fallback?: true
 }
 
-/** Another instance this one reaches: a project running on this machine, in `remotes`, or in the cloud register. */
-export type Spoke = { project: string; machine?: string; label: string }
+/**
+ * Another instance this one reaches, once per address: a project running on this machine, in `remotes` (which wins over
+ * the register for the same project and machine), or in the cloud register.
+ */
+export type Spoke = { url: string; name: string; machine?: string; label: string }
 
 /** `{ since?, until? }` (ms) → this instance's report over that range; all time without them. */
 export const ReportAction = actionRef<{ since?: number; until?: number }, Report>('usage', 'report')
@@ -67,13 +70,13 @@ export const SpokesAction = actionRef<null, { spokes: Spoke[]; errors: string[] 
   'spokes',
 )
 /**
- * `{ project, machine?, since?, until? }` → that instance's report: from its usage extension, else its `pi.usage`
- * totals (`fallback`). Throws when it cannot be reached.
+ * `{ url, since?, until? }`, a `url` that `spokes` lists → that instance's report: from its usage extension, else its
+ * `pi.usage` totals (`fallback`). Throws when it cannot be reached or is not a listed spoke.
  */
-export const SpokeAction = actionRef<
-  { project: string; machine?: string; since?: number; until?: number },
-  Report
->('usage', 'spoke')
+export const SpokeAction = actionRef<{ url: string; since?: number; until?: number }, Report>(
+  'usage',
+  'spoke',
+)
 
 /** One instance of `all`: its report, or why it could not be read. */
 export type Instance = { label: string; report?: Report; error?: string }

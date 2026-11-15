@@ -102,44 +102,47 @@ export async function selfAddress(host: ExtensionHost) {
 export async function reachable(host: ExtensionHost) {
   const errors: string[] = []
   const here = await machineName(host)
-  const seen = new Set<string>()
-  const spokes: { project: string; machine?: string; label: string }[] = []
-  const add = (project: string, machine: string | undefined, label: string) => {
-    const key = `${project.toLowerCase()}@${machine ?? here}`
-    if (seen.has(key)) return
-    seen.add(key)
-    spokes.push({ project, ...(machine !== undefined && { machine }), label })
+  const urls = new Set<string>()
+  const named = new Set<string>()
+  const spokes: Extract<Target, { url: string }>[] = []
+  const add = (spoke: Extract<Target, { url: string }>) => {
+    if (urls.has(spoke.url)) return
+    urls.add(spoke.url)
+    spokes.push(spoke)
   }
-  const projects = await Promise.all(
-    (await host.projects()).map(async (item) => ({
-      ...item,
-      key: item.root ? (await projectIdentity(item.root))?.key : undefined,
-    })),
-  )
-  for (const item of projects)
-    if (item.current) seen.add(`${(item.key ?? item.name).toLowerCase()}@${here}`)
+  const projects = await host.projects()
+  const current = projects.find((item) => item.current)?.name.toLowerCase()
   for (const item of projects)
     if (!item.current && item.running)
-      add(item.key ?? item.name, undefined, `${item.name} on this machine`)
-  for (const item of await userConfiguredRemotes(host))
-    add(item.name, item.machine, `${item.name} on ${item.machine}`)
+      add({ url: item.running.url, label: `${item.name} on this machine`, name: item.name })
+  for (const item of await userConfiguredRemotes(host)) {
+    if (item.machine === here && item.name.toLowerCase() === current) continue
+    named.add(`${item.name.toLowerCase()}@${item.machine}`)
+    add({
+      url: item.url,
+      label: `${item.name} on ${item.machine}`,
+      name: item.name,
+      machine: item.machine,
+    })
+  }
   const cloud = await cloudConfig(host)
   if (cloud)
     try {
       const register = await fetchRegister(cloud)
+      const projectsByHash = new Map(register.projects.map((entry) => [entry.hash, entry]))
+      const addFromRegister = (hash: string, name: string, machine: string, url?: string) => {
+        const key = projectsByHash.get(hash)?.key
+        const alias = [name, key].some(
+          (value) => value && named.has(`${value.toLowerCase()}@${machine}`),
+        )
+        if (!url || machine === here || alias) return
+        add({ url, label: `${name} on ${machine}`, name, machine })
+      }
       for (const entry of register.projects)
-        if (entry.latest.tailnet && entry.latest.machine !== here)
-          add(entry.key, entry.latest.machine, `${entry.name} on ${entry.latest.machine}`)
-      const keys = new Map(register.projects.map((entry) => [entry.hash, entry.key]))
+        addFromRegister(entry.hash, entry.name, entry.latest.machine, entry.latest.tailnet)
       for (const machine of register.machines)
-        if (machine.machine !== here)
-          for (const [hash, project] of Object.entries(machine.projects))
-            if (project.tailnet)
-              add(
-                keys.get(hash) ?? project.name,
-                machine.machine,
-                `${project.name} on ${machine.machine}`,
-              )
+        for (const [hash, project] of Object.entries(machine.projects))
+          addFromRegister(hash, project.name, machine.machine, project.tailnet)
     } catch (error) {
       errors.push(`cloud register: ${String(error)}`)
     }

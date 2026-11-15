@@ -30,9 +30,10 @@ tens of thousands of entries.
 ## Actions
 
 - `report { since?, until? }` → this instance's `Report` (`refs.ts`) over that range in ms, all time without them.
-- `spokes` → `{ spokes, errors }`: the other instances `lib/remote.ts` reaches (`reachable`): projects running on
-  this machine, the user's `remotes`, and the cloud register's projects on other machines with an address.
-- `spoke { project, machine?, since?, until? }` → that instance's `report`. An instance without this extension
+- `spokes` → `{ spokes, errors }`: the other instances `lib/remote.ts` reaches (`reachable`), once per address:
+  projects running on this machine, the user's `remotes` (which win over the register for the same project and
+  machine), and the cloud register's projects on other machines with an address.
+- `spoke { url, since?, until? }`, a listed spoke's `url` → that instance's `report`. An instance without this extension
   answers with its `pi.usage` totals by model instead (`fallback: true`, no days, roles, branches or rebuilds). One
   that cannot be reached throws, so it never shows as $0.
 

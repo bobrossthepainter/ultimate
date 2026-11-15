@@ -12,7 +12,7 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { onCommit } from '../../lib/commits.ts'
-import { locate, postAction, reachable, selfAddress } from '../../lib/remote.ts'
+import { postAction, reachable, selfAddress } from '../../lib/remote.ts'
 import { Started as StartedEvent } from '../subagents/api.ts'
 import {
   addBucket,
@@ -225,15 +225,6 @@ const remoteWith =
   (target, extension, action, args) =>
     postAction(target, extension, action, args, signal)
 
-const spokeArgs = (args: unknown) => {
-  const object = args && typeof args === 'object' ? (args as Record<string, unknown>) : {}
-  if (typeof object.project !== 'string' || !object.project)
-    throw new Error('project must be nonempty')
-  if (object.machine !== undefined && (typeof object.machine !== 'string' || !object.machine))
-    throw new Error('machine must be nonempty')
-  return { project: object.project, machine: object.machine }
-}
-
 export const actions = {
   report: implementAction(ReportAction, async (args, { host }: Pick<ActionContext, 'host'>) =>
     report(host, indexOf(host), await selfAddress(host), range(args)),
@@ -242,10 +233,10 @@ export const actions = {
     reachable(host),
   ),
   spoke: implementAction(SpokeAction, async (args, { host, signal }: ActionContext) => {
-    const { project, machine } = spokeArgs(args)
-    const target = await locate(host, project, machine)
-    if ('current' in target)
-      return report(host, indexOf(host), await selfAddress(host), range(args))
+    const url = args && typeof args === 'object' && 'url' in args ? args.url : undefined
+    if (typeof url !== 'string' || !url) throw new Error('url must be nonempty')
+    const target = (await reachable(host)).spokes.find((spoke) => spoke.url === url)
+    if (!target) throw new Error(`${url} is not a spoke of this instance`)
     return spokeReport(target, range(args), remoteWith(signal))
   }),
   all: implementAction(AllAction, async (args, { host, signal }: ActionContext) => {
@@ -260,9 +251,7 @@ export const actions = {
       ),
       ...spokes.map(async (spoke) => {
         try {
-          const target = await locate(host, spoke.project, spoke.machine)
-          if ('current' in target) throw new Error('is this instance')
-          return { label: spoke.label, report: await spokeReport(target, window, remote) }
+          return { label: spoke.label, report: await spokeReport(spoke, window, remote) }
         } catch (error) {
           return {
             label: spoke.label,
