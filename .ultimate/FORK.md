@@ -177,3 +177,11 @@ so branches adding divergences in parallel do not edit the same lines.
   `readOnly`/`safeToRerun` on fork tools, and replaced two architect `exhaustive-deps` disables with `useEffectEvent`.
   New fork code follows the same rules
 - Upstream: local-only
+
+### Usage extension
+
+- Touches: `extensions/usage/`, `lib/remote.ts` (`reachable`: every instance `locate` could reach)
+- Why: Usage surface: list-price cost of this instance's model calls by day, cost type, cache rebuilds (with cause),
+  role, model and branch, and the same for every other Ultimate it reaches (hub and spokes); spokes without the
+  extension show their `pi.usage` totals
+- Upstream: local-only (written generically, so it could be given back)

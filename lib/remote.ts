@@ -8,7 +8,12 @@ import type { ExtensionHost } from '../server/extensions.ts'
 
 export const REMOTE_BYTES = 1024 * 1024
 
-type LocalProject = { name: string; root?: string; current: boolean; running?: { url: string } }
+type LocalProject = {
+  name: string
+  root?: string
+  current: boolean
+  running?: { url: string }
+}
 export type Target =
   | { current: true }
   | { url: string; label: string; name: string; machine?: string }
@@ -31,7 +36,11 @@ export function resolveProject(
   const [found] = here
   if (found?.current) return { current: true }
   if (found?.running)
-    return { url: found.running.url, label: `${found.name} on this machine`, name: found.name }
+    return {
+      url: found.running.url,
+      label: `${found.name} on this machine`,
+      name: found.name,
+    }
   const entry = register?.projects.find(named)
   if (entry && !machine?.here) {
     const on = machine?.name ?? entry.latest.machine
@@ -39,7 +48,12 @@ export function resolveProject(
       (on === entry.latest.machine ? entry.latest.tailnet : undefined) ??
       register!.machines.find((item) => item.machine === on)?.projects[entry.hash]?.tailnet
     if (tailnet)
-      return { url: tailnet, label: `${entry.name} on ${on}`, name: entry.name, machine: on }
+      return {
+        url: tailnet,
+        label: `${entry.name} on ${on}`,
+        name: entry.name,
+        machine: on,
+      }
     throw new Error(
       machine
         ? `${entry.name} on ${on} registered no tailnet address`
@@ -83,6 +97,38 @@ export async function selfAddress(host: ExtensionHost) {
   const current = (await host.projects()).find((item) => item.current)
   if (!current) throw new Error('This project is not listed among the projects')
   return { project: current.name, machine: await machineName(host) }
+}
+
+export async function reachable(host: ExtensionHost) {
+  const errors: string[] = []
+  const here = await machineName(host)
+  const seen = new Set<string>()
+  const spokes: { project: string; machine?: string; label: string }[] = []
+  const add = (project: string, machine: string | undefined, label: string) => {
+    const key = `${project.toLowerCase()}@${machine ?? here}`
+    if (seen.has(key)) return
+    seen.add(key)
+    spokes.push({ project, ...(machine !== undefined && { machine }), label })
+  }
+  const projects = await host.projects()
+  for (const item of projects) if (item.current) seen.add(`${item.name.toLowerCase()}@${here}`)
+  for (const item of projects)
+    if (!item.current && item.running) add(item.name, undefined, `${item.name} on this machine`)
+  for (const item of await userConfiguredRemotes(host))
+    add(item.name, item.machine, `${item.name} on ${item.machine}`)
+  const cloud = await cloudConfig(host)
+  if (cloud)
+    try {
+      const register = await fetchRegister(cloud)
+      for (const machine of register.machines)
+        if (machine.machine !== here)
+          for (const project of Object.values(machine.projects))
+            if (project.tailnet)
+              add(project.name, machine.machine, `${project.name} on ${machine.machine}`)
+    } catch (error) {
+      errors.push(`cloud register: ${String(error)}`)
+    }
+  return { spokes, errors }
 }
 
 export async function locate(host: ExtensionHost, project: string, machine?: string) {
