@@ -1,5 +1,5 @@
 /** Branch cache in the browser: a coordinator branch's toggles, its cache and what was done about it. Browser-safe. */
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationId, TaskId } from '@earendil-works/pi-durable'
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 
 /** One keep-warm request on a branch, recorded as `interrupted` before it is sent. */
@@ -15,7 +15,7 @@ export type Ping = {
 /** One compaction this extension started: its task, the context size before it, and the cache-reading summary's usage. */
 export type Compaction = {
   at: number
-  task: number
+  task: TaskId
   tokens: number
   read?: number
   write?: number
@@ -26,7 +26,10 @@ export type Compaction = {
 export type BranchCacheDocState = {
   warm?: boolean
   compact?: boolean
+  /** The latest ping attempt, failed or not. */
   last?: Ping
+  /** The latest successful ping: it renewed the cache even when a later attempt failed. */
+  warmed?: Ping
   pings?: number
   compaction?: Compaction
 }

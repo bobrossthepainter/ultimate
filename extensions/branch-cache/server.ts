@@ -7,7 +7,14 @@ import {
   hook,
   LiveDoc,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, Cursor, JsonObject, ModelRef, Tx } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  Cursor,
+  JsonObject,
+  ModelRef,
+  TaskId,
+  Tx,
+} from '@earendil-works/pi-durable'
 import type { AssistantMessage, Message } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationSummary } from '../../shared/protocol.ts'
@@ -112,6 +119,7 @@ type Branch = {
   provider: string
   model: string
   doc: BranchCacheDocState
+  settings: Settings
   situation: Situation
 }
 
@@ -129,13 +137,14 @@ async function branchOf(
   const doc = await read(host, id)
   const answered = await lastCacheRenewingAnswerAtMs(host, id, model, now)
   const last = lastOn(doc.last, model)
-  const pinged = last && !last.error ? last.at : undefined
+  const pinged = lastOn(doc.warmed, model)?.at
   const usage = await host.harness().snapshot(ContextUsageDoc, id, context)
   return {
     id,
     provider: model.provider,
     model: model.modelId,
     doc,
+    settings,
     situation: {
       now,
       lastRequest: Math.max(answered ?? 0, pinged ?? 0) || undefined,
@@ -194,17 +203,20 @@ async function branches(host: ExtensionHost, now: number) {
 const cacheOpen = (paused: boolean | undefined, lastRequest: number, now: number) =>
   !paused && now - lastRequest < TTL
 
-async function commitIdleUnchanged(
+async function commitIdleUnchangedStillOn(
   host: ExtensionHost,
-  id: ConversationId,
-  previous: BranchCacheDocState,
+  branch: Branch,
+  toggle: 'warm' | 'compact',
   change: (tx: Tx, doc: BranchCacheDocState) => Promise<void> | void,
 ) {
+  const { id, doc: previous, settings } = branch
   return host.harness().commit(async (tx) => {
     const doc = await tx.doc(State, id)
     const unchanged =
       doc.last?.at === previous.last?.at && doc.compaction?.at === previous.compaction?.at
-    if (!unchanged || (await tx.doc(LiveDoc, id)).run) return false
+    const stillOn = doc[toggle] ?? settings[toggle]
+    const withinHour = Date.now() - branch.situation.lastRequest! < TTL
+    if (!unchanged || !stillOn || !withinHour || (await tx.doc(LiveDoc, id)).run) return false
     await change(tx, doc)
     return true
   }, context)
@@ -227,7 +239,9 @@ async function commitPingOutcome(
   answer?: AssistantMessage,
 ) {
   await host.harness().commit(async (tx) => {
-    ;(await tx.doc(State, id)).last = last
+    const doc = await tx.doc(State, id)
+    doc.last = last
+    if (last.error === undefined) doc.warmed = last
     if (answer) await host.need(ConversationsApi).accountResponse(tx, id, receipt(answer))
   }, context)
 }
@@ -256,7 +270,7 @@ async function sendOneShotPingWithoutSession(host: ExtensionHost, branch: Branch
   messages.push({ role: 'user', content: PING_QUESTION, timestamp: at })
   if (!cacheOpen(paused(), lastRequest, Date.now())) return
   const attempt: Ping = { at, provider, model: branch.model, error: 'interrupted' }
-  const claimed = await commitIdleUnchanged(host, id, branch.doc, (_tx, doc) => {
+  const claimed = await commitIdleUnchangedStillOn(host, branch, 'warm', (_tx, doc) => {
     doc.last = attempt
     doc.pings = (doc.pings ?? 0) + 1
   })
@@ -303,7 +317,8 @@ async function sendOneShotPingWithoutSession(host: ExtensionHost, branch: Branch
 
 async function startCompaction(host: ExtensionHost, branch: Branch) {
   const { id } = branch
-  await commitIdleUnchanged(host, id, branch.doc, async (tx, doc) => {
+  if (host.want(PauseApi)?.paused()) return
+  await commitIdleUnchangedStillOn(host, branch, 'compact', async (tx, doc) => {
     if (await compacting(tx, id)) return
     const task = await admitCompaction(tx, id)
     doc.compaction = { at: Date.now(), task, tokens: branch.situation.tokens }
@@ -331,7 +346,7 @@ const text = (message: AssistantMessage) =>
 async function commitCompactionUsage(
   host: ExtensionHost,
   id: ConversationId,
-  task: number,
+  task: TaskId,
   outcome: Pick<Compaction, 'read' | 'write' | 'error'>,
   answer?: AssistantMessage,
 ) {
@@ -342,7 +357,12 @@ async function commitCompactionUsage(
   }, context)
 }
 
-async function summaryFromCache(host: ExtensionHost, id: ConversationId, task: number) {
+async function summaryFromCache(
+  host: ExtensionHost,
+  id: ConversationId,
+  task: TaskId,
+  keep: (summary: string) => Promise<string>,
+) {
   const { messages, agent } = await nextRequestMessages(host, id)
   const model = agent.model && host.modelRuntime.getModel(agent.model.provider, agent.model.modelId)
   if (!model) return undefined
@@ -365,7 +385,8 @@ async function summaryFromCache(host: ExtensionHost, id: ConversationId, task: n
     })
     return undefined
   }
-  const summary = answer.stopReason === 'stop' ? text(answer) : ''
+  const fresh = answer.stopReason === 'stop' ? text(answer) : ''
+  const summary = fresh ? await keep(fresh) : undefined
   await commitCompactionUsage(
     host,
     id,
@@ -375,7 +396,7 @@ async function summaryFromCache(host: ExtensionHost, id: ConversationId, task: n
       : { error: answer.errorMessage ?? `no summary (${answer.stopReason})` },
     answer,
   )
-  return summary || undefined
+  return summary
 }
 
 async function state(host: ExtensionHost, id: ConversationId): Promise<BranchCacheState> {
@@ -441,13 +462,13 @@ export default function branchCache(host: ExtensionHost) {
         beforeCompact: async (_compaction, api, ctx) => {
           const doc = await api.snapshot(State, api.conversationId, ctx)
           if (doc?.compaction?.task !== api.taskId) return undefined
-          let summary = await api.memo<string>('branch-cache.summary', ctx)
-          if (summary === undefined) {
-            const fresh = await summaryFromCache(host, api.conversationId, api.taskId)
-            if (fresh === undefined) return undefined
-            summary = await api.memo('branch-cache.summary', fresh, ctx)
-          }
-          return { summary }
+          const kept = await api.memo<string>('branch-cache.summary', ctx)
+          if (kept !== undefined) return { summary: kept }
+          if ((await api.snapshot(LiveDoc, api.conversationId, ctx))?.run) return undefined
+          const summary = await summaryFromCache(host, api.conversationId, api.taskId, (fresh) =>
+            api.memo('branch-cache.summary', fresh, ctx),
+          )
+          return summary === undefined ? undefined : { summary }
         },
       }),
     ],
