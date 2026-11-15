@@ -100,8 +100,38 @@ export async function selfAddress(host: ExtensionHost) {
 }
 
 export async function reachable(host: ExtensionHost) {
+  const projects = await host.projects()
+  const current = projects.find((item) => item.current)
+  const key = current?.root ? (await projectIdentity(current.root))?.key : undefined
   const errors: string[] = []
-  const here = await machineName(host)
+  const cloud = await cloudConfig(host)
+  const register = cloud
+    ? await fetchRegister(cloud).catch((error: unknown) => {
+        errors.push(`cloud register: ${String(error)}`)
+        return undefined
+      })
+    : undefined
+  return {
+    spokes: spokesOf({
+      here: await machineName(host),
+      self: [current?.name, key].flatMap((name) => (name ? [name] : [])),
+      projects,
+      remotes: await userConfiguredRemotes(host),
+      register,
+    }),
+    errors,
+  }
+}
+
+export function spokesOf(input: {
+  here: string
+  self: string[]
+  projects: LocalProject[]
+  remotes: { machine: string; name: string; url: string }[]
+  register?: Register
+}) {
+  const { here, projects, register } = input
+  const self = new Set(input.self.map((name) => name.toLowerCase()))
   const urls = new Set<string>()
   const named = new Set<string>()
   const spokes: Extract<Target, { url: string }>[] = []
@@ -110,13 +140,11 @@ export async function reachable(host: ExtensionHost) {
     urls.add(spoke.url)
     spokes.push(spoke)
   }
-  const projects = await host.projects()
-  const current = projects.find((item) => item.current)?.name.toLowerCase()
   for (const item of projects)
     if (!item.current && item.running)
       add({ url: item.running.url, label: `${item.name} on this machine`, name: item.name })
-  for (const item of await userConfiguredRemotes(host)) {
-    if (item.machine === here && item.name.toLowerCase() === current) continue
+  for (const item of input.remotes) {
+    if (item.machine === here && self.has(item.name.toLowerCase())) continue
     named.add(`${item.name.toLowerCase()}@${item.machine}`)
     add({
       url: item.url,
@@ -125,28 +153,23 @@ export async function reachable(host: ExtensionHost) {
       machine: item.machine,
     })
   }
-  const cloud = await cloudConfig(host)
-  if (cloud)
-    try {
-      const register = await fetchRegister(cloud)
-      const projectsByHash = new Map(register.projects.map((entry) => [entry.hash, entry]))
-      const addFromRegister = (hash: string, name: string, machine: string, url?: string) => {
-        const key = projectsByHash.get(hash)?.key
-        const alias = [name, key].some(
-          (value) => value && named.has(`${value.toLowerCase()}@${machine}`),
-        )
-        if (!url || machine === here || alias) return
-        add({ url, label: `${name} on ${machine}`, name, machine })
-      }
-      for (const entry of register.projects)
-        addFromRegister(entry.hash, entry.name, entry.latest.machine, entry.latest.tailnet)
-      for (const machine of register.machines)
-        for (const [hash, project] of Object.entries(machine.projects))
-          addFromRegister(hash, project.name, machine.machine, project.tailnet)
-    } catch (error) {
-      errors.push(`cloud register: ${String(error)}`)
+  if (register) {
+    const projectsByHash = new Map(register.projects.map((entry) => [entry.hash, entry]))
+    const addFromRegister = (hash: string, name: string, machine: string, url?: string) => {
+      const key = projectsByHash.get(hash)?.key
+      const alias = [name, key].some(
+        (value) => value && named.has(`${value.toLowerCase()}@${machine}`),
+      )
+      if (!url || machine === here || alias) return
+      add({ url, label: `${name} on ${machine}`, name, machine })
     }
-  return { spokes, errors }
+    for (const entry of register.projects)
+      addFromRegister(entry.hash, entry.name, entry.latest.machine, entry.latest.tailnet)
+    for (const machine of register.machines)
+      for (const [hash, project] of Object.entries(machine.projects))
+        addFromRegister(hash, project.name, machine.machine, project.tailnet)
+  }
+  return spokes
 }
 
 export async function locate(host: ExtensionHost, project: string, machine?: string) {
