@@ -177,3 +177,15 @@ so branches adding divergences in parallel do not edit the same lines.
   `readOnly`/`safeToRerun` on fork tools, and replaced two architect `exhaustive-deps` disables with `useEffectEvent`.
   New fork code follows the same rules
 - Upstream: local-only
+
+### branch-cache extension
+
+- Touches: `extensions/branch-cache/` (new; off by default per branch)
+- Why: Branch coordinators rebuilt their prompt cache after long waits on the user, subagents or the lander (#27553:
+  41 % of coordinator cost). Per branch, a `cache` chip turns on keep-warm pings (as `keep-warm` does for @ultimate,
+  8 h after the branch's last input of any kind) and compaction before the cache runs cold, also during waits on
+  subagents; with both on it compacts when the warm window ends (#27794). `due.ts` and the ping are adapted copies of
+  `extensions/keep-warm/` (2a6726f), since lint lets server code reach another extension only through its `api.ts`:
+  re-sync them when upstream changes keep-warm's ping. Its `beforeCompact` hook (`order = -1`, before lineage) asks
+  for the summary on the branch's own cached context instead of lineage's uncached source text
+- Upstream: candidate
