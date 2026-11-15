@@ -1,3 +1,4 @@
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { ArrowRightIcon, CheckIcon, CircleAlertIcon, MessageSquareIcon, XIcon } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -8,10 +9,6 @@ import { limits } from './drafts.tsx'
 import type { Drafts } from './drafts.tsx'
 import type { DraftEdit } from './refs.ts'
 
-/**
- * The pending feedback under the diagram, as Review's: its count, an optional overall note, Discard, the recipient and
- * Send (N), and why the last send failed.
- */
 export function Footer({
   drafts,
   edit,
@@ -22,13 +19,12 @@ export function Footer({
 }: {
   drafts: Drafts
   edit: (change: DraftEdit) => Promise<unknown>
-  to?: number
+  to?: ConversationId
   sending: boolean
   error?: string
   onSend: () => void
 }) {
   const [noting, setNoting] = useState(false)
-  // The note as typed: it reaches the server on blur, not on every key.
   const [note, setNote] = useState<string>()
   const [failed, setFailed] = useState<string>()
   const run = (change: DraftEdit) => {
@@ -106,13 +102,12 @@ export function Footer({
   )
 }
 
-/** Where the last feedback went, with a link to its conversation. */
 export function Sent({
   conversation,
   onOpen,
   onClose,
 }: {
-  conversation: number
+  conversation: ConversationId
   onOpen: () => void
   onClose: () => void
 }) {

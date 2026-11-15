@@ -3,7 +3,6 @@ import type { ReactNode } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, Header, StatusLine } from '@/sdk'
 
-/** The surface's frame, as Review's: its header with `controls`, the body, the status line. */
 export function Frame({ controls, children }: { controls?: ReactNode; children: ReactNode }) {
   return (
     <>
@@ -20,7 +19,6 @@ export function Frame({ controls, children }: { controls?: ReactNode; children: 
   )
 }
 
-/** A quiet line in place of the diagrams: why there are none. */
 export function Notice({ children }: { children: ReactNode }) {
   return (
     <p className="flex-1 py-10 text-center font-mono text-[11.5px] text-muted-foreground/70">
@@ -29,7 +27,6 @@ export function Notice({ children }: { children: ReactNode }) {
   )
 }
 
-/** Diagram list and a diagram while the versions load. */
 export function Loading() {
   return (
     <>
@@ -52,7 +49,6 @@ const swatches = [
   ['removed', 'border-dashed border-diff-del bg-diff-del/20'],
 ] as const
 
-/** What the three change colours mean (and the dashed outline of proposed parts, when shown), and that parts take comments. */
 export function Legend({ proposed = false }: { proposed?: boolean }) {
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground md:px-4">

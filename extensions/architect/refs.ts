@@ -1,4 +1,5 @@
 /** Architecture diagrams in the browser: each branch's versions, the index of branches that have any, and the actions that draw them and send feedback on them. Browser-safe. */
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 
 /**
@@ -56,7 +57,7 @@ export type ArchitectureVersion = {
 }
 
 /** A branch's architecture, on the branch: its versions, oldest first, and its architect conversation once it has one. */
-export type Architecture = { versions: ArchitectureVersion[]; architect?: number }
+export type Architecture = { versions: ArchitectureVersion[]; architect?: ConversationId }
 
 /** The branches with at least one version, on the root: by conversation id, its latest version number and time. */
 export type ArchitectureIndex = { branches: Record<string, { version: number; at: string }> }
@@ -75,7 +76,7 @@ export type ArchitectureComment = {
 
 /** What feedback on a version carries into its recipient's transcript, as the data of its `architect.comments` entry. */
 export type ArchitectureComments = {
-  branch: number
+  branch: ConversationId
   version: number
   comments: ArchitectureComment[]
   note?: string
@@ -87,7 +88,7 @@ export type ArchitectureComments = {
  * any.
  */
 export type ArchitectureQuestion = ArchitectureComment & {
-  branch: number
+  branch: ConversationId
   version: number
   code?: PartCode
 }
@@ -96,14 +97,14 @@ export type ArchitectureQuestion = ArchitectureComment & {
  * A comment not sent yet. `id` tells drafts on the same part apart; `by` is the architecture chat that suggested it,
  * absent for the user's own.
  */
-export type Draft = ArchitectureComment & { id: string; by?: number }
+export type Draft = ArchitectureComment & { id: string; by?: ConversationId }
 /** A version's pending feedback: its comments, the overall note, and the recipient the user picked, if any. */
-export type Drafts = { comments: Draft[]; note: string; to?: number }
+export type Drafts = { comments: Draft[]; note: string; to?: ConversationId }
 /** The pending feedback of a branch, on the branch: by version number. */
 export type ArchitectureDrafts = { versions: Record<string, Drafts> }
 
 /** A branch's architecture chat, on the branch: the conversation and the version it was forked at. */
-export type ArchitectureChat = { id?: number; version?: number }
+export type ArchitectureChat = { id?: ConversationId; version?: number }
 
 /** A branch's versions, on the branch's conversation. */
 export const ArchitectureDoc = docRef<Architecture>('architect.versions')
@@ -120,8 +121,8 @@ export const ArchitectureIndexDoc = docRef<ArchitectureIndex>('architect.index')
  * drawing: the call then starts nothing. Throws on an unknown conversation or without an `architect` agent definition.
  */
 export const DrawAction = actionRef<
-  { conversation: number },
-  { architect: number; started: boolean }
+  { conversation: ConversationId },
+  { architect: ConversationId; started: boolean }
 >('architect', 'draw')
 
 /** One change to a version's pending feedback. */
@@ -130,7 +131,7 @@ export type DraftEdit =
   | { op: 'update'; id: string; text: string }
   | { op: 'delete'; id: string }
   | { op: 'note'; note: string }
-  | { op: 'to'; to: number }
+  | { op: 'to'; to: ConversationId }
   | { op: 'clear' }
 
 /**
@@ -138,7 +139,7 @@ export type DraftEdit =
  * feedback in `architect.drafts`. At most 50 comments of at most 4,000 characters; throws on an unknown version or id.
  */
 export const EditAction = actionRef<
-  { branch: number; version: number; edit: DraftEdit },
+  { branch: ConversationId; version: number; edit: DraftEdit },
   { id?: string }
 >('architect', 'edit')
 
@@ -147,20 +148,20 @@ export const EditAction = actionRef<
  * `architect.comments` input into its recipient (`to`, else the branch's coordinator), which wakes or steers it like a
  * typed message, and clear the comments sent. Throws on an unknown version or with no comments pending.
  */
-export const SendAction = actionRef<{ branch: number; version: number }, { conversation: number }>(
-  'architect',
-  'send',
-)
+export const SendAction = actionRef<
+  { branch: ConversationId; version: number },
+  { conversation: ConversationId }
+>('architect', 'send')
 
 /**
  * User only: `{ branch, fresh? }` → `{ chat }`: the branch's architecture chat, a copy of its architect at its latest
  * answer, made on first use (or again with `fresh`, or once a newer version exists). Throws while the branch has no
  * version or its architect still draws.
  */
-export const ChatAction = actionRef<{ branch: number; fresh?: boolean }, { chat: number }>(
-  'architect',
-  'chat',
-)
+export const ChatAction = actionRef<
+  { branch: ConversationId; fresh?: boolean },
+  { chat: ConversationId }
+>('architect', 'chat')
 
 /**
  * User only: `{ branch, version, comment }` → `{ chat }`: ask the branch's architecture chat `comment.text` about the
@@ -169,6 +170,6 @@ export const ChatAction = actionRef<{ branch: number; fresh?: boolean }, { chat:
  * `version`, which needs a new chat first.
  */
 export const AskAction = actionRef<
-  { branch: number; version: number; comment: ArchitectureComment },
-  { chat: number }
+  { branch: ConversationId; version: number; comment: ArchitectureComment },
+  { chat: ConversationId }
 >('architect', 'ask')

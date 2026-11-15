@@ -1,4 +1,5 @@
 /** Plannotator sessions in the browser: what runs, and the actions that start and stop them. Browser-safe. */
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { actionRef } from '../../shared/extension-api.ts'
 
 /**
@@ -9,7 +10,7 @@ export type ReviewItem = {
   /** A directory inside a Git repository. */
   repo?: string
   /** A conversation whose worktree to review (its branch against its target unless `base` says otherwise). */
-  conversation?: number
+  conversation?: ConversationId
   /** A branch, tag or commit to review instead of the working tree; its changes since the merge base with `base`. */
   ref?: string
   /** A branch, tag or commit to compare against; by default the worktree's target, else `origin`'s default branch. */
@@ -32,7 +33,7 @@ export type SessionRepo = { name: string; path: string; ref?: string; base?: str
 export type Session = {
   id: string
   /** Who receives the result: the conversation that started the review. */
-  conversation: number
+  conversation: ConversationId
   title: string
   mode: ReviewMode | 'single'
   repos: SessionRepo[]

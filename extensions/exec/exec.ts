@@ -5,7 +5,6 @@ import { spawnGroup } from '../../lib/process-group.ts'
 import { execFile, spawn } from '../../lib/spawn.ts'
 import type { ExecProtocol, ExecService, ExecTarget, ExecTargets } from './api.ts'
 
-/** This machine: what every directory no protocol claims runs on. */
 export const localTarget: ExecTarget = {
   protocol: 'local',
   id: 'local',
@@ -14,20 +13,16 @@ export const localTarget: ExecTarget = {
   config: null,
 }
 
-/** Whether `cwd` is `root` or below it. */
 const under = (cwd: string, root: string) =>
   cwd === root || cwd.startsWith(root.endsWith('/') ? root : `${root}/`)
 
-/** The built-in protocol: execFile and spawnGroup through the process helper, and Pi's Node environment. */
 export const localProtocol: ExecProtocol = {
   run: (_target, cwd, file, args, options) => execFile(file, args, { ...options, cwd }),
   start: (_target, cwd, file, args, options = {}) => spawnGroup(file, args, { ...options, cwd }),
-  // Agents' commands start from the process helper (the patched spawn option), never by forking this process.
   env: (_target, cwd): ExecutionEnv => new NodeExecutionEnv({ cwd, spawn }),
   describe: () => 'local Node',
 }
 
-/** The exec service over `local` and whatever protocol `routed` returns now (none while no extension provides one). */
 export function createExec(
   local: ExecProtocol,
   routed: () => ExecTargets | undefined,

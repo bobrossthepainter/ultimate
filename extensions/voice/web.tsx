@@ -1,3 +1,4 @@
+import { deadline } from '../../lib/timers.ts'
 import { LoaderCircleIcon, MicIcon, SquareIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -16,12 +17,12 @@ import {
   useSystem,
 } from '@/sdk'
 import { LoginChanged } from '../models/ui.tsx'
+import { meansNone } from '../../lib/errors.ts'
 import { StatusAction, TranscribeAction } from './refs.ts'
 
-/** Recordings stop on their own here: well under the 8 MB the server takes at any browser's bitrate. */
-const MAX_MS = 5 * 60_000
-/** In order of preference; iOS Safari records only `audio/mp4`. */
-const TYPES = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm']
+const uploadSafeRecordingMs = 5 * 60_000
+
+const recordingMimeOrder = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm']
 
 type Recording = {
   recorder: MediaRecorder
@@ -32,7 +33,6 @@ type Recording = {
   cancelled: boolean
 }
 
-/** Why this browser cannot record at all, or undefined when it can. */
 function unsupported(): string | undefined {
   if (!window.isSecureContext) return 'Voice needs HTTPS: open Ultimate over its tailnet URL'
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined')
@@ -53,7 +53,6 @@ const clock = (ms: number) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }
 
-/** Four bars that follow the microphone's level; still under reduced motion, where the dot stays solid instead. */
 function Level({ audio, stream }: { audio?: AudioContext; stream: MediaStream }) {
   const bars = useRef<HTMLSpanElement[]>([])
   useEffect(() => {
@@ -94,12 +93,10 @@ function Level({ audio, stream }: { audio?: AudioContext; stream: MediaStream })
   )
 }
 
-/** Tap to record, tap to stop; the words land in the draft at the cursor, unsent, for review. */
 function VoiceButton() {
   const { id } = useConversation()
   const status = useAction(StatusAction)
   useEvent('secrets:changed', () => void status.refetch())
-  // A login or an extension switched on or off (voice-chatgpt takes over transcription) changes the status too.
   const enabled = useSystem()
     ?.extensions.filter((extension) => extension.enabled)
     .map((extension) => extension.name)
@@ -111,18 +108,16 @@ function VoiceButton() {
   const [transcribing, setTranscribing] = useState(false)
   const [error, setError] = useState<string>()
   const now = useNow(250, recording !== undefined)
-  const current = useRef<Recording>(undefined)
-  current.current = recording
+  const composerRecording = useRef<Recording>(undefined)
+  composerRecording.current = recording
 
-  // A recording never outlives its composer: leaving the conversation drops it and frees the microphone.
-  useEffect(() => () => finish(current.current, true), [id])
+  useEffect(() => () => finish(composerRecording.current, true), [id])
   useEffect(() => {
-    if (recording && now - recording.started >= MAX_MS) finish(recording, false)
+    if (recording && now - recording.started >= uploadSafeRecordingMs) finish(recording, false)
   }, [now, recording])
   useEffect(() => {
     if (!error) return undefined
-    const timer = setTimeout(() => setError(undefined), 8000)
-    return () => clearTimeout(timer)
+    return deadline(8000, () => setError(undefined))
   }, [error])
 
   function finish(active: Recording | undefined, cancel: boolean) {
@@ -167,7 +162,7 @@ function VoiceButton() {
       )
       return
     }
-    const type = TYPES.find((candidate) => MediaRecorder.isTypeSupported(candidate))
+    const type = recordingMimeOrder.find((candidate) => MediaRecorder.isTypeSupported(candidate))
     const recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined)
     const audio = typeof AudioContext === 'undefined' ? undefined : new AudioContext()
     const active: Recording = {
@@ -183,14 +178,11 @@ function VoiceButton() {
     })
     recorder.addEventListener('stop', () => {
       for (const track of stream.getTracks()) track.stop()
-      // Closing only frees the meter's audio graph; a failure leaves nothing to clean up.
-      audio?.close().catch(() => undefined)
+      audio?.close().catch(meansNone)
       if (active.cancelled || active.chunks.length === 0) return
-      // oxlint-disable-next-line typescript/no-floating-promises -- transcribe shows its own failures beside the button.
       void transcribe(new Blob(active.chunks, { type: recorder.mimeType || type || 'audio/webm' }))
     })
-    // Created after awaiting the permission prompt, it may start suspended (Safari): the meter would read silence.
-    audio?.resume().catch(() => undefined)
+    audio?.resume().catch(meansNone)
     recorder.start(1000)
     setRecording(active)
   }
@@ -198,8 +190,8 @@ function VoiceButton() {
   const blocked =
     unsupported() ?? (status.data?.available === false ? status.data.reason : undefined)
   const missingKey = !unsupported() && status.data?.available === false && status.data.secret
-  // Keeps the editor's focus, so a phone's keyboard neither opens nor closes under the tap.
-  const keepFocus = (event: React.PointerEvent) => event.preventDefault()
+
+  const keepEditorFocus = (event: React.PointerEvent) => event.preventDefault()
 
   if (recording)
     return (
@@ -208,7 +200,7 @@ function VoiceButton() {
           aria-label="Cancel recording"
           className="flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:size-9"
           onClick={() => finish(recording, true)}
-          onPointerDown={keepFocus}
+          onPointerDown={keepEditorFocus}
           title="Cancel"
           type="button"
         >
@@ -223,7 +215,7 @@ function VoiceButton() {
           aria-label="Stop and transcribe"
           className="flex size-7 items-center justify-center rounded-lg bg-error text-white hover:bg-error/90 pointer-coarse:size-9"
           onClick={() => finish(recording, false)}
-          onPointerDown={keepFocus}
+          onPointerDown={keepEditorFocus}
           title="Stop and transcribe"
           type="button"
         >
@@ -259,13 +251,12 @@ function VoiceButton() {
             data-voice={blocked ? 'blocked' : transcribing ? 'transcribing' : 'idle'}
             onClick={() => {
               if (transcribing || status.loading) return
-              // On a phone there is no tooltip: the tap says why, and a missing key opens its row in Secrets.
+
               if (missingKey) events.emit('secrets:open', { name: missingKey })
               else if (blocked) setError(blocked)
-              // oxlint-disable-next-line typescript/no-floating-promises -- start shows its own failures beside the button.
               else void start()
             }}
-            onPointerDown={keepFocus}
+            onPointerDown={keepEditorFocus}
             type="button"
           >
             {transcribing ? (

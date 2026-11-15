@@ -1,7 +1,3 @@
-// Installs Ultimate as a service. On Linux each project is an instance of the systemd user template ultimate@.service,
-// named after its home in ~/.ultimate/projects/, with linger, so it starts at boot without a login; on macOS one
-// project is a launchd agent in ~/Library/LaunchAgents, which runs while the user is logged in.
-// Usage: pnpm setup:machine [--project <dir>]... [--dry-run]. See "Cloud backups" in extensions/cloud/README.md.
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { rmSync, writeFileSync } from 'node:fs'
@@ -10,27 +6,21 @@ import { createServer } from 'node:net'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { alive } from '../server/lock.ts'
-import { projectHome } from '../server/project.ts'
+import { alive } from '../lib/lock.ts'
+import { meansNone } from '../lib/errors.ts'
+import { projectHome } from '../lib/project-paths.ts'
 
 export interface UnitOptions {
-  /** The Ultimate clone that holds bin/ultimate.ts. */
   clone: string
-  /** The project the launchd agent opens. */
   project: string
   home: string
   node: string
-  /** The user's PATH (`loginPath`), kept after node so the agent finds the same tools as in a terminal. */
   path: string
 }
 
-/** The template every project's service is an instance of. */
 export const TEMPLATE = 'ultimate@.service'
-/** The single-project unit of earlier versions, replaced by the project's instance. */
 export const LEGACY = 'ultimate.service'
-/** A project's instance: named after its home folder, `ultimate@my-app-1a2b3c4d.service`. */
 export const instanceOf = (home: string) => `ultimate@${basename(home)}.service`
-/** Exit code of bin/ultimate.ts when the project already runs; the unit does not retry it. */
 export const ALREADY_RUNNING = 3
 
 export interface Unit {
@@ -38,7 +28,6 @@ export interface Unit {
   content: string
 }
 
-/** The launchd agent's service. */
 interface Service {
   label: string
   cwd: string
@@ -68,23 +57,16 @@ function unit(description: string, service: string[]) {
   ].join('\n')
 }
 
-/** Whitespace and the characters systemd treats specially in unit values: quotes, escapes, specifiers, variables. */
-const special = /[\s"'\\%$]/
+const systemdSpecialCharacters = /[\s"'\\%$]/
 
-/** Paths go into units unescaped, so one systemd would read differently is refused rather than escaped. */
 export function checkPaths(paths: Record<string, string>) {
   for (const [name, path] of Object.entries(paths))
-    if (special.test(path))
+    if (systemdSpecialCharacters.test(path))
       throw new Error(
         `${name} path ${JSON.stringify(path)} contains whitespace or one of " ' \\ % $, which systemd units treat specially; move it to a plain path.`,
       )
 }
 
-/**
- * The units this script runs inside, which it must not restart or stop: the one whose InvocationID is the process's
- * INVOCATION_ID, and under Ultimate's supervisor its own project's instance, and the legacy unit when that runs the
- * same project (`legacyHome`, the home of the legacy unit's project).
- */
 export function selfUnits(
   units: string[],
   env: { INVOCATION_ID?: string; ULTIMATE_SUPERVISED?: string; ULTIMATE_HOME?: string },
@@ -99,16 +81,13 @@ export function selfUnits(
   )
 }
 
-/** Characters systemd allows in a unit's instance name without escaping. */
 const INSTANCE = /^[A-Za-z0-9_.:-]+$/
 
-/** A project's `service.env`, the instance's EnvironmentFile: which project it opens, and on which fixed port. */
 export function renderServiceEnv(project: string, port: number) {
   checkPaths({ project })
   return `ULTIMATE_PROJECT=${project}\nULTIMATE_PORT=${port}\n`
 }
 
-/** The port in a `service.env` or `ultimate.lock`, when it names one. */
 function portIn(file: string) {
   if (!existsSync(file)) return undefined
   const text = readFileSync(file, 'utf8')
@@ -120,10 +99,6 @@ function portIn(file: string) {
   return Number.isInteger(port) && port > 0 ? port : undefined
 }
 
-/**
- * Each project's fixed port: the one its service already has, else the one it runs on now, else the first port from
- * 4747 up that no other project of this machine has or runs on and that is `free` (nothing listens on it).
- */
 export async function servicePorts(
   homes: string[],
   projectsDir: string,
@@ -152,7 +127,6 @@ export async function servicePorts(
   return ports
 }
 
-/** Whether nothing listens on `port` on loopback: a listen there succeeds. */
 export const portFree = (port: number) =>
   new Promise<boolean>((done) => {
     const server = createServer()
@@ -161,13 +135,8 @@ export const portFree = (port: number) =>
   })
 
 const marker = '__ULTIMATE_PATH__'
+const interactiveLoginShellFlags = '-lic'
 
-/**
- * The PATH of the user's interactive login shell, where `~/.local/bin`, version managers' shims (mise, asdf) and
- * `PNPM_HOME` are added, followed by `current`'s entries. The script's own PATH alone is not enough: run from a
- * service, over ssh or by an agent it can be the bare `/usr/bin:/bin`, and the agent's `claude`, `gh` and `pnpm` would
- * be missing from the units. A shell that fails or prints no PATH leaves `current`.
- */
 export function loginPath(
   current: string,
   shell = process.env.SHELL || userInfo().shell || '/bin/sh',
@@ -180,25 +149,19 @@ export function loginPath(
 ) {
   let login = ''
   try {
-    // Interactive too: many setups (mise activate, PNPM_HOME) extend PATH only in the rc file.
     login =
-      run(shell, ['-lic', `printf '\n${marker}%s\n' "$PATH"`])
+      run(shell, [interactiveLoginShellFlags, `printf '\n${marker}%s\n' "$PATH"`])
         .split('\n')
         .find((line) => line.startsWith(marker))
         ?.slice(marker.length) ?? ''
-  } catch {
-    // A broken rc file must not stop the setup: the script's own PATH still goes into the units.
+  } catch (error) {
+    meansNone(error)
   }
   return [login, current].filter(Boolean).join(':')
 }
 
-/**
- * The services' PATH: node's folder, the user's absolute entries, then the system folders. pnpm run prepends
- * node_modules/.bin folders and its own version-pinned folder (.tools/@pnpm+exe/<version>), which disappears when pnpm
- * updates itself; a service must depend on neither. `misread` drops entries the service format cannot hold as is.
- */
 export function servicePath(node: string, path: string, misread?: RegExp) {
-  const user = path
+  const persistentAbsoluteUserPaths = path
     .split(':')
     .filter(
       (entry) =>
@@ -207,7 +170,15 @@ export function servicePath(node: string, path: string, misread?: RegExp) {
         !entry.includes('/.tools/') &&
         !misread?.test(entry),
     )
-  return [...new Set([dirname(node), ...user, '/usr/local/bin', '/usr/bin', '/bin'])].join(':')
+  return [
+    ...new Set([
+      dirname(node),
+      ...persistentAbsoluteUserPaths,
+      '/usr/local/bin',
+      '/usr/bin',
+      '/bin',
+    ]),
+  ].join(':')
 }
 
 function services(options: UnitOptions, path: string): Service[] {
@@ -222,16 +193,10 @@ function services(options: UnitOptions, path: string): Service[] {
   ]
 }
 
-/**
- * Renders the template unit; pure, so the side effects stay in main. Throws for a path systemd would misread. Each
- * instance reads its project and port from `<home>/.ultimate/projects/<instance>/service.env`. Exit 3 means the project
- * already runs (by hand, or another instance): retrying it would loop every RestartSec forever.
- */
 export function renderUnits(options: Omit<UnitOptions, 'project'>): Unit[] {
   const { clone, home, node } = options
   checkPaths({ clone, home, node })
-  // An entry systemd would misread is left out rather than escaped.
-  const path = servicePath(node, options.path, special)
+  const path = servicePath(node, options.path, systemdSpecialCharacters)
   return [
     {
       name: TEMPLATE,
@@ -247,12 +212,10 @@ export function renderUnits(options: Omit<UnitOptions, 'project'>): Unit[] {
   ]
 }
 
-/** The project the legacy unit opens: its WorkingDirectory. */
 export const legacyProject = (content: string) => /^WorkingDirectory=(.+)$/m.exec(content)?.[1]
 
 export interface Agent {
   label: string
-  /** The plist file name in ~/Library/LaunchAgents. */
   name: string
   content: string
 }
@@ -267,15 +230,9 @@ const xml = (value: string) =>
 
 const string = (value: string) => `<string>${xml(value)}</string>`
 
-/** The log file launchd writes an agent's stdout and stderr to. */
 export const agentLog = (home: string, label: string) =>
   join(home, 'Library/Logs/ultimate', `${label}.log`)
 
-/**
- * Renders the launchd agents; pure, so the side effects stay in main. Plists escape every value, so no path is
- * refused. KeepAlive restarts an agent only after a failed exit, as Restart=on-failure does: bin/ultimate.ts exits 0
- * when asked to stop, and an agent that keeps coming back after a deliberate stop would fight the user.
- */
 export function renderAgents(options: UnitOptions): Agent[] {
   const path = servicePath(options.node, options.path)
   return services(options, path).map(({ label, cwd, env, args }) => {
@@ -328,12 +285,6 @@ export interface AgentState {
   state: 'new' | 'replaced' | 'unchanged'
 }
 
-/**
- * Loads the agents into the user's GUI domain. A new or replaced agent is booted out and bootstrapped again, which
- * restarts it on the new plist; an unchanged one is bootstrapped only when not loaded. The replaced agent this
- * script runs inside is left alone: launchd sets XPC_SERVICE_NAME to the job's label, and under Ultimate's supervisor
- * it is com.ultimate.app. `launchctl` runs one command and returns its exit status.
- */
 export function loadAgents(
   agents: AgentState[],
   uid: number,
@@ -348,15 +299,14 @@ export function loadAgents(
       if (launchctl(['print', target]) !== 0) launchctl(['bootstrap', domain, file])
       continue
     }
-    const inside =
+    const wouldRestartOwnAgent =
       state === 'replaced' &&
       ((env.ULTIMATE_SUPERVISED === '1' && label === 'com.ultimate.app') ||
         env.XPC_SERVICE_NAME === label)
-    if (inside) {
+    if (wouldRestartOwnAgent) {
       log(`${label} changed: restart it yourself.`)
       continue
     }
-    // Fails when the agent is not loaded yet, which is just what bootout should leave behind.
     launchctl(['bootout', target])
     if (launchctl(['bootstrap', domain, file]) !== 0)
       throw new Error(`launchctl bootstrap ${domain} ${file} failed.`)
@@ -379,7 +329,6 @@ async function main() {
   const dry = values['dry-run'] === true
   const home = homedir()
   const clone = resolve(fileURLToPath(new URL('..', import.meta.url)))
-  // The real path, as bin/ultimate.ts opens it and projectHome hashes it.
   const projects = (values.project ?? [clone]).map((project) => realpathSync(resolve(project)))
   const options = {
     clone,
@@ -394,7 +343,6 @@ async function main() {
     console.log(`$ mkdir -p ${dir}`)
     if (!dry) mkdirSync(dir, { recursive: true })
   }
-  /** Writes each changed file and says whether it is new, replaced or unchanged. */
   const write = (dir: string, files: { name: string; content: string }[]) =>
     files.map(({ name, content }) => {
       const file = join(dir, name)
@@ -422,8 +370,8 @@ async function main() {
       process.getuid!(),
       process.env,
       (args) => {
-        // print only asks whether an agent is loaded, so it runs on a dry run too.
-        if (args[0] === 'print')
+        const readOnlyLoadedStateQuery = args[0] === 'print'
+        if (readOnlyLoadedStateQuery)
           return spawnSync('launchctl', args, { stdio: 'ignore' }).status ?? 1
         console.log(`$ launchctl ${args.join(' ')}`)
         if (dry) return 0
@@ -442,9 +390,7 @@ async function main() {
   }
   const dir = join(home, '.config/systemd/user')
   const legacy = join(dir, LEGACY)
-  // The legacy unit's project becomes an instance too, so the migration keeps it running as a service.
   const written = existsSync(legacy) && legacyProject(readFileSync(legacy, 'utf8'))
-  // Its real path, the identity its supervisor hashes into the home.
   const migrated = written && realpathSync(written)
   if (migrated && !projects.includes(migrated)) projects.push(migrated)
   const homes = projects.map((project) => projectHome(project, home))
@@ -461,7 +407,6 @@ async function main() {
     ])[0]
   })
   const instances = homes.map(instanceOf)
-  // Stopping or restarting the unit this script runs inside would kill the script with it.
   const inside = selfUnits(
     [LEGACY, ...instances],
     process.env,
@@ -482,7 +427,6 @@ async function main() {
   run('systemctl', ['--user', 'enable', ...instances])
   instances.forEach((name, index) => {
     const changed = template.state === 'replaced' || envs[index].state === 'replaced'
-    // A project running by hand holds its lock: the instance would exit 3 at once.
     if (!active(name) && runsByHand(homes[index]))
       console.log(
         `${projects[index]} runs outside systemd now: stop it, then systemctl --user start ${name}.`,
@@ -507,7 +451,6 @@ function query(args: string[]) {
 const active = (name: string) =>
   spawnSync('systemctl', ['--user', 'is-active', '--quiet', name]).status === 0
 
-/** Whether a live process holds the project's lock (`ultimate.lock` names its pid). */
 function runsByHand(home: string) {
   const lock = join(home, 'ultimate.lock')
   return existsSync(lock) && alive((JSON.parse(readFileSync(lock, 'utf8')) as { pid: number }).pid)

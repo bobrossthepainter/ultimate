@@ -1,3 +1,5 @@
+import { parseConversationId } from '../../lib/ids.ts'
+import type { ConversationId } from '@earendil-works/pi-durable'
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -34,6 +36,7 @@ import {
   cn,
   errorMessage,
   formatAgo,
+  ROOT,
   useConversations,
   useConversationSummary,
   useDocOf,
@@ -58,7 +61,6 @@ import type { ArchitectureDiagram, ArchitectureVersion } from './refs.ts'
 
 const tone = { added: 'bg-diff-add', changed: 'bg-warning', removed: 'bg-diff-del' } as const
 
-/** The branch to show without a choice: the shown conversation (or the branch its architect draws), else the latest. */
 function useDefaultBranch(branches: Record<string, { version: number; at: string }>) {
   const { conversationId } = useUltimate()
   const shown = useConversationSummary(conversationId)
@@ -69,18 +71,17 @@ function useDefaultBranch(branches: Record<string, { version: number; at: string
   if (own !== undefined && branches[own]) return own
   return Object.entries(branches)
     .toSorted(([, a], [, b]) => b.at.localeCompare(a.at))
-    .map(([id]) => Number(id))[0]
+    .map(([id]) => parseConversationId(Number(id)))[0]
 }
 
-/** The branch on screen as a button; it opens every branch with versions, newest first, to filter. */
 function BranchPicker({
   branch,
   branches,
   onChange,
 }: {
-  branch: number
+  branch: ConversationId
   branches: Record<string, { version: number; at: string }>
-  onChange: (id: number) => void
+  onChange: (id: ConversationId) => void
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -89,7 +90,7 @@ function BranchPicker({
   const title = (id: number) => conversations.find((c) => c.id === id)?.title
   const needle = query.trim().toLowerCase()
   const list = Object.entries(branches)
-    .map(([id, entry]) => ({ id: Number(id), ...entry }))
+    .map(([id, entry]) => ({ id: parseConversationId(Number(id)), ...entry }))
     .toSorted((a, b) => b.at.localeCompare(a.at))
     .filter(
       (item) =>
@@ -150,7 +151,6 @@ function BranchPicker({
   )
 }
 
-/** A version picker: `label` on the button, the versions newest first in its menu, `none` to clear when given. */
 function VersionMenu({
   label,
   title,
@@ -222,8 +222,7 @@ function VersionMenu({
   )
 }
 
-/** Draw, or that the architect is drawing now. */
-function Draw({ branch, architect }: { branch: number; architect?: number }) {
+function Draw({ branch, architect }: { branch: ConversationId; architect?: ConversationId }) {
   const busy = useConversationSummary(architect)?.busy ?? false
   const [asking, setAsking] = useState(false)
   const [error, setError] = useState<string>()
@@ -250,7 +249,6 @@ function Draw({ branch, architect }: { branch: number; architect?: number }) {
   )
 }
 
-/** The version's diagrams as a list, each with its change counts; the chosen one's notes and pending comments below. */
 function DiagramList({
   diagrams,
   current,
@@ -403,7 +401,6 @@ function PendingItem({
   )
 }
 
-/** The mark of a comment the architecture chat suggested: the user's to keep, edit or delete. */
 function Suggested() {
   return (
     <span
@@ -416,7 +413,6 @@ function Suggested() {
   )
 }
 
-/** The diagram's title, a click away from a comment on the whole diagram, with its pending count. */
 function DiagramTitle({
   diagram,
   version,
@@ -469,7 +465,6 @@ function DiagramTitle({
   )
 }
 
-/** A version with no diagrams: nothing architectural changed, calmly. */
 function Unchanged({ version, previous }: { version: ArchitectureVersion; previous?: number }) {
   const now = useNow(60_000)
   return (
@@ -490,9 +485,8 @@ function Unchanged({ version, previous }: { version: ArchitectureVersion; previo
   )
 }
 
-/** The Architecture surface: a branch's diagrams, one at a time, with comments on their parts. */
 export default function ArchitectureSurface() {
-  const index = useDocOf(1, ArchitectureIndexDoc)
+  const index = useDocOf(ROOT, ArchitectureIndexDoc)
   const branches = index?.branches ?? {}
   const [view, setView] = useView()
   const fallback = useDefaultBranch(branches)
@@ -618,7 +612,6 @@ function NoBranch() {
   )
 }
 
-/** One version: its summary, diagram list, the chosen diagram (beside its comparison), legend and footer. */
 function Version({
   branch,
   version,
@@ -628,7 +621,7 @@ function Version({
   view,
   onView,
 }: {
-  branch: number
+  branch: ConversationId
   version: ArchitectureVersion
   compare?: ArchitectureVersion
   previous?: number
@@ -640,9 +633,7 @@ function Version({
   const to = drafts.to ?? branch
   const [writing, setWriting] = useState<Writing>()
   const [sending, setSending] = useState(false)
-  const [sent, setSent] = useState<{ conversation: number } | { error: string }>()
-  // A comparison flips between the two versions in place, at full size, where a change stands out; `both` puts them
-  // side by side (not on a phone: too narrow).
+  const [sent, setSent] = useState<{ conversation: ConversationId } | { error: string }>()
   const [showing, setShowing] = useState<'this' | 'other' | 'both'>('this')
   const mark = useMark()
   const stage = useRef<HTMLDivElement>(null)
@@ -683,8 +674,6 @@ function Version({
       })
     setWriting(undefined)
   }
-  // The text as a question to the architecture chat, about this part; the chat opens beside the diagram, made first when
-  // there is none. Asked only after the action returns, so the panel never makes a second chat meanwhile.
   const ask = async (text: string) => {
     if (!writing) return
     const { part } = writing
@@ -702,7 +691,6 @@ function Version({
       })
       setWriting(undefined)
     } finally {
-      // A chat opened at an older version refuses; the open panel offers the new chat it needs.
       setChat(true)
     }
   }
@@ -751,7 +739,6 @@ function Version({
   )
   const startWriting = (next: Writing) => {
     clearMark()
-    // A part with a draft opens that draft to edit.
     const existing = drafts.comments.find(
       (draft) =>
         draft.diagram === diagram.id &&
@@ -904,7 +891,6 @@ const partOf = (draft: Draft) => ({
   label: draft.label,
 })
 
-/** The same diagram in the version compared with, read-only, or that it has none. */
 function Compared({
   diagram,
   version,
@@ -928,7 +914,6 @@ function Compared({
   )
 }
 
-/** The diagram list as a row of tabs, on a phone. */
 function PhoneDiagrams({
   diagrams,
   current,

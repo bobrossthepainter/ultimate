@@ -1,5 +1,3 @@
-// The search card is copied from extensions/parallel/web.tsx so this fork leaves parallel untouched
-// (#14198, keep-divergence-mergeable); share it through parallel's ui.tsx if this goes upstream.
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
@@ -16,7 +14,6 @@ import { defineWebExtension, events, useCommands, useToolDuration, useUltimate }
 import { plural } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 
-/** A result in the tool's `details` (server.ts). */
 interface Page {
   url: string
   title: string | null
@@ -41,9 +38,7 @@ function host(url: string) {
     return url
   }
 }
-/** A URL as shown: no scheme, no `www.`, no trailing slash. */
 const bare = (url: string) => url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')
-/** The first few distinct domains, in rank order. */
 function domains(urls: readonly string[], count = 3) {
   const unique = [...new Set(urls.map(host))]
   return unique.length > count
@@ -66,10 +61,6 @@ function Action({ label, onClick }: { label: string; onClick: () => void }) {
   )
 }
 
-/**
- * For a missing or rejected BRAVE_API_KEY: opens the Secrets panel at it, or, while `secrets` is off, the
- * Extensions panel to turn it on.
- */
 function KeyAction({ error }: { error: string }) {
   const commands = useCommands()
   const ui = useUltimate()
@@ -87,7 +78,6 @@ function KeyAction({ error }: { error: string }) {
   return null
 }
 
-/** The card: the header, an action beside it, and the body. */
 function Card({
   call,
   name,
@@ -106,7 +96,6 @@ function Card({
   const duration = useToolDuration(call)
   const details = call.details as Details | undefined
   const failure = details?.status === 'error' ? details : undefined
-  // Collapsed while it goes well; a failure opens it, also one that arrives live.
   const failed = call.status === 'error'
   const [open, setOpen] = useState(failed)
   const was = useRef(failed)
@@ -162,7 +151,6 @@ function Card({
   )
 }
 
-/** A link that opens in a new tab; nothing is requested until it is followed. */
 function Link({
   url,
   className,

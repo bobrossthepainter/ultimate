@@ -1,14 +1,12 @@
 const API_BASE_URL = 'https://api.search.brave.com/res/v1'
 const REQUEST_TIMEOUT_MS = 120_000
 
-/** One page in `grounding.generic` of `/llm/context`. */
 export interface BraveGrounding {
   url: string
   title?: string | null
   snippets: string[]
 }
 
-/** `age` holds four fixed renderings: full date, `YYYY-MM-DD`, relative, ISO 8601; empty without a known date. */
 export interface BraveSource {
   title?: string | null
   hostname?: string | null
@@ -62,7 +60,6 @@ export async function braveRequest<T>(
   }
   let payload: unknown
   try {
-    // Decode first: JSON escaping must not defeat credential redaction.
     payload = raw ? redact(JSON.parse(raw), apiKey) : undefined
   } catch {
     if (response.ok)
@@ -91,7 +88,6 @@ function redact(value: unknown, apiKey: string): unknown {
   return value
 }
 
-/** Brave answers errors as `{ type: 'ErrorResponse', error: { id, status, code, detail } }`. */
 function createApiError(status: number, payload: unknown): BraveApiError {
   const error = getRecord(getRecord(payload)?.error)
   const referenceId = typeof error?.id === 'string' ? error.id.slice(0, 200) : undefined

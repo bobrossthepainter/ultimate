@@ -79,7 +79,9 @@ so branches adding divergences in parallel do not edit the same lines.
   run) + `docs/extensions/core-tier.md` (exec in layer 1) + `skills/write-extension/`, `lib/git.ts` (`gitWith`),
   `lib/process-group.ts` (`runGroup` start), routed callers in workspaces, review, lineage, prompt, coding-tools,
   subagents, cloud, setup, onboarding, `extensions/info/` (Execution section), `shared/protocol.ts` and
-  `server/system.ts` (`execution.kind` removed)
+  `server/system.ts` (`execution.kind` removed), `extensions/coding-tools/server.ts` (`prepareBash` takes the routed
+  `git` for upstream's worktree-scoped hooks), `extensions/review/server.ts` (upstream's branch fallback in `target`
+  through `exec.git`)
 - Why: Core-tier service running project and worktree commands where their directory lives; `exec.protocol` point for
   remote targets (pod-local proof). The give-back set includes 21b7d4cc: each protocol's `describe` and exec's
   `target` action, so the Info panel shows where a conversation's commands run. Extension actions' `ctx.exec` runs
@@ -152,7 +154,8 @@ so branches adding divergences in parallel do not edit the same lines.
 
 - Touches: `extensions/architect/` (with `agents/architect.md`), `extensions/mermaid/ui.tsx`, `extensions/review/ui.tsx`
   (`Recipient` export; upstream deleted the file as unused, the fork keeps it for this), `shared/extension-api.ts`
-  (`defaultOff`), `test/architect.test.ts`
+  (`defaultOff`), `test/architect.test.ts`. Its refs and props use upstream's branded `ConversationId` (2026-11
+  merge)
 - Why: Off-by-default Architecture tab: an architect agent draws a branch's architectural change as Mermaid versions;
   the user's comments on parts go to the coordinator as input
 - Upstream: local-only
@@ -161,6 +164,16 @@ so branches adding divergences in parallel do not edit the same lines.
 
 - Touches: `extensions/push/web.tsx` (`blocked`: Share, Add to Home Screen)
 - Why: iOS only receives pushes once installed to the home screen; upstream's message does not say how. The fork's
-  `getNotifications` guard and its test were dropped in the 2026-11 merge: upstream's `supported` check (32e64840)
+  `getNotifications` guard and its test were dropped in the 2026-11 merge: upstream's `hasPushSupport` check (32e64840)
   covers it
 - Upstream: candidate
+
+### Fork code under upstream's code rules
+
+- Touches: every fork-only extension and fork hunk in `bin/`, `lib/`, `scripts/`, `server/`, `shared/`
+- Why: Upstream turned on `no-comments`, `no-raw-timer`, `no-silent-catch` and `replay-safe-by-name` for all product
+  code and dropped every `oxlint-disable`. The 2026-11 merge removed the fork's comments (the why of each now lives in
+  this file and the commits), moved timers onto `lib/timers.ts`, named swallowed errors from `lib/errors.ts`, spread
+  `readOnly`/`safeToRerun` on fork tools, and replaced two architect `exhaustive-deps` disables with `useEffectEvent`.
+  New fork code follows the same rules
+- Upstream: local-only

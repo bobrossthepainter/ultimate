@@ -6,7 +6,6 @@ import { spawnGroup } from '../../lib/process-group.ts'
 import { execFile, spawn } from '../../lib/spawn.ts'
 import type { ExecProtocol, ExecTarget } from '../exec/api.ts'
 
-/** One `ssh-exec.targets` entry, as the settings give it. */
 export type Target = {
   id: string
   root: string
@@ -21,7 +20,6 @@ export type Target = {
 const absolute = (value: unknown) => typeof value === 'string' && value.startsWith('/')
 const text = (value: unknown) => typeof value === 'string' && value !== '' && !value.startsWith('-')
 
-/** The targets in `ssh-exec` settings, every field checked: settings are a hand-editable file. */
 export function targetsOf(settings: unknown): Target[] {
   const list = (settings as { targets?: unknown } | undefined)?.targets ?? []
   if (!Array.isArray(list)) throw new Error('ssh-exec.targets must be an array')
@@ -59,10 +57,6 @@ export function targetsOf(settings: unknown): Target[] {
 
 export const address = (target: Target) => `${target.user}@${target.host}:${target.port}`
 
-/**
- * The control socket of `target`'s connection settings: the socket directory outlives a facet reload, and an env built
- * before a settings change must not reuse a connection to the target's new address, nor the reverse (#11877 review).
- */
 const socket = (target: Target, sockets: string) => {
   const { host, port, user, identityFile, knownHostsFile } = target
   const settings = JSON.stringify([host, port, user, identityFile, knownHostsFile])
@@ -72,11 +66,6 @@ const socket = (target: Target, sockets: string) => {
   )
 }
 
-/**
- * ssh's options for `target`: no config files, no prompts, the host key pinned by the target's known_hosts alone (an
- * unknown or changed key is refused, never learned), and one multiplexed connection per target settings under
- * `sockets`.
- */
 export const sshArgs = (target: Target, sockets: string) => [
   '-F',
   '/dev/null',
@@ -121,13 +110,6 @@ export const sshArgs = (target: Target, sockets: string) => [
   target.host,
 ]
 
-/**
- * Runs on the target: `cd` to the directory, then start the command through `env` (which sets the variables for the
- * command alone, so the wrapper's own `setsid` and `sleep` keep the login PATH) as its own session and process group.
- * Its input is the SSH channel, which nothing writes to until the local side closes it: EOF means stop, and the whole
- * group gets TERM, then KILL a second later. The wrapper exits only once nothing of the group is left, so the local
- * ssh, and whoever waits for it, ends after the remote cleanup, never before.
- */
 const wrapper = `cd "$1" || exit 126
 shift
 exec 3<&0
@@ -148,14 +130,6 @@ if kill -0 -$child 2>/dev/null; then
 fi
 exit $code`
 
-/**
- * Locally, ssh runs in its own session, outside the group a caller signals (the ssh client exits at once on TERM, even
- * an ignored one), with a FIFO as its input whose only writer is this shell. TERM, INT or HUP close the writer; so does
- * this shell's death by KILL. Either way ssh sends EOF and the target stops the command (see `wrapper`). This shell
- * exits with ssh's code once ssh exits, which is after the remote group is gone, unless KILL ended it first. The trap
- * comes first and both ends are open before ssh starts: a signal before that runs nothing remote, and any later one
- * closes the writer (#7522 review).
- */
 const hold = `stop=
 trap 'stop=1' TERM INT HUP
 d=$(mktemp -d) && mkfifo "$d/in" || exit 255
@@ -173,15 +147,6 @@ exit $code`
 
 const quote = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`
 
-/**
- * The variables `env` sets differently from this process: what the caller added for the command. Callers pass this
- * process's environment plus their own variables; the rest (PATH, HOME, ...) is this machine's and must not replace
- * the target's own, so only the difference crosses. Removing a variable is not passed on.
- *
- * Git's `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` only work together: the agent's bash adds
- * its commit hooks after any this process inherited, so when one of them differs, all of them cross. Without that a
- * commit on the target failed with "missing config key GIT_CONFIG_KEY_0" (#7522).
- */
 function added(env: NodeJS.ProcessEnv | undefined) {
   if (!env) return []
   const gitConfig = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/
@@ -193,25 +158,18 @@ function added(env: NodeJS.ProcessEnv | undefined) {
         value !== undefined && (changed(name) || (wholeGitConfig && gitConfig.test(name))),
     )
     .map(([name, value]) => {
-      // Names reach `export` on the target; one that is not a shell name would be parsed as something else.
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
         throw new Error(`ssh-exec cannot pass the variable ${JSON.stringify(name)}`)
       return `${name}=${value}`
     })
 }
 
-/** `env` would read a program name with `=` as one more variable. */
 function checked(file: string) {
   if (file.includes('='))
     throw new Error(`ssh-exec cannot run a program named ${JSON.stringify(file)}`)
   return file
 }
 
-/**
- * The local program and arguments that run `file args` in `cwd` on `target` with the variables `env` adds. The remote
- * login shell parses one command line, so every word is single-quoted: nothing in a path, an argument or a value is
- * ever interpreted.
- */
 export function command(
   target: Target,
   sockets: string,
@@ -226,10 +184,6 @@ export function command(
   return ['/bin/sh', ['-c', hold, 'sh', ...sshArgs(target, sockets), remote]]
 }
 
-/**
- * The `ssh` protocol over targets whose files this machine shares: commands run on the target, the agent's file
- * system stays local. `exited` hears every exit code of a remote command (255 is ssh's own failure).
- */
 export function sshProtocol(
   sockets: string,
   exited: (target: Target, code: number | null) => void,
@@ -281,7 +235,6 @@ export function sshProtocol(
   }
 }
 
-/** Connect to `target` (or reuse its connection) and run `true`: undefined when it is reachable, else ssh's reason. */
 export async function probe(target: Target, sockets: string) {
   try {
     await execFile('ssh', [...sshArgs(target, sockets), 'true'], { timeout: 20000 })
@@ -292,7 +245,6 @@ export async function probe(target: Target, sockets: string) {
   }
 }
 
-/** Stop `target`'s shared connection from taking new sessions; it ends once the ones still running end. */
 export const release = (target: Target, sockets: string) =>
   execFile('ssh', [...sshArgs(target, sockets).slice(0, -2), '-O', 'stop', '--', target.host], {
     timeout: 5000,

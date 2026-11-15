@@ -1,4 +1,5 @@
 /** Upstream sync in the browser: what the fork's `upstream` has that the clone lacks, and asking for the merge. */
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { actionRef } from '../../shared/extension-api.ts'
 
 export type UpstreamState = {
@@ -36,4 +37,4 @@ export const CheckAction = actionRef<null, UpstreamState>('upstream-sync', 'chec
  * The user's alone: ask @ultimate for a coordinator branch that merges `upstream/<branch>` with the project's
  * `merge-upstream` skill; @ultimate's conversation id. Only while `merge` is offered.
  */
-export const MergeAction = actionRef<null, { id: number }>('upstream-sync', 'merge')
+export const MergeAction = actionRef<null, { id: ConversationId }>('upstream-sync', 'merge')

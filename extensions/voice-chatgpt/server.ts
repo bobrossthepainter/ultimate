@@ -4,7 +4,6 @@ import { failure, loggedIn, NO_LOGIN, postTranscribe } from './chatgpt.ts'
 import { Transcriber } from '../voice/api.ts'
 import type { TranscriberService } from '../voice/api.ts'
 
-/** Transcription through the ChatGPT subscription: the endpoint ChatGPT's own dictation uses. */
 export const transcriber = (host: Pick<ExtensionHost, 'modelRuntime'>): TranscriberService => ({
   status: async () =>
     loggedIn(host.modelRuntime) ? { available: true } : { available: false, reason: NO_LOGIN },
@@ -15,10 +14,8 @@ export const transcriber = (host: Pick<ExtensionHost, 'modelRuntime'>): Transcri
       : audio.type.includes('ogg')
         ? 'ogg'
         : 'webm'
-    // The file name's extension must match the audio: a mismatch answers 500 "Error in ASR API".
     form.set('file', audio, `recording.${extension}`)
     form.set('model', 'gpt-transcribe')
-    // Encoded by Response, so the multipart body and its boundary come from the platform.
     const encoded = new Response(form)
     const answer = await postTranscribe(
       host.modelRuntime,
@@ -33,7 +30,6 @@ export const transcriber = (host: Pick<ExtensionHost, 'modelRuntime'>): Transcri
     try {
       text = JSON.parse(answer.text)?.text
     } catch {
-      // Not JSON: no text, said below.
       text = undefined
     }
     if (typeof text !== 'string')

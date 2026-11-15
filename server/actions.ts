@@ -1,3 +1,4 @@
+import type { ConversationId } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord/json'
 import type { Execution } from './harness.ts'
 import type { Device } from '../shared/events.ts'
@@ -5,8 +6,7 @@ import type { ExtensionHost } from './extensions.ts'
 
 export interface ActionContext {
   host: ExtensionHost
-  conversationId?: number
-  /** The browser that asked, for a call from the UI; agents' calls have none. */
+  conversationId?: ConversationId
   device?: Device
   signal: AbortSignal
   exec(
@@ -19,7 +19,6 @@ export type ExtensionAction = (
   args: JsonValue,
   ctx: ActionContext,
 ) => JsonValue | Promise<JsonValue>
-/** `exec` for an action: `command` in `cwd` where that directory lives (the exec service routes it), never a shell. */
 export function actionExec(
   run: Execution['run'],
   cwd: string,

@@ -1,3 +1,4 @@
+import { safeToRerun } from '../../lib/replay.ts'
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@earendil-works/chord/context'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
@@ -58,7 +59,6 @@ import type {
   ArchitectureVersion,
 } from './refs.ts'
 
-/** A branch's versions, on the branch. */
 export const Versions = defineDoc<Architecture>({
   kind: ArchitectureDoc.kind,
   checkpointWhen: () => false,
@@ -68,7 +68,6 @@ export const Versions = defineDoc<Architecture>({
   fork: 'initial',
   initial: () => ({ versions: [] }),
 })
-/** The branches with versions, on the root: what the surface's picker lists. */
 export const Index = defineDoc<ArchitectureIndex>({
   kind: ArchitectureIndexDoc.kind,
   checkpointWhen: () => false,
@@ -78,7 +77,6 @@ export const Index = defineDoc<ArchitectureIndex>({
   fork: 'initial',
   initial: () => ({ branches: {} }),
 })
-/** On an architect conversation: the branch it draws; `chat` on an architecture chat: the version it was opened at. */
 const Of = defineDoc<{ branch?: number; chat?: number }>({
   kind: 'architect.of',
   checkpointWhen: () => false,
@@ -88,7 +86,6 @@ const Of = defineDoc<{ branch?: number; chat?: number }>({
   fork: 'initial',
   initial: () => ({}),
 })
-/** A branch's pending feedback by version, on the branch: the surface and its architecture chat both edit it. */
 export const DraftsStore = defineDoc<ArchitectureDrafts>({
   kind: DraftsDoc.kind,
   checkpointWhen: () => false,
@@ -98,7 +95,6 @@ export const DraftsStore = defineDoc<ArchitectureDrafts>({
   fork: 'initial',
   initial: () => ({ versions: {} }),
 })
-/** A branch's architecture chat, on the branch. */
 export const Chat = defineDoc<ArchitectureChat>({
   kind: ChatDoc.kind,
   checkpointWhen: () => false,
@@ -108,7 +104,6 @@ export const Chat = defineDoc<ArchitectureChat>({
   fork: 'initial',
   initial: () => ({}),
 })
-/** What one `architecture_publish` call published, on its tool task. */
 const Receipt = defineDoc<{ text?: string }>({
   kind: 'architect.receipt',
   checkpointWhen: () => false,
@@ -118,12 +113,9 @@ const Receipt = defineDoc<{ text?: string }>({
 })
 export const docs = [Versions, Index, DraftsStore, Chat]
 
-/** Feedback the user sent on a version: the input its recipient reads as `commentsText`; card.tsx renders it. */
 export const CommentsEntry = defineEntry<ArchitectureComments>('architect.comments')
-/** A question the user asked the architecture chat about a part: the input it reads as `questionText`; card.tsx renders it. */
 export const QuestionEntry = defineEntry<ArchitectureQuestion>('architect.question')
 
-/** Owns a branch's architect conversation, so the sidebar shows it under the branch; done at once, as subagents' anchor. */
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'architect.anchor',
   version: 1,
@@ -152,7 +144,6 @@ const record = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 const slug = /^[a-z0-9][a-z0-9-]{0,40}$/
 
-/** `input` as a diagram's `code` map, every key a part named in `mermaid`, or throws naming what is wrong. */
 function checkCode(input: unknown, mermaid: string, at: string): Record<string, PartCode> {
   if (input === undefined) return {}
   if (!record(input) || Object.keys(input).length > limits.parts)
@@ -160,7 +151,6 @@ function checkCode(input: unknown, mermaid: string, at: string): Record<string, 
   const code: Record<string, PartCode> = {}
   for (const [part, value] of Object.entries(input)) {
     const where = `${at}.${part}`
-    // Edges count too, by the explicit ID the source gives them (`a e1@--> b`): the click on one reports it.
     if (!mermaid.includes(part))
       throw new Error(
         `${where}: no part ${part} in the Mermaid source (give an edge an ID: a e1@--> b)`,
@@ -203,7 +193,6 @@ function checkCode(input: unknown, mermaid: string, at: string): Record<string, 
   return code
 }
 
-/** `input` as a version's diagrams, or throws naming what is wrong. */
 export function checkDiagrams(input: unknown): ArchitectureDiagram[] {
   if (!Array.isArray(input)) throw new Error('diagrams must be a list')
   if (input.length > limits.diagrams) throw new Error(`At most ${limits.diagrams} diagrams`)
@@ -265,7 +254,6 @@ const checkText = (text: unknown, at: string) => {
   return text
 }
 
-/** `comment` as a comment on a part of `version`, or throws naming what is wrong. */
 export function checkComment(comment: unknown, version: ArchitectureVersion): ArchitectureComment {
   if (!record(comment)) throw new Error('comment must be an object')
   const { diagram, kind, part, label, text } = comment
@@ -292,21 +280,16 @@ export function checkComment(comment: unknown, version: ArchitectureVersion): Ar
 
 const emptyDrafts = (): Drafts => ({ comments: [], note: '' })
 
-/**
- * Apply `edit` to the pending feedback on `version` of `branch` inside `tx`; `by` marks a comment an architecture
- * chat suggested. Returns the new draft's id for `add`.
- */
 async function editDrafts(
   tx: Tx,
   branch: ConversationId,
   version: number,
   edit: DraftEdit,
-  options: { by?: number; id?: string } = {},
+  options: { by?: ConversationId; id?: string } = {},
 ): Promise<{ id?: string }> {
   const shown = (await tx.doc(Versions, branch)).versions.find((item) => item.version === version)
   if (!shown) throw new Error(`#${branch} has no version ${version}`)
   const store = await tx.doc(DraftsStore, branch)
-  // Read back after assigning: the doc copies an assigned value, so changes go through the stored draft.
   store.versions[String(version)] ??= emptyDrafts()
   const drafts = store.versions[String(version)]
   const find = (id: string) => {
@@ -336,7 +319,7 @@ async function editDrafts(
     if (
       typeof edit.to !== 'number' ||
       !Number.isSafeInteger(edit.to) ||
-      !(await tx.conversation(edit.to as ConversationId))
+      !(await tx.conversation(edit.to))
     )
       throw new Error('to must be an existing conversation id')
     drafts.to = edit.to
@@ -347,14 +330,12 @@ async function editDrafts(
   return added === undefined ? {} : { id: added }
 }
 
-/** Inline code that holds `value` whatever backticks it contains. */
 const code = (value: string) => {
   const run = Math.max(0, ...[...value.matchAll(/`+/g)].map((match) => match[0].length)) + 1
   const fence = '`'.repeat(run)
   return `${fence}${run > 1 ? ' ' : ''}${value.replace(/\n/g, '\\n')}${run > 1 ? ' ' : ''}${fence}`
 }
 
-/** What the recipient's model reads for feedback on `version` (its diagrams give the titles). */
 export function commentsText(feedback: ArchitectureComments, version?: ArchitectureVersion) {
   const title = (id: string) => version?.diagrams.find((d) => d.id === id)?.title ?? id
   const count = `${feedback.comments.length} comment${feedback.comments.length === 1 ? '' : 's'}`
@@ -371,7 +352,6 @@ export function commentsText(feedback: ArchitectureComments, version?: Architect
   ].join('\n\n')
 }
 
-/** What the architecture chat's model reads for a question on a part: the part and what is known of it, then the question. */
 export function questionText(question: ArchitectureQuestion, diagram: ArchitectureDiagram) {
   const { kind, part, label, code: partCode, text } = question
   const what =
@@ -394,12 +374,10 @@ export function questionText(question: ArchitectureQuestion, diagram: Architectu
 const conversationExists = (host: ExtensionHost, id: number) =>
   host.conversations().some((conversation) => conversation.id === id)
 
-/** The branch conversation `id` stands for: itself, or the branch an architect conversation draws. */
 async function branchOf(host: ExtensionHost, id: number, ctx: Context) {
   return (await host.harness().snapshot(Of, id as ConversationId, ctx))?.branch ?? id
 }
 
-/** The text of conversation `id`'s latest answer, its coordinator's latest assessment or report. */
 async function latestAnswer(host: ExtensionHost, id: number, ctx: Context) {
   const conversation = await host.harness().conversation(id as ConversationId, ctx)
   if (!conversation) return undefined
@@ -437,7 +415,6 @@ type PlanShape = {
   >
 }
 
-/** The architect's brief for the next version of `branch`. */
 async function brief(host: ExtensionHost, branch: number, ctx: Context) {
   const workspace = await host.need(WorkspacesApi).get(branch as ConversationId, ctx)
   const title = host.conversations().find((c) => c.id === branch)?.title ?? `#${branch}`
@@ -457,10 +434,7 @@ async function brief(host: ExtensionHost, branch: number, ctx: Context) {
       ? await host
           .need(Exec)
           .git(workspace.path, 'diff', '--stat=120', `${workspace.target}...HEAD`)
-          .catch(
-            // A worktree mid-setup or with an unknown target: the brief still names the command to read it.
-            () => '',
-          )
+          .catch(() => '')
       : undefined
   const where =
     workspace?.state === 'ready'
@@ -515,10 +489,6 @@ async function brief(host: ExtensionHost, branch: number, ctx: Context) {
   ].join('\n\n')
 }
 
-/**
- * Start the architect of `branch` on a new version: its conversation (made on first use, under the branch) gets the
- * brief as input. Starts nothing while it still draws. Only the user draws (Draw, ⌘K): no agent has a tool for it.
- */
 async function draw(host: ExtensionHost, requested: number, ctx: Context) {
   const branch = await branchOf(host, requested, ctx)
   if (!conversationExists(host, branch))
@@ -536,13 +506,9 @@ async function draw(host: ExtensionHost, requested: number, ctx: Context) {
   const cwd = workspace?.state === 'ready' ? workspace.path : host.projectRoot
   const architect = await host.harness().commit(async (tx) => {
     const state = await tx.doc(Versions, branch as ConversationId)
-    if (
-      state.architect !== undefined &&
-      (await tx.conversation(state.architect as ConversationId))
-    ) {
-      // A landed branch's worktree is gone: a later Draw reads the project checkout instead.
-      await configure(tx, state.architect as ConversationId, { cwd })
-      return state.architect as ConversationId
+    if (state.architect !== undefined && (await tx.conversation(state.architect))) {
+      await configure(tx, state.architect, { cwd })
+      return state.architect
     }
     const owner = await tx.createTask(Anchor, null, {
       ownership: { kind: 'conversation' },
@@ -561,7 +527,6 @@ async function draw(host: ExtensionHost, requested: number, ctx: Context) {
       excludeExtensions: ['subagents'],
       cwd,
     })
-    // Its title stays the branch's; its answers are one-line summaries.
     await host.need(ConversationsApi).setAutomaticSummaries(tx, child.id, false)
     ;(await tx.doc(Of, child.id)).branch = branch
     state.architect = child.id
@@ -572,19 +537,17 @@ async function draw(host: ExtensionHost, requested: number, ctx: Context) {
       {
         type: 'input',
         content: text,
-        // A Draw while the architect still draws starts nothing; the admission checks it atomically.
         whenBusy: 'reject',
       },
       ctx,
     )
   } catch (error) {
-    if (error instanceof ConversationBusy) return { architect: architect as number, started: false }
+    if (error instanceof ConversationBusy) return { architect, started: false }
     throw error
   }
-  return { architect: architect as number, started: true }
+  return { architect, started: true }
 }
 
-/** The branch of a `{ branch, version }` argument, or throws. */
 function target(host: ExtensionHost, args: unknown) {
   const branch = record(args) ? args.branch : undefined
   const version = record(args) ? args.version : undefined
@@ -606,16 +569,12 @@ const chatInstructions = (branch: number) =>
     `Do not publish a new version: the user asks for one with Draw. When the discussion yields feedback for the branch's coordinator, propose it as a pending comment with \`architecture_comment\` (on a part by its ID, or on a whole diagram), worded for the coordinator; the user reviews, edits and sends the list. \`architecture_comment {action: "list"}\` shows what is pending.`,
   ].join('\n\n')
 
-/**
- * The branch's architecture chat: a fork of its architect at its latest finished answer, made again when `fresh` or
- * when a newer version exists than the one it was forked at.
- */
 async function chat(host: ExtensionHost, branch: ConversationId, fresh: boolean, ctx: Context) {
   const versions = (await host.harness().snapshot(Versions, branch, ctx)) ?? { versions: [] }
   const latest = versions.versions.at(-1)
   if (!latest || versions.architect === undefined)
     throw new Error(`#${branch} has no architecture version to discuss yet`)
-  const architect = versions.architect as ConversationId
+  const architect = versions.architect
   const current = await host.harness().snapshot(Chat, branch, ctx)
   if (
     !fresh &&
@@ -624,8 +583,6 @@ async function chat(host: ExtensionHost, branch: ConversationId, fresh: boolean,
     conversationExists(host, current.id)
   )
     return current.id
-  // Its latest finished turn: a fork there inherits the brief, its reading and the published diagrams, never a run
-  // still drawing.
   let answer: EntryId | undefined
   let cursor: Cursor | undefined
   do {
@@ -649,7 +606,6 @@ async function chat(host: ExtensionHost, branch: ConversationId, fresh: boolean,
   if (live?.run)
     throw new Error('The architect is still drawing: open the chat once it has published')
   const parent = await (await host.harness().conversation(architect, ctx))!.agent(ctx)
-  // The architect's definition leaves `architecture_comment` out; the branch's agent still has every tool.
   const branchAgent = await (await host.harness().conversation(branch, ctx))!.agent(ctx)
   const comment = [...branchAgent.tools, ...branchAgent.deferred].find(
     (tool) => tool.name === 'architecture_comment',
@@ -668,7 +624,6 @@ async function chat(host: ExtensionHost, branch: ConversationId, fresh: boolean,
     await configure(tx, fork.id, {
       instructions: `${parent.instructions ?? ''}\n\n${chatInstructions(branch)}`,
       tools: [...parent.tools.filter((tool) => tool.name !== 'architecture_publish'), comment],
-      // A deferred tool is offered only once named here.
       modelTools: { add: [comment] },
     })
     Object.assign(await tx.doc(host.metadata, fork.id), {
@@ -720,14 +675,12 @@ export const actions = {
       version: number,
       ...(partCode && { code: partCode }),
     }
-    // An open chat is asked as it is; one opened at an older version may not have the part, so it needs a new chat
-    // (the panel offers it), never a silent replacement.
     const current = await host.harness().snapshot(Chat, branch, context)
     const open = current?.id !== undefined && conversationExists(host, current.id)
     if (open && current.version !== undefined && current.version < number)
       throw new Error(`The chat was opened at v${current.version}: start a new chat on v${number}`)
     const id = open ? current.id : await chat(host, branch, false, context)
-    const conversation = (await host.harness().conversation(id as ConversationId, context))!
+    const conversation = (await host.harness().conversation(id, context))!
     const content = questionText(question, diagram)
     await host.harness().commit(async (tx) => {
       const submission = await conversation.submit(tx, {
@@ -757,9 +710,7 @@ export const actions = {
     ]?.to
     const id = recipient ?? branch
     if (!conversationExists(host, id)) throw new Error(`No conversation #${id}`)
-    const conversation = (await host.harness().conversation(id as ConversationId, context))!
-    // One commit reads the pending feedback, admits it as the recipient's input and clears it: an edit made meanwhile
-    // is either in what was sent or still pending, and a crash leaves both or neither.
+    const conversation = (await host.harness().conversation(id, context))!
     await host.harness().commit(async (tx) => {
       const store = await tx.doc(DraftsStore, branch)
       const pending = store.versions[String(number)]
@@ -776,7 +727,6 @@ export const actions = {
         type: 'input',
         content,
         entry: { kind: CommentsEntry.kind, data: feedback },
-        // The user's input: it steers a busy recipient as a typed message would.
         whenBusy: 'steer',
       })
       delete store.versions[String(number)]
@@ -792,10 +742,6 @@ export const actions = {
   }),
 }
 
-/**
- * Where `diagrams`' sources were read for `branch`: its worktree's change as a Review spec, the files it changes and
- * the branch the rest is on. Throws naming a source path the checkout does not have, so every link is grounded.
- */
 async function grounding(
   host: ExtensionHost,
   branch: number | undefined,
@@ -813,7 +759,6 @@ async function grounding(
   const cwd = ready ? workspace.path : host.projectRoot
   const git = host.need(Exec).git
   const lines = (text: string) => text.split('\n').filter(Boolean)
-  // The files committed at HEAD: what Review and GitHub open, so an uncommitted or deleted file never becomes a link.
   const known = new Set(lines(await git(cwd, 'ls-tree', '-r', '--name-only', 'HEAD')))
   const missing = [...paths].filter((path) => !known.has(path))
   if (missing.length)
@@ -823,9 +768,8 @@ async function grounding(
   if (!ready)
     return {
       changed: [],
-      ref: await git(cwd, 'symbolic-ref', '--short', 'HEAD').catch(
-        // A detached checkout has no branch: links point at its commit.
-        () => git(cwd, 'rev-parse', 'HEAD'),
+      ref: await git(cwd, 'symbolic-ref', '--short', 'HEAD').catch(() =>
+        git(cwd, 'rev-parse', 'HEAD'),
       ),
     }
   return {
@@ -848,8 +792,7 @@ export default (host: ExtensionHost) =>
       defineTool({
         name: 'architecture_publish',
         deferred: true,
-        // Its receipt records the published version in the commit that appends it.
-        replay: 'safe',
+        ...safeToRerun('publishing the same version again replaces it with identical content'),
         description:
           "Publish this architect's version of its branch's architecture: a title, a one-line summary and up to 6 Mermaid diagrams, each with a stable lowercase id (kept across versions), short notes and a map of part IDs (node IDs, or a sequence diagram's participants) to what each part is. Mark changed parts with :::added, :::changed or :::removed. An implementation view (level implementation, its useCase) maps its parts in `code` to their source (path relative to the repository root, symbol, line), status (implemented or proposed) and evidence (static or runtime); every implemented part needs a source that exists. With nothing architectural changed, publish no diagrams and say so in the summary.",
         parameters: obj({
@@ -900,7 +843,6 @@ export default (host: ExtensionHost) =>
           ),
         }),
         execute: async (args, api, ctx) => {
-          // A replay after a restart returns what was published before checking anything against the checkout again.
           const published = await api.commit(
             async (tx) => (await tx.doc(Receipt, api.taskId)).text,
             ctx,
@@ -918,7 +860,6 @@ export default (host: ExtensionHost) =>
             ctx,
           )
           const text = await api.commit(async (tx) => {
-            // The receipt commits with the version: a replay after a restart finds it and appends nothing.
             const receipt = await tx.doc(Receipt, api.taskId)
             if (receipt.text !== undefined) return receipt.text
             const { branch, chat: chatting } = await tx.doc(Of, api.conversationId)
@@ -948,8 +889,7 @@ export default (host: ExtensionHost) =>
       defineTool({
         name: 'architecture_comment',
         deferred: true,
-        // The receipt commits with the change: a replay after a restart applies nothing twice.
-        replay: 'safe',
+        ...safeToRerun('a rerun applies the same draft edit to the stored comments'),
         description:
           "Propose feedback for the branch's coordinator as pending comments the user reviews in the Architecture tab, on the version you were opened at. add {diagram, kind: node|edge|participant|diagram, part?, text}: a comment on a part by its ID in the Mermaid source (an edge by the ID Mermaid draws it with: its explicit ID when the source gives one, else L_<source>_<target>_<n> in a flowchart, n counting from 0 per pair, e.g. L_surface_doc_0), or on the whole diagram; update {id, text} and delete {id} change only comments you added; list shows every pending comment with its id. The user sends the list; you never send it.",
         parameters: obj({
@@ -964,7 +904,6 @@ export default (host: ExtensionHost) =>
           const text = await api.commit(async (tx) => {
             const receipt = await tx.doc(Receipt, api.taskId)
             if (receipt.text !== undefined) return receipt.text
-            // The version this chat was opened at, kept on the chat: a newer chat on the branch does not move it.
             const { branch, chat: version } = await tx.doc(Of, api.conversationId)
             if (branch === undefined || version === undefined)
               throw new Error(

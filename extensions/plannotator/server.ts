@@ -1,3 +1,5 @@
+import { deadline } from '../../lib/timers.ts'
+import { meansNone, overshadowed } from '../../lib/errors.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
@@ -25,10 +27,6 @@ import { WorkspacesApi } from '../workspaces/api.ts'
 import { InstallAction, OverviewAction, StartAction, StopAction } from './refs.ts'
 import type { BranchRepo, Overview, ReviewItem, Session, SessionRepo } from './refs.ts'
 
-/**
- * The pinned release and its SHA-256 per platform, from the release's `.sha256` files. A newer Plannotator may change
- * the flags and environment below (`--base` and `DIRECTORY` are newer than its docs), so update both together.
- */
 export const VERSION = 'v0.28.51'
 const BINARIES: Record<string, string> = {
   'linux-x64': 'b152a4c227fae72a619175c99ae897f44ac467c1cd7aa8c66119427ad7076f6d',
@@ -36,36 +34,26 @@ const BINARIES: Record<string, string> = {
   'darwin-arm64': '0489448067d490d270dc782d754c3e80890aac424d10059cedaba404524d6aa0',
   'darwin-x64': '1ab6ed11fb6feb85279e05e01f2e4de5971f06a17fd75d906bb0c4efa6c33e65',
 }
-/** Session ports, one per running session; Caddy serves each at `https://<domain>:<PUBLISH + n>`. */
 const PORTS = [19432, 19433, 19434, 19435]
 const PUBLISH = 9480
-/** A finished session's card keeps its result this long; the newest few stay listed. */
 const KEEP = 20
 
 const paths = (userHome: string) => {
   const dir = join(userHome, '.ultimate/plannotator')
   return {
     dir,
-    // PLANNOTATOR_COMMAND names another binary; tests point it at a stub.
     binary: process.env.PLANNOTATOR_COMMAND ?? join(dir, `plannotator-${VERSION}`),
     data: join(dir, 'data'),
-    /**
-     * One folder per server process, `sessions/<pid>-<start>` (`identify`, so a reused pid is told apart), holding its
-     * sessions' pid files and folders.
-     */
     owners: join(dir, 'sessions'),
     sessions: join(dir, 'sessions', owner()),
   }
 }
 
-/** Who process `pid` is, as a folder name: its pid and start time, or its pid alone once it is gone. */
 const ownerOf = (pid: number) => `${pid}-${(identify(pid) ?? 'gone').replace(/[^A-Za-z0-9]/g, '')}`
 let self: string | undefined
 const owner = () => (self ??= ownerOf(process.pid))
 
-/** The result Plannotator prints with `--json` when the user decides; `message` is its Markdown feedback. */
 type Decision = { decision: 'approved' | 'annotated' | 'dismissed'; message?: string }
-/** The review result as its recipient's input: card.tsx renders it, the model reads `message`. */
 export type PlannotatorResult = {
   session: string
   title: string
@@ -75,51 +63,30 @@ export type PlannotatorResult = {
 }
 export const ResultEntry = defineEntry<PlannotatorResult>('plannotator.result')
 
-/**
- * A session and what it holds until `teardown` has freed it: its port (taken until then, so no new session reuses it
- * early), its process group, its Caddy route and its folder. `ended` is set once, by whoever ends it first.
- */
 type Running = Session & {
   port: number
   group?: Group
   folder?: string
   published?: number
-  /**
-   * The startup's acquisitions (Caddy route, folder, process) while they are under way: teardown waits for them to
-   * settle, so whatever they made after Stop is removed too. It never rejects.
-   */
   acquiring?: Promise<void>
   ended?: Promise<void>
   freed?: boolean
 }
 
-/**
- * The sessions of this process: they outlive a reload of this facet, and stop with the server. A crash leaves pid
- * files under `sessions/`; the next start stops what they name and removes the folders.
- */
 function state(host: ExtensionHost) {
   return host.resource('plannotator', () => {
     const sessions = new Map<string, Running>()
     host.onClose(async () => {
-      // Caddy drops this process's published routes itself at shutdown, after the services are gone.
       await Promise.all([...sessions.values()].map((session) => finish(host, session, 'stopped')))
     })
     return sessions
   })
 }
 
-/**
- * What crashed servers left: the process groups and folders under `sessions/<pid>` of every server whose process is
- * gone. Every Ultimate of this user shares the folder, so a live server's sessions are never touched. Once per process,
- * before it starts any session (`start` awaits it).
- */
 function swept(host: ExtensionHost) {
   return host.resource('plannotator:sweep', async () => {
     const { owners } = paths(host.userHome)
-    const folders = await readdir(owners).catch(
-      // No folder yet: nothing was ever left.
-      () => [] as string[],
-    )
+    const folders = await readdir(owners).catch(() => [] as string[])
     for (const name of folders) {
       const pid = Number(name.split('-')[0])
       if (!Number.isSafeInteger(pid) || ownerOf(pid) === name) continue
@@ -129,7 +96,6 @@ function swept(host: ExtensionHost) {
   })
 }
 
-/** A string argument that cannot be read as an option by git or Plannotator. */
 function plain(value: unknown, name: string) {
   const text = typeof value === 'string' ? value.trim() : ''
   if (!text) throw new Error(`${name} must be a non-empty string`)
@@ -137,10 +103,6 @@ function plain(value: unknown, name: string) {
   return text
 }
 
-/**
- * Where an item lives, what of it is reviewed (`ref`, else its working tree) and what it is compared against: the
- * worktree's target, else `origin`'s default branch. `label` is the main repository's folder name, also for a worktree.
- */
 async function locate(host: ExtensionHost, item: ReviewItem) {
   const exec = host.need(Exec)
   let dir: string | undefined
@@ -149,9 +111,7 @@ async function locate(host: ExtensionHost, item: ReviewItem) {
   if (item.conversation !== undefined) {
     if (!Number.isSafeInteger(item.conversation) || item.conversation < 1)
       throw new Error('conversation must be a conversation id')
-    const workspace = await host
-      .need(WorkspacesApi)
-      .get(item.conversation as ConversationId, context)
+    const workspace = await host.need(WorkspacesApi).get(item.conversation, context)
     if (workspace?.state === 'ready') {
       dir = workspace.path
       base ??= workspace.target
@@ -168,7 +128,6 @@ async function locate(host: ExtensionHost, item: ReviewItem) {
   base ??= await defaultBranch(host, top)
   if (ref && !base)
     throw new Error(`${top} has no origin/main or main to compare ${ref} with; give a base`)
-  // Every name is resolved once to its commit: Git and Plannotator later get only these ids, never the agent's text.
   const commit = (name: string) =>
     exec
       .git(top, 'rev-parse', '--verify', '--quiet', '--end-of-options', `${name}^{commit}`)
@@ -179,22 +138,17 @@ async function locate(host: ExtensionHost, item: ReviewItem) {
     ...(ref && { ref, refCommit: await commit(ref) }),
     ...(base && { base, baseCommit: await commit(base) }),
   }
-  // A linked worktree's common directory is the main repository's `.git`: its folder names the repository.
   const common = await exec.git(top, 'rev-parse', '--path-format=absolute', '--git-common-dir')
   const label = basename(common) === '.git' ? basename(dirname(common)) : basename(top)
   return { path: top, label, ...resolved }
 }
 
-/** The ref to compare with by default: `origin`'s default branch, else `origin/main` or `origin/master`, else local ones. */
 async function defaultBranch(host: ExtensionHost, top: string) {
   const git = (...args: string[]) =>
     host
       .need(Exec)
       .git(top, ...args)
-      .catch(
-        // A missing ref is the answer "not this one".
-        () => '',
-      )
+      .catch(() => '')
   const head = await git('symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD')
   if (head) return head
   for (const name of ['origin/main', 'origin/master', 'main', 'master'])
@@ -202,10 +156,6 @@ async function defaultBranch(host: ExtensionHost, top: string) {
   return undefined
 }
 
-/**
- * `branch` in each repository as a ref to review: the local branch, else `origin/<branch>`. Throws naming every
- * repository that has neither, so none is left out of the review unnoticed.
- */
 export async function branchItems(
   host: ExtensionHost,
   branch: string,
@@ -222,12 +172,8 @@ export async function branchItems(
           await host
             .need(Exec)
             .git(dir, 'rev-parse', '--verify', '--quiet', '--end-of-options', `${full}^{commit}`)
-            .catch(
-              // Not there, or not a repository: the next candidate, then the report below.
-              () => '',
-            )
+            .catch(() => '')
         )
-          // The full name: a short one would let a same-named tag win when it is resolved later.
           return {
             repo: dir,
             ref: full,
@@ -242,7 +188,6 @@ export async function branchItems(
   return found as ReviewItem[]
 }
 
-/** Distinct, readable path prefixes: each repository's name, numbered past every name already given. */
 export function names(labels: string[]) {
   const used = new Set<string>()
   return labels.map((label) => {
@@ -254,11 +199,6 @@ export function names(labels: string[]) {
   })
 }
 
-/**
- * Every repository's change since its base in one patch whose paths start with the repository's name, as Plannotator's
- * multi-repository view writes them: a `ref`'s commits since the merge base, read from Git alone, or else the working
- * tree's commits, staged, unstaged and untracked changes.
- */
 async function combinedPatch(
   host: ExtensionHost,
   repos: (SessionRepo & { refCommit?: string; baseCommit?: string })[],
@@ -273,7 +213,6 @@ async function combinedPatch(
       ? await exec.git(repo.path, 'merge-base', '--end-of-options', repo.baseCommit, head)
       : undefined
     const diff = ['diff', '--no-color', '--no-ext-diff', '-M', ...prefix]
-    // locate() gives a ref always a base, so a ref's diff has both sides.
     const tracked = await exec.run(
       repo.path,
       'git',
@@ -299,7 +238,6 @@ async function combinedPatch(
           options,
         )
         .catch((error: { code?: unknown; stdout?: string }) => {
-          // `--no-index` exits 1 when the files differ, which a new file always does.
           if (error.code === 1 && typeof error.stdout === 'string') return { stdout: error.stdout }
           throw error
         })
@@ -309,14 +247,9 @@ async function combinedPatch(
   return parts.filter(Boolean).join('\n')
 }
 
-/**
- * Starts `plannotator review` for `session` and returns once it serves, or throws its output. Once it exits, its full
- * stdout is read and the session finishes with the decision it printed.
- */
 async function launch(host: ExtensionHost, session: Running, args: string[], cwd: string) {
   const files = paths(host.userHome)
   await mkdir(files.data, { recursive: true, mode: 0o700 })
-  // Plannotator reads `updateCheck` only from its config: off, so a session asks GitHub for no release record.
   const config = join(files.data, 'config.json')
   if (!existsSync(config)) await writeFile(config, '{ "updateCheck": false }\n')
   const { PLANNOTATOR_ALLOWED_HOSTS: _inherited, ...parent } = process.env
@@ -327,15 +260,11 @@ async function launch(host: ExtensionHost, session: Running, args: string[], cwd
     PLANNOTATOR_PORT: String(session.port),
     PLANNOTATOR_SHARE: 'disabled',
     PLANNOTATOR_GIT_REMOTE_CHECK: '0',
-    // Plannotator refuses a Host header other than its own: the Caddy domain only when the session is published there.
     ...(session.published !== undefined && {
       PLANNOTATOR_ALLOWED_HOSTS: new URL(session.url!).hostname,
     }),
   }
-  // Stopped while the folders were made: start nothing.
   if (session.ended) throw new Error('The Plannotator session was stopped while it started')
-  // Plannotator is Ultimate's own host-local tool, like Caddy: it serves on this machine's loopback for its browser. Its
-  // pid file lets the next start stop it after a crash of this server.
   await mkdir(files.sessions, { recursive: true })
   if (session.ended) throw new Error('The Plannotator session was stopped while it started')
   const group = spawnGroup(files.binary, ['review', '--json', ...args], {
@@ -358,36 +287,29 @@ async function launch(host: ExtensionHost, session: Running, args: string[], cwd
   group.child.once('error', (error) => ready.reject(error))
   group.child.once('exit', () => {
     ready.reject(new Error(output.trim() || 'Plannotator exited before it served'))
-    // The exit can come before the last of stdout: the decision is read once the pipes have closed.
     void closeOutput(group)
       .then(() => {
         const line = stdout.trim().split('\n').at(-1)
         let decision: Decision | undefined
         try {
           decision = line ? (JSON.parse(line) as Decision) : undefined
-        } catch {
-          // Not its JSON record: the session failed, and its output says why.
+        } catch (error) {
+          meansNone(error)
         }
         return finish(host, session, decision?.decision ?? 'failed', decision, output)
       })
       .catch((error: unknown) => host.notice(`Plannotator: ${String(error)}`))
   })
-  const timer = setTimeout(
-    () => ready.reject(new Error('Plannotator did not serve within 30 s')),
-    30000,
+  const cancelServeDeadline = deadline(30000, () =>
+    ready.reject(new Error('Plannotator did not serve within 30 s')),
   )
   try {
     await ready.promise
   } finally {
-    clearTimeout(timer)
+    cancelServeDeadline()
   }
 }
 
-/**
- * Ends `session` once, whoever comes first (its exit, Stop, a failed start, shutdown): records how it ended, stops its
- * process group, frees its route and folder, and only then gives up its port. Only the exit that ended a running
- * session delivers its decision; after Stop nothing is delivered.
- */
 function finish(
   host: ExtensionHost,
   session: Running,
@@ -401,7 +323,6 @@ function finish(
     session.endedAt = new Date().toISOString()
     if (end === 'failed' && output && !session.error)
       session.error = output.trim().split('\n').slice(-5).join('\n')
-    // Also once it exited by itself: stopGroup then only waits for the group and removes the pid file.
     const group = session.group
     if (group?.child.pid !== undefined)
       await stopGroup(group.child.pid, {
@@ -409,13 +330,12 @@ function finish(
         grace: 3000,
         pidFile: join(paths(host.userHome).sessions, `${session.id}.pid`),
       })
-    // Stop during startup: what it is acquiring settles first, so its route, folder and process are known and removed.
     await session.acquiring
     if (session.published !== undefined)
       try {
         await host.want(CaddyApi)?.unpublish(session.published)
-      } catch {
-        // At shutdown the service is gone; Caddy then drops this process's routes itself.
+      } catch (error) {
+        overshadowed(error)
       }
     if (session.folder) await rm(session.folder, { recursive: true, force: true })
     session.freed = true
@@ -424,12 +344,9 @@ function finish(
   return session.ended
 }
 
-/** The result as the input of the conversation that started the review: it steers a busy one, like a typed message. */
 async function deliver(host: ExtensionHost, session: Running, decision: Decision) {
   if (decision.decision === 'dismissed') return
-  const conversation = await host
-    .harness()
-    .conversation(session.conversation as ConversationId, context)
+  const conversation = await host.harness().conversation(session.conversation, context)
   if (!conversation) return
   const result: PlannotatorResult = {
     session: session.id,
@@ -464,7 +381,7 @@ async function deliver(host: ExtensionHost, session: Running, decision: Decision
 
 async function start(
   host: ExtensionHost,
-  conversation: number,
+  conversation: ConversationId,
   input: { items?: unknown; branch?: unknown; repos?: unknown; mode?: unknown; title?: unknown },
 ): Promise<Session> {
   const files = paths(host.userHome)
@@ -489,7 +406,6 @@ async function start(
   const located = await Promise.all(items.map((item) => locate(host, item)))
   if (new Set(located.map((repo) => repo.path)).size !== located.length)
     throw new Error('Each repository may appear once')
-  // A ref is read from Git into a patch: Plannotator's live views show working trees only.
   const refs = located.some((repo) => repo.ref)
   if (refs && input.mode === 'live')
     throw new Error("mode 'live' reviews working trees; a ref or branch needs 'combined'")
@@ -502,7 +418,6 @@ async function start(
   const sessions = state(host)
   for (const [id] of [...sessions].filter(([, item]) => item.freed).slice(0, -KEEP))
     sessions.delete(id)
-  // A port stays taken until its session is freed, not only while it runs.
   const taken = new Set(
     [...sessions.values()].filter((item) => !item.freed).map((item) => item.port),
   )
@@ -519,8 +434,6 @@ async function start(
     conversation,
     title,
     mode: repos.length === 1 && !refs ? 'single' : mode,
-    // Plannotator's multi-repository view takes no base, so none is shown for it.
-    // A branch found by `branch` is shown by its short name (refs/remotes/origin/x → origin/x).
     repos: repos.map(({ name, path, ref, base }) => ({
       name,
       path,
@@ -534,7 +447,6 @@ async function start(
     startedAt: new Date().toISOString(),
   }
   sessions.set(session.id, session)
-  // Stop during any await below ends the session; each step checks before it goes on.
   const stopped = () => {
     if (session.ended) throw new Error('The Plannotator session was stopped while it started')
   }
@@ -558,7 +470,6 @@ async function start(
       session.folder = join(files.sessions, session.id)
       await mkdir(session.folder, { recursive: true })
       if (session.mode === 'live') {
-        // A folder of links, one per repository: Plannotator follows them and shows each under its name.
         for (const repo of repos) await symlink(repo.path, join(session.folder, repo.name))
         args = ['--title', title, session.folder]
       } else {

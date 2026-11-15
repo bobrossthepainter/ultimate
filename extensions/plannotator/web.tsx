@@ -1,3 +1,5 @@
+import { every } from '../../lib/timers.ts'
+import { keepLast } from '../../lib/errors.ts'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { ExternalLinkIcon, MessageSquareCodeIcon } from 'lucide-react'
 import { useEffect } from 'react'
@@ -10,7 +12,6 @@ import type { ToolCallView } from '@/sdk'
 import { InstallAction, OverviewAction, StartAction, StopAction } from './refs.ts'
 import type { Session } from './refs.ts'
 
-/** `PlannotatorResult` in server.ts. */
 type Result = { title: string; decision: 'approved' | 'annotated'; message: string; url?: string }
 
 const parse = (output: string): Session | undefined => {
@@ -21,7 +22,6 @@ const parse = (output: string): Session | undefined => {
   }
 }
 
-/** A ref as the card shows it: a full commit hash shortened to 7 characters, branch names as they are. */
 const short = (ref: string) => (/^[0-9a-f]{40}$/.test(ref) ? ref.slice(0, 7) : ref)
 
 const tone: Record<Session['state'], string> = {
@@ -48,25 +48,20 @@ const modes: Record<Session['mode'], string> = {
   live: 'live, uncommitted and last commit',
 }
 
-/** The session as the server knows it now; polled while it runs, so the card follows its state. */
 function useSession(started: Session | undefined) {
   const { data, refetch } = useAction(OverviewAction, null, {
     enabled: !!started,
-    // A failed poll keeps the last state; the next one tries again.
-    onError: () => {},
+    onError: keepLast,
   })
   const session = data?.sessions.find((item) => item.id === started?.id)
   const running = (session ?? started)?.state === 'running'
   useEffect(() => {
     if (!running) return undefined
-    const timer = setInterval(() => void refetch(), 3000)
-    return () => clearInterval(timer)
+    return every(3000, () => void refetch())
   }, [running, refetch])
-  // A session this server no longer knows (it restarted) ended with it.
   return session ?? (data && started ? { ...started, state: 'stopped' as const } : started)
 }
 
-/** One `review_with_plannotator` call: what is reviewed, where to open it, and how it ended. */
 function ReviewCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
   const started = call.status === 'done' ? parse(call.output) : undefined
   const session = useSession(started)
@@ -134,7 +129,6 @@ function ReviewCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
   )
 }
 
-/** The user's Plannotator decision, in the transcript of the conversation that asked: on their side, like a review. */
 function ResultCard({ entry }: { entry: EntryRecord }) {
   const { title, decision, message } = entry.data as Result
   const summary = (
@@ -172,8 +166,6 @@ export default defineWebExtension({
     {
       id: 'plannotator.review',
       title: 'Review with Plannotator',
-      // This conversation's worktree, else the project's checkout, opened in a new tab; the result comes back here. The
-      // tab opens before the await, while the click still allows it, and follows the session once it serves.
       run: async (context) => {
         const tab = window.open('about:blank', '_blank')
         try {

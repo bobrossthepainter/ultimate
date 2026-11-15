@@ -1,3 +1,4 @@
+import { readOnly } from '../../lib/replay.ts'
 import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -44,8 +45,7 @@ export default function brave(host: ExtensionHost) {
     tools: [
       defineTool({
         name: 'web_search',
-        // Repeating a search only reads public web results; it changes no project state.
-        replay: 'safe',
+        ...readOnly,
         description:
           "Search the public web with Brave Search's LLM Context API. Returns ranked pages with titles, URLs, dates, and the passages of each page that answer the query (text, tables, code). Use this to discover sources or find current information; to read one known site, add site:example.com to the query. For raw files, APIs, JSON feeds, or a known URL's full page, use curl. Output is limited to 50KB or 2,000 lines.",
         parameters: obj({
@@ -128,7 +128,6 @@ export default function brave(host: ExtensionHost) {
     ],
   })
 }
-/** Bounded details in the shape parallel's search card reads: url, title, publish_date, excerpts. */
 function summarize(response: ContextResponse) {
   return response.grounding.generic.slice(0, 20).map((page) => {
     const age = response.sources?.[page.url]?.age

@@ -1,5 +1,5 @@
 import { MessageSquareIcon, MessagesSquareIcon, SparklesIcon } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn, errorMessage, useStore } from '@/sdk'
@@ -12,7 +12,6 @@ import type { ArchitectureDiagram } from './refs.ts'
 
 const kinds = ['node', 'edge', 'participant'] as const
 
-/** The change classes' colours from the theme on screen, as hex for Mermaid. */
 function palette() {
   return {
     added: token('diff-add'),
@@ -23,10 +22,6 @@ function palette() {
   }
 }
 
-/**
- * Hover, click and draft styles of the rendered SVG: parts look clickable and light up in the accent, parts with a
- * draft keep an accent outline. Mermaid's own CSS sits inside the SVG, so these need `!`.
- */
 const interactive = cn(
   '[&_g.node]:cursor-pointer [&_[data-architect-hit]]:cursor-pointer [&_.actor]:cursor-pointer [&_.actor-man]:cursor-pointer',
   '[&_g.node:hover_:is(rect,path,polygon,circle,ellipse)]:!stroke-brand',
@@ -35,13 +30,11 @@ const interactive = cn(
   '[&_[data-architect-hover]]:!stroke-brand',
 )
 
-/** Parts the code does not have yet, from `code`: dashed and faded, the edges too. */
 const proposedStyle = cn(
   '[&_[data-architect-proposed]_:is(rect,path,polygon,circle,ellipse)]:![stroke-dasharray:5_3]',
   '[&_path[data-architect-proposed]]:![stroke-dasharray:5_3] [&_[data-architect-proposed]]:opacity-75',
 )
 
-/** A comment being written: where the click was, on what, and the draft it edits. */
 export type Writing = {
   part: Omit<Part, 'kind'> & { kind: Part['kind'] | 'diagram' }
   x: number
@@ -49,10 +42,6 @@ export type Writing = {
   id?: string
 }
 
-/**
- * One diagram drawn by Mermaid with its change classes. With `onPick`, a click on a part (a node, an edge, a
- * participant) reports it; `drafts` mark the parts that have one and `marked` a part a link pointed at.
- */
 export function Canvas({
   diagram,
   svgId,
@@ -66,7 +55,6 @@ export function Canvas({
   drafts?: Draft[]
   marked?: Pick<Part, 'kind' | 'part'>
   onPick?: (part: Part, at: { x: number; y: number }) => void
-  /** Shrink a wide diagram to the column; without it, it shrinks only to 40rem and the column scrolls (a phone). */
   fit?: boolean
 }) {
   const theme = useStore((state) => state.ui.theme)
@@ -86,7 +74,6 @@ export function Canvas({
     }
   }, [svgId, source, theme, drawn])
   const svg = result?.key === drawn ? result.svg : undefined
-  // The diagram's proposed parts, marked on the SVG for `proposedStyle`.
   useLayoutEffect(() => {
     const root = host.current?.querySelector('svg')
     if (!root || !svg) return
@@ -96,7 +83,6 @@ export function Canvas({
           for (const element of partElements(svgId, root, { kind, part }))
             element.setAttribute('data-architect-proposed', '')
   }, [svg, svgId, diagram.code])
-  // Edges are thin: a wide transparent copy of each takes their clicks and hovers.
   useLayoutEffect(() => {
     const root = host.current?.querySelector('svg')
     if (!root || !svg || !onPick) return
@@ -113,21 +99,20 @@ export function Canvas({
       path.after(hit)
     }
   }, [svg, onPick])
-  // A marker at the top right of each part with a draft (and of the part a link pointed at), placed over the SVG.
   const draftKey = drafts
     .map((draft) => `${draft.kind}:${draft.part}:${draft.by === undefined ? 'own' : 'chat'}`)
     .join('|')
   const [markers, setMarkers] = useState<
     { key: string; x: number; y: number; link: boolean; chat: boolean }[]
   >([])
+  const currentDrafts = useEffectEvent(() => drafts)
   useLayoutEffect(() => {
     const root = host.current?.querySelector('svg')
     const box = frame.current
     if (!root || !svg || !box) return undefined
     const place = () => {
       const origin = box.getBoundingClientRect()
-      // The user's own drafts first: a part with both shows the solid marker.
-      const parts = drafts
+      const parts = currentDrafts()
         .toSorted((a, b) => Number(a.by !== undefined) - Number(b.by !== undefined))
         .flatMap((draft) =>
           draft.kind !== 'diagram' && draft.part
@@ -145,7 +130,6 @@ export function Canvas({
           if (seen.has(key)) return []
           seen.add(key)
           const elements = partElements(svgId, root, part)
-          // An edge's marker sits at its label's corner, or halfway along an unlabelled one.
           const path = elements[0]
           const caption = root
             .querySelector(`.edgeLabel [data-id="${CSS.escape(part.part)}"]`)
@@ -161,7 +145,6 @@ export function Canvas({
             )
             return [{ key, x: at.x - origin.left, y: at.y - origin.top, link, chat }]
           }
-          // A participant is drawn twice (top and bottom): mark the top box.
           const rect = elements
             .map((element) => element.getBoundingClientRect())
             .toSorted((a, b) => a.top - b.top)[0]
@@ -174,8 +157,6 @@ export function Canvas({
     const observer = new ResizeObserver(place)
     observer.observe(box)
     return () => observer.disconnect()
-    // `drafts` changes identity on every render; its parts are what matter.
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [svg, svgId, draftKey, marked])
   if (result?.key === drawn && result.error)
     return (
@@ -194,13 +175,11 @@ export function Canvas({
         <div
           className={cn(
             '[&_svg]:h-auto',
-            // A wide diagram fitted to a phone's width is unreadable: there it may grow to 40rem, and the column scrolls.
             fit ? 'flex justify-center [&_svg]:max-w-full' : 'w-max [&_svg]:!max-w-[40rem]',
             proposedStyle,
             onPick && interactive,
           )}
           data-architect-canvas={diagram.id}
-          // Mermaid's own output at securityLevel strict, sanitised by its DOMPurify pass.
           dangerouslySetInnerHTML={{ __html: svg }}
           onClick={(event) => {
             const root = host.current?.querySelector('svg')
@@ -220,7 +199,6 @@ export function Canvas({
           <span
             className={cn(
               'pointer-events-none absolute flex size-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-sm',
-              // The chat's suggestions are outlined: the user's own are solid.
               marker.chat
                 ? 'border border-brand bg-background text-brand'
                 : 'bg-brand text-background',
@@ -242,11 +220,6 @@ export function Canvas({
   )
 }
 
-/**
- * The comment popover at the clicked part: what it is on, the text, Cancel, Ask AI (`onAsk`: the text as a question to
- * the architecture chat instead of a comment) and Add (⌘↵). While either runs it stays open; when it fails it keeps
- * the text and says why.
- */
 export function Composer({
   title,
   label,
@@ -259,7 +232,6 @@ export function Composer({
 }: {
   title: ReactNode
   label?: string
-  /** What the part is in the code, above the text. */
   details?: ReactNode
   initial?: string
   submit: string
@@ -362,7 +334,6 @@ export function Composer({
   )
 }
 
-/** Where to put a popover of `width` near a click at `x`, `y` inside a box of `bounds` width: below it, kept inside. */
 export function popoverAt(x: number, y: number, bounds: number, width = 352) {
   return { left: Math.max(8, Math.min(x - 24, bounds - width - 8)), top: y + 14 }
 }

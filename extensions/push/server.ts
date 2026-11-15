@@ -1,7 +1,3 @@
-/**
- * Push: Web Push notifications for questions to the user (with Approve and Reply), landings and @ultimate's failed
- * runs. Adapted from mjaverto/ultimate's notifications extension (MIT, https://github.com/mjaverto/ultimate).
- */
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineDoc, defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
@@ -14,7 +10,15 @@ import { SecretsApi } from '../secrets/api.ts'
 import { Standing } from '../subagents/api.ts'
 import { SubmissionLanded } from '../workspaces/api.ts'
 import { newKey, publicKey, sendPush } from './push.ts'
-import { KeyAction, PresentAction, SubscribeAction, TestAction, UnsubscribeAction } from './refs.ts'
+import { PushApi } from './api.ts'
+import {
+  ClosedDoc,
+  KeyAction,
+  PresentAction,
+  SubscribeAction,
+  TestAction,
+  UnsubscribeAction,
+} from './refs.ts'
 import type { Subscription } from './refs.ts'
 import { failedPush, landingPush, questionPush } from './rules.ts'
 import type { Push } from './rules.ts'
@@ -22,8 +26,7 @@ import type { Push } from './rules.ts'
 const KEY = 'WEB_PUSH_VAPID_KEY'
 const OVERVIEW = 'ultimate.conversation-overview'
 
-/** The subscribed browsers, with their encryption keys: on the root, never exported to the page. */
-const Subscriptions = defineDoc<{ subscriptions: Subscription[] }>({
+const ServerOnlySubscriptions = defineDoc<{ subscriptions: Subscription[] }>({
   kind: 'push.subscriptions',
   checkpointWhen: () => false,
   version: 1,
@@ -33,15 +36,34 @@ const Subscriptions = defineDoc<{ subscriptions: Subscription[] }>({
   initial: () => ({ subscriptions: [] }),
 })
 
+const CLOSED_TAG_HISTORY_LIMIT = 50
+const VISIBLE_BROWSER_GRACE_MS = 15_000
+const Closed = defineDoc<{ tags: string[] }>({
+  kind: ClosedDoc.kind,
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ tags: [] }),
+})
+export const docs = [Closed]
+
+const markTagClosed = (host: ExtensionHost, tag: string, closed: boolean) =>
+  host.harness().commit(async (tx) => {
+    const doc = await tx.doc(Closed, ROOT_CONVERSATION_ID)
+    if (doc.tags.includes(tag) === closed) return
+    const rest = doc.tags.filter((each) => each !== tag)
+    doc.tags = closed ? [...rest, tag].slice(-CLOSED_TAG_HISTORY_LIMIT) : rest
+  }, context)
+
 const state = (host: ExtensionHost) =>
   host.resource('push.state', () => ({
-    /** When each endpoint last reported the app on screen. */
     shown: new Map<string, number>(),
     sending: new Set<Promise<unknown>>(),
     keying: undefined as Promise<string> | undefined,
   }))
 
-/** The VAPID public key, made and stored in Secrets on first use. */
 function key(host: ExtensionHost) {
   const shared = state(host)
   shared.keying ??= (async () => {
@@ -58,11 +80,12 @@ function key(host: ExtensionHost) {
 }
 
 const subscriptions = async (host: ExtensionHost) =>
-  (await host.harness().snapshot(Subscriptions, ROOT_CONVERSATION_ID, context))?.subscriptions ?? []
+  (await host.harness().snapshot(ServerOnlySubscriptions, ROOT_CONVERSATION_ID, context))
+    ?.subscriptions ?? []
 
 const remove = (host: ExtensionHost, endpoint: string) =>
   host.harness().commit(async (tx) => {
-    const doc = await tx.doc(Subscriptions, ROOT_CONVERSATION_ID)
+    const doc = await tx.doc(ServerOnlySubscriptions, ROOT_CONVERSATION_ID)
     doc.subscriptions = doc.subscriptions.filter((each) => each.endpoint !== endpoint)
   }, context)
 
@@ -77,24 +100,49 @@ async function send(host: ExtensionHost, subscription: Subscription, push: Push)
   return result.status
 }
 
-/** Pushes to every subscribed browser not showing the app. Never awaited in a reactor's transaction. */
-function deliver(host: ExtensionHost, push: Push) {
+function trackPushUntilClosed(host: ExtensionHost, work: Promise<unknown>) {
   const shared = state(host)
-  const sending = subscriptions(host)
-    .then((all) =>
-      Promise.all(
-        all
-          .filter((each) => Date.now() - (shared.shown.get(each.endpoint) ?? 0) >= 15_000)
-          .map((each) => send(host, each, push)),
-      ),
-    )
+  const sending = work
     .catch((error: unknown) => host.notice(`Push: ${String(error)}`))
     .finally(() => shared.sending.delete(sending))
   shared.sending.add(sending)
 }
 
+const closed = async (host: ExtensionHost, tag: string) =>
+  (await host.harness().snapshot(Closed, ROOT_CONVERSATION_ID, context))?.tags.includes(tag) ??
+  false
+
+function pushToHiddenBrowsers(host: ExtensionHost, push: Push) {
+  const { shown: visibleEndpointsAt } = state(host)
+  trackPushUntilClosed(
+    host,
+    subscriptions(host).then(async (all) =>
+      (await closed(host, push.tag))
+        ? []
+        : Promise.all(
+            all
+              .filter(
+                (each) =>
+                  Date.now() - (visibleEndpointsAt.get(each.endpoint) ?? 0) >=
+                  VISIBLE_BROWSER_GRACE_MS,
+              )
+              .map((each) => send(host, each, push)),
+          ),
+    ),
+  )
+}
+
 export default function pushExtension(host: ExtensionHost) {
   host.need(SecretsApi)
+  host.implement(PushApi, {
+    notify: (push) => {
+      trackPushUntilClosed(
+        host,
+        markTagClosed(host, push.tag, false).then(() => pushToHiddenBrowsers(host, push)),
+      )
+    },
+    close: (tag) => trackPushUntilClosed(host, markTagClosed(host, tag, true)),
+  })
   host.react(
     'questions',
     [MessageSent],
@@ -107,17 +155,21 @@ export default function pushExtension(host: ExtensionHost) {
       const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
       const title = host.conversations().find((each) => each.id === data.from)?.title
       const push = questionPush(message, ultimate, title)
-      if (push) deliver(host, push)
+      if (push) pushToHiddenBrowsers(host, push)
     },
     { from: 'now' },
   )
-  host.react('landings', [SubmissionLanded], (_tx, { data }) => deliver(host, landingPush(data)), {
-    from: 'now',
-  })
+  host.react(
+    'landings',
+    [SubmissionLanded],
+    (_tx, { data }) => pushToHiddenBrowsers(host, landingPush(data)),
+    {
+      from: 'now',
+    },
+  )
 
-  // @ultimate's failed run is no domain event but a change of Pi's overview document, as the sounds read it.
   let stop: (() => void) | undefined
-  let seen: string | undefined
+  let lastFailureTag: string | undefined
   const failed = async () => {
     const token = host.doc(OVERVIEW)
     if (!token) return undefined
@@ -130,8 +182,7 @@ export default function pushExtension(host: ExtensionHost) {
     return failedPush((overview as OverviewState | undefined)?.conversations[ultimate], ultimate)
   }
   host.onOpen(async () => {
-    // What has failed already when the server opens is old news.
-    seen = (await failed())?.tag
+    lastFailureTag = (await failed())?.tag
     stop = onCommit(host.harness(), (publication) => {
       if (
         !publication.changes.some(
@@ -144,9 +195,9 @@ export default function pushExtension(host: ExtensionHost) {
         return
       failed()
         .then((push) => {
-          if (!push || push.tag === seen) return
-          seen = push.tag
-          deliver(host, push)
+          if (!push || push.tag === lastFailureTag) return
+          lastFailureTag = push.tag
+          pushToHiddenBrowsers(host, push)
         })
         .catch((error: unknown) => host.notice(`Push: ${String(error)}`))
     })
@@ -181,7 +232,7 @@ export const actions = {
     if (typeof origin !== 'string' || new URL(origin).origin !== origin)
       throw new Error('Expected the page origin')
     await host.harness().commit(async (tx) => {
-      const doc = await tx.doc(Subscriptions, ROOT_CONVERSATION_ID)
+      const doc = await tx.doc(ServerOnlySubscriptions, ROOT_CONVERSATION_ID)
       doc.subscriptions = [
         ...doc.subscriptions.filter((each) => each.endpoint !== endpoint),
         { endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth }, origin },
@@ -215,5 +266,4 @@ export const actions = {
   }),
 }
 
-/** Subscribing is the user's choice, never an agent's. */
 export const userActions = ['key', 'subscribe', 'unsubscribe', 'test', 'present']

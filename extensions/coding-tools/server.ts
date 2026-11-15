@@ -1,3 +1,4 @@
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
@@ -5,7 +6,6 @@ import type { Context } from '@earendil-works/chord/context'
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
 import { bool, num, obj, opt, str } from '@earendil-works/pi-schema'
 import {
-  type ConversationId,
   defineDoc,
   defineExtension,
   defineTool,
@@ -30,8 +30,7 @@ import { implementAction } from '../../lib/actions.ts'
 import { watchSteer } from '../../lib/steer.ts'
 import { CancelAction, CancelledDoc, Committed } from './refs.ts'
 
-/** Lets Pi's read tool shrink an image past the model's limits (2000x2000 by default) instead of refusing it. */
-const images = await createNodePhotonImages()
+const modelSizedImages = await createNodePhotonImages()
 
 function defaultBashTimeout() {
   const seconds = Number(process.env.ULTIMATE_BASH_TIMEOUT ?? 600)
@@ -43,61 +42,49 @@ function defaultBashTimeout() {
 const bashTripwireMessage = (seconds: number) =>
   `Tripwire: bash ran past the ${seconds} s default limit and was stopped. Pass timeout for longer commands.`
 
-/**
- * Process-local Git hooks for one bash call. Each appends tab-separated lines (kind, sha, branch, worktree, git common
- * dir, extra) to `$ULTIMATE_COMMIT_LOG` and swallows every failure, so it can never fail a commit; the trailing `#`
- * drops the arguments Git appends.
- */
-const where = `"$(git symbolic-ref -q --short HEAD)" "$(git rev-parse --show-toplevel)" "$(git rev-parse --path-format=absolute --git-common-dir)"`
-const logCommit = `printf 'commit\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" ${where} 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`
-const hooks = (conversation: number) => ({
+const hookRepoFields = `"$(git symbolic-ref -q --short HEAD)" "$(git rev-parse --show-toplevel)" "$(git rev-parse --path-format=absolute --git-common-dir)"`
+const logCommit = `printf 'commit\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" ${hookRepoFields} 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`
+const nonBlockingGitHooks = (conversation: ConversationId) => ({
   'prepare-commit-msg': `git interpret-trailers --in-place --if-exists doNothing --trailer "Ultimate-Conversation: ${conversation}" "$1" #`,
   'post-commit': logCommit,
-  // `git am` and the apply backend of rebase make commits without post-commit.
   'post-applypatch': logCommit,
-  // Merges run no post-commit. Fast-forwards and squashes run post-merge too, so it also logs the HEAD before the
-  // merge and the reflog's subject (`… Fast-forward` for one).
-  'post-merge': `printf 'merge\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" ${where} "$(git rev-parse -q --verify ORIG_HEAD)" "$(git reflog -1 --format=%gs)" 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
-  // Git's stdin holds `old new` pairs of amended or rebased commits.
+  'post-merge': `printf 'merge\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" ${hookRepoFields} "$(git rev-parse -q --verify ORIG_HEAD)" "$(git reflog -1 --format=%gs)" 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
   'post-rewrite': `while read -r old new rest; do printf 'rewrite\\t%s\\t\\t\\t%s\\t%s\\n' "$new" "$(git rev-parse --path-format=absolute --git-common-dir)" "$old"; done 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
 })
 
-/** Install the hooks for bash call `api` in `execution`; they log its commits to `log` when given. */
-export function prepareBash(
+export async function prepareBash(
+  git: Git,
   execution: BashExecution,
   api: Pick<ToolExecutionApi, 'conversationId'>,
   log?: string,
 ) {
+  const worktree = await git(execution.cwd, 'rev-parse', '--show-toplevel').catch(() => '')
+  if (!worktree.trim()) return
+  execution.env.ULTIMATE_COMMIT_WORKTREE = worktree.trim()
   let count = Number(process.env.GIT_CONFIG_COUNT ?? 0)
-  for (const [event, command] of Object.entries(hooks(api.conversationId))) {
+  for (const [event, command] of Object.entries(nonBlockingGitHooks(api.conversationId))) {
     execution.env[`GIT_CONFIG_KEY_${count}`] = `hook.ultimate-${event}.event`
     execution.env[`GIT_CONFIG_VALUE_${count++}`] = event
     execution.env[`GIT_CONFIG_KEY_${count}`] = `hook.ultimate-${event}.command`
-    execution.env[`GIT_CONFIG_VALUE_${count++}`] = command
+    execution.env[`GIT_CONFIG_VALUE_${count++}`] =
+      `[ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$ULTIMATE_COMMIT_WORKTREE" ] || exit 0; ${command}`
   }
   execution.env.GIT_CONFIG_COUNT = String(count)
   if (log) execution.env.ULTIMATE_COMMIT_LOG = log
 }
 
-/** Why a command marked `interruptible` must not be cut mid-way, if it changes something; `undefined` when it only waits. */
 export function changes(command: string) {
-  // Bash joins backslash-newline continuations before it runs a line.
-  const joined = command.replaceAll('\\\n', ' ')
+  const joinedBashLines = command.replaceAll('\\\n', ' ')
   const end = '(?=$|[\\s;&|)])'
   return (
     new RegExp(`\\bgit\\s+(?:-C\\s+\\S+\\s+|-\\S+\\s+)*(push|commit|merge)${end}`).exec(
-      joined,
+      joinedBashLines,
     )?.[1] ??
-    // A word of its own (npm install, composer install, artisan migrate:fresh), not part of a path or file name.
-    new RegExp(`(?:^|[\\s;&|(])(install|migrate)(?=$|[\\s;&|):])`).exec(joined)?.[1]
+    new RegExp(`(?:^|[\\s;&|(])(install|migrate)(?=$|[\\s;&|):])`).exec(joinedBashLines)?.[1]
   )
 }
 
-/**
- * The bash calls the user cancelled (`CancelAction`), by call id → when. Durable, so a call started before an extension
- * reload sees a cancel made after it. A restart ends a running call anyway: Pi recovers it as interrupted.
- */
-const Cancelled = defineDoc<{ calls: Record<string, number> }>({
+const DurableCancellations = defineDoc<{ calls: Record<string, number> }>({
   kind: CancelledDoc.kind,
   checkpointWhen: () => false,
   version: 1,
@@ -106,9 +93,8 @@ const Cancelled = defineDoc<{ calls: Record<string, number> }>({
   fork: 'initial',
   initial: () => ({ calls: {} }),
 })
-export const docs = [Cancelled]
+export const docs = [DurableCancellations]
 
-/** `40s`, `5m 09s`, `2h 05m`. */
 function took(ms: number) {
   const seconds = Math.round(ms / 1000)
   if (seconds < 60) return `${seconds}s`
@@ -117,13 +103,6 @@ function took(ms: number) {
   return `${Math.floor(seconds / 3600)}h ${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}m`
 }
 
-/**
- * Run `run` until it finishes or is stopped, whichever comes first: by the user's cancel of this call, or, when
- * `interruptible`, by a steer queued in its conversation. A steer joins a run only after the tool round, so a wait would
- * otherwise hold it; ending the command here lets the run go on and the steer be placed at once. Follow-ups wait for the
- * run's end anyway, so they never interrupt. A stopped command is killed, and the call ends with the output so far and a
- * notice, as an ordinary result.
- */
 async function untilStopped(
   run: (context: Context) => Promise<ToolExecutionResult>,
   api: ToolExecutionApi,
@@ -131,10 +110,9 @@ async function untilStopped(
   context: Context,
 ): Promise<ToolExecutionResult> {
   const id = api.conversationId
-  // A watch needs the document to exist; created once per conversation.
-  if (!(await api.snapshot(Cancelled, id, context)))
-    await api.commit((tx) => tx.doc(Cancelled, id), context)
-  const cancelled = (await api.watchDoc(Cancelled, id, context))!
+  const cancellationDoc = await api.snapshot(DurableCancellations, id, context)
+  if (!cancellationDoc) await api.commit((tx) => tx.doc(DurableCancellations, id), context)
+  const cancelled = (await api.watchDoc(DurableCancellations, id, context))!
   const started = performance.now()
   const { context: command, cancel } = withCancel(context)
   let reason: string | undefined
@@ -158,12 +136,12 @@ async function untilStopped(
   } catch (error) {
     if (!reason || context.abortSignal?.aborted) throw error
     const retained = api.retainedOutput()
-    // The notice goes last: long output keeps its tail, so a leading notice would be cut.
+    const outputWithTrailingNotice = `${retained.text || '(no output)'}\n[${reason} after ${took(performance.now() - started)}; the output above is the last the command printed.]`
     return {
       output: [
         {
           type: 'text',
-          text: `${retained.text || '(no output)'}\n[${reason} after ${took(performance.now() - started)}; the output above is the last the command printed.]`,
+          text: outputWithTrailingNotice,
         },
       ],
       structuredOutput: { output: retained.text, truncated: retained.truncated, exitCode: 130 },
@@ -180,7 +158,7 @@ export const actions = {
       args && typeof args === 'object' && !Array.isArray(args) ? args.callId : undefined
     if (typeof callId !== 'string' || conversationId === undefined)
       throw new Error('Invalid bash call')
-    const id = conversationId as ConversationId
+    const id = conversationId
     await host.harness().commit(async (tx) => {
       const live = await tx.doc(LiveDoc, id)
       const running = new Set(
@@ -189,8 +167,7 @@ export const actions = {
         ),
       )
       if (!running.has(callId)) throw new Error('That bash call is not running')
-      const calls = (await tx.doc(Cancelled, id)).calls
-      // Calls never remove their own marks (one could land as a call ends); each cancel drops those of ended calls.
+      const calls = (await tx.doc(DurableCancellations, id)).calls
       for (const ended of Object.keys(calls)) if (!running.has(ended)) delete calls[ended]
       calls[callId] = Date.now()
     }, BACKGROUND_CONTEXT)
@@ -206,12 +183,7 @@ type Made = {
   rewrittenFrom?: string
 }
 
-/**
- * The commits a bash call made, from its hook log at `path`, which this removes. Only a commit line, or a post-merge
- * line for a real merge commit (first parent the HEAD before it, not a fast-forward), records a commit; a rewrite line
- * only adds `rewrittenFrom` to one, since a resumed rebase also lists commits an earlier call made.
- */
-async function madeCommits(git: Git, path: string, conversation: number) {
+async function madeCommits(git: Git, path: string, conversation: ConversationId) {
   const log = await readFile(path, 'utf8').catch(() => '')
   await rm(path, { force: true })
   const made = new Map<string, Made>()
@@ -233,10 +205,9 @@ async function madeCommits(git: Git, path: string, conversation: number) {
   }
   const byRepo = Map.groupBy(made.values(), (commit) => commit.common)
   const events = []
-  for (const [common, commits] of byRepo) {
-    // The commits stay readable from the repository after their worktree is gone.
+  for (const [sharedGitDir, commits] of byRepo) {
     const shown = await git(
-      common,
+      sharedGitDir,
       'log',
       '--no-walk=unsorted',
       '--format=%H%x00%P%x00%s%x1e',
@@ -252,10 +223,11 @@ async function madeCommits(git: Git, path: string, conversation: number) {
       const found = details.get(commit.sha)
       if (!found) continue
       const parents = found.parents ? found.parents.split(' ') : []
-      // A squash leaves HEAD where it was, which is no merge commit on the HEAD before it.
-      const before = merges.get(commit.sha)
-      if (before !== undefined && !(parents.length > 1 && parents[0] === before)) continue
-      const repo = basename(common) === '.git' ? dirname(common) : common
+      const headBeforeMerge = merges.get(commit.sha)
+      const notOwnMergeCommit =
+        headBeforeMerge !== undefined && !(parents.length > 1 && parents[0] === headBeforeMerge)
+      if (notOwnMergeCommit) continue
+      const repo = basename(sharedGitDir) === '.git' ? dirname(sharedGitDir) : sharedGitDir
       events.push({
         conversation,
         sha: commit.sha,
@@ -289,8 +261,7 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit' | 'need' | 
       }),
     ),
   })
-  // In the tool itself, not a wrap, so the events carry the call's trace and conversation.
-  const bashTool = defineTool({
+  const tracedBashTool = defineTool({
     ...shell,
     parameters,
     async execute({ interruptible, ...args }, api, context) {
@@ -299,33 +270,27 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit' | 'need' | 
         throw new Error(
           `An interruptible command must only wait, but this one changes things (${change}). Run the change in its own bash call, then wait in a separate interruptible one.`,
         )
-      // One log per invocation: task ids repeat across projects and a retried call reruns its task.
-      // Under the home, not the system temp: a bash call may run on an ssh-exec target, which shares the files
-      // under its root (the home included) but not this machine's /tmp, and its hooks write here.
-      const logs = join(host.home, 'commit-logs')
-      await mkdir(logs, { recursive: true })
-      const log = join(logs, `${randomUUID()}.log`)
+      const commitLogsSharedWithSshTargets = join(host.home, 'commit-logs')
+      await mkdir(commitLogsSharedWithSshTargets, { recursive: true })
+      const invocationLog = join(commitLogsSharedWithSshTargets, `${randomUUID()}.log`)
       const call = createBashTool({
-        prepare: (execution) => prepareBash(execution, api, log),
+        prepare: (execution) => prepareBash(exec.git, execution, api, invocationLog),
       })
       const run = (command: Context) => call.execute(args, api, command)
       try {
         return await untilStopped(run, api, interruptible, context)
       } finally {
-        // A failed or stopped command may still have committed, so record what it made either way.
-        // Git is looked up only for commits made: a call stopped by shutdown may finish after the service is gone.
-        const commits = await madeCommits(
+        const advisoryCommits = await madeCommits(
           async (...gitArgs) => exec.git(...gitArgs),
-          log,
+          invocationLog,
           api.conversationId,
         )
-        if (commits.length)
+        if (advisoryCommits.length)
           await api
             .commit(async (tx) => {
-              for (const commit of commits) await host.emit(tx, Committed, commit)
+              for (const commit of advisoryCommits) await host.emit(tx, Committed, commit)
             }, context)
             .catch((error: unknown) =>
-              // Recording is history only; the command's own result must stand.
               console.error('coding-tools: recording commits failed:', error),
             )
       }
@@ -333,12 +298,11 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit' | 'need' | 
   })
   return defineExtension({
     name: 'coding-tools',
-    // Each tool keeps its own parameters; the list is only read through the base registration.
     tools: [
-      createReadTool({ images }),
+      createReadTool({ images: modelSizedImages }),
       createWriteTool(),
       createEditTool(),
-      bashTool,
+      tracedBashTool,
     ] as ToolRegistration[],
     wraps: [
       wrapTool(createBashTool(), (bash) => ({

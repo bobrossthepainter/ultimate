@@ -1,3 +1,4 @@
+import { overshadowed, retriedLater } from '../../lib/errors.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -12,13 +13,6 @@ export const reloadOnSettings = true
 
 const socketsKey = Symbol.for('ultimate.ssh-exec.sockets')
 
-/**
- * The control socket directory of this process, kept across facet reloads and removed at exit. The harness keeps the
- * envs it built across reloads (a settings change), so a directory per facet load, deleted on close, left them failing
- * with "cannot create control socket" (ultimate-k8s #1662). A reload evaluates this module again, hence `globalThis`.
- * It needs a short path: ssh refuses one of 108 bytes or more, which a deep TMPDIR (the lander's checks set one under
- * the project home) reaches. So /tmp, never tmpdir() (#7522).
- */
 function socketsDir() {
   const state = globalThis as unknown as Record<symbol, string | undefined>
   if (!state[socketsKey]) {
@@ -30,7 +24,6 @@ function socketsDir() {
 }
 
 export default async function sshExec(host: ExtensionHost) {
-  // Only the machine's own settings name targets: a project must not send this machine's commands anywhere.
   const targets = targetsOf((await readSettings(userSettingsPath(host.userHome)))['ssh-exec'])
   const sockets = socketsDir()
   const statuses = new Map<string, TargetStatus>(
@@ -40,7 +33,6 @@ export default async function sshExec(host: ExtensionHost) {
     ]),
   )
   const checking = new Map<string, Promise<string | undefined>>()
-  /** Connect to `target` once at a time; its status says whether it worked. */
   const check = (target: Target) => {
     const running = checking.get(target.id)
     if (running) return running
@@ -61,12 +53,7 @@ export default async function sshExec(host: ExtensionHost) {
     statuses.set(target.id, { ...status, state: 'ready' })
   }
   const protocol = sshProtocol(sockets, (target, code) => {
-    // 255 is ssh failing (or a command that exits 255): connect again to tell which.
-    if (code === 255)
-      void check(target).catch(
-        // probe resolves its failures; nothing else can reject.
-        () => undefined,
-      )
+    if (code === 255) void check(target).catch(retriedLater)
     else if (code !== null) ready(target)
   })
   const routed: ExecTarget[] = targets.map((target) => ({
@@ -101,21 +88,9 @@ export default async function sshExec(host: ExtensionHost) {
     },
   })
   host.implement(SshExecApi, { status: () => [...statuses.values()] })
-  for (const target of targets)
-    void check(target).catch(
-      // probe resolves its failures; nothing else can reject.
-      () => undefined,
-    )
+  for (const target of targets) void check(target).catch(retriedLater)
   host.onClose(async () => {
-    // Commands still running keep their connection until they end; new ones open a fresh one at the same path.
-    await Promise.all(
-      targets.map((target) =>
-        release(target, sockets).catch(
-          // No connection was ever opened, or it is already gone.
-          () => undefined,
-        ),
-      ),
-    )
+    await Promise.all(targets.map((target) => release(target, sockets).catch(overshadowed)))
   })
   return { name: 'ssh-exec' }
 }

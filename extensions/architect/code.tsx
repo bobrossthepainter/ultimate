@@ -4,16 +4,10 @@ import { openReview } from '../review/ui.tsx'
 import { useGithubRepo } from '../workspaces/ui.tsx'
 import type { ArchitectureCode, PartCode } from './refs.ts'
 
-/**
- * Where a part lives in the code and how sure the drawing is, above its comment: the source as a link and the part's
- * status and evidence. A file the branch changes opens in Review at its line; the rest opens on GitHub at the branch
- * the code is on, else shows as plain text.
- */
 export function PartSource({ code, where }: { code: PartCode; where?: ArchitectureCode }) {
   const github = useGithubRepo()
   const source = code.source
   const label = source && `${source.path}${source.line ? `:${source.line}` : ''}`
-  // The file name and line are what tell parts apart; a long directory gives way first.
   const slash = source ? source.path.lastIndexOf('/') + 1 : 0
   const chip = source && (
     <>

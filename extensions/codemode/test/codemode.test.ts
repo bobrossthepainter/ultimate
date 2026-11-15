@@ -32,11 +32,15 @@ import type { CallTree } from '../../../server/trace.ts'
 const servers: Awaited<ReturnType<typeof createServer>>[] = []
 const directories: string[] = []
 afterEach(async () => {
-  for (const server of servers.splice(0)) {
+  // Take both lists before the first await: a hook still running past its timeout must not delete the next test's
+  // directories (first seen in messages.test.ts).
+  const closing = servers.splice(0)
+  const taken = directories.splice(0)
+  for (const server of closing) {
     await server.vite.watcher.close()
     await server.close()
   }
-  for (const directory of directories.splice(0)) await removeTemp(directory)
+  for (const directory of taken) await removeTemp(directory)
 })
 async function fixture() {
   const directory = await temp('ultimate-codemode-')
@@ -426,8 +430,6 @@ it('applies each automation call in one script to its own arguments', async () =
 
 it('reserves trust and secret writes for the UI while allowing normal actions', async () => {
   const { server, options } = await fixture()
-  await mkdir(join(options.ultimateRoot, 'server'), { recursive: true })
-  await cp(resolve('server/lock.ts'), join(options.ultimateRoot, 'server/lock.ts'))
   // Onboarding and secrets use the shared helpers in lib/.
   await cp(resolve('lib'), join(options.ultimateRoot, 'lib'), { recursive: true })
   const probes = { onboarding: 'decide', secrets: 'set' } as const

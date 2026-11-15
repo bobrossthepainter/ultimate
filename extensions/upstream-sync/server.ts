@@ -1,10 +1,11 @@
+import { deadline, every } from '../../lib/timers.ts'
+import { meansNone } from '../../lib/errors.ts'
 import { realpath, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-// oxlint-disable-next-line no-restricted-imports -- the core's process-safe lock, the one update holds on the same clone
-import { acquireLock } from '../../server/lock.ts'
+import { acquireLock } from '../../lib/lock.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { compareUrl } from '../../lib/compare.ts'
 import { exec } from '../../lib/exec.ts'
@@ -17,12 +18,9 @@ import { WorkspacesApi } from '../workspaces/api.ts'
 import { CheckAction, MergeAction, StateAction } from './refs.ts'
 import type { UpstreamState } from './refs.ts'
 
-/** The remote of the repository this one was forked from; without it the extension does nothing. */
 const REMOTE = 'upstream'
-/** How often the clone is compared with upstream locally; upstream itself is fetched at most hourly. */
 export const TICK = 5 * 60_000
 export const FETCH_EVERY = 60 * 60_000
-/** What the summary model reads: the range's commit messages, never diffs, clipped. */
 const SUMMARY_INPUT_CAP = 12_000
 const SUMMARY_SYSTEM = `You summarize new upstream commits of Ultimate, a coding agent app, for the user of a fork of it.
 You get the commit messages, newest first. Answer with 2 to 4 lines, one per notable change, most useful first, each
@@ -31,7 +29,6 @@ to an agent"). Group small fixes into one line. No bullets, numbering, commit ha
 
 export type Git = (...args: string[]) => Promise<string>
 
-/** Git in `root`, never prompting: an HTTPS fetch without a login must fail rather than hang a background check. */
 export const gitIn =
   (root: string): Git =>
   async (...args) => {
@@ -44,13 +41,11 @@ export const gitIn =
     }
   }
 
-/** `name` inside the clone's git directory, shared by every Ultimate on the clone. */
 async function gitPath(git: Git, root: string, name: string) {
   const path = await git('rev-parse', '--git-path', name)
   return isAbsolute(path) ? path : join(root, path)
 }
 
-/** When upstream was last fetched by any Ultimate on the clone (the stamp's mtime), or undefined before the first. */
 export async function fetchedAt(git: Git, root: string) {
   return stat(await gitPath(git, root, 'ultimate-upstream-fetched')).then(
     (info) => info.mtimeMs,
@@ -58,11 +53,6 @@ export async function fetchedAt(git: Git, root: string) {
   )
 }
 
-/**
- * Fetch upstream when its last fetch is older than `FETCH_EVERY`, or always with `force`; the error of a failed
- * fetch, else undefined. `--no-write-fetch-head`: the update extension times its hourly origin fetch by `FETCH_HEAD`'s
- * mtime, so an upstream fetch that wrote it would keep origin from ever being fetched (#9593).
- */
 export async function fetchIfDue(git: Git, root: string, now: number, force = false) {
   const last = await fetchedAt(git, root)
   if (!force && last !== undefined && now - last < FETCH_EVERY) return undefined
@@ -75,7 +65,6 @@ export async function fetchIfDue(git: Git, root: string, now: number, force = fa
   }
 }
 
-/** The clone against `upstream/<default branch>` as of the last fetch; `off` without an upstream remote. */
 export async function compare(
   git: Git,
   root: string,
@@ -88,7 +77,6 @@ export async function compare(
   const at = await fetchedAt(git, root)
   const base = { ...none, ...(at !== undefined ? { fetchedAt: at } : {}) }
   const tracking = await git('symbolic-ref', '--short', `refs/remotes/${REMOTE}/HEAD`).catch(
-    // Not fetched yet, or fetched without its default branch: the refusal says how to set it.
     () => '',
   )
   if (!tracking)
@@ -103,7 +91,6 @@ export async function compare(
     .split(/\s+/)
     .map(Number)
   const current = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '')
-  // A refusal matters only with something to merge: a branch worktree that has upstream's commits is fine.
   const state = {
     ...base,
     branch,
@@ -128,7 +115,6 @@ export async function compare(
   }
 }
 
-/** The answer's lines, at most 4, without bullets or numbering. */
 const summaryLines = (text: string) =>
   text
     .split('\n')
@@ -136,10 +122,6 @@ const summaryLines = (text: string) =>
     .filter(Boolean)
     .slice(0, 4)
 
-/**
- * The summary of `range`: the cached one when `file` holds it, else asked once with the commit messages and cached
- * (an empty answer too, so a failing model is not asked again for the range); without `ask` only the cache is read.
- */
 async function summaryFor(
   file: string,
   range: string,
@@ -149,19 +131,12 @@ async function summaryFor(
   const cached = await readJson<{ range?: string; lines?: string[] }>(file, {})
   if (cached.range === range) return cached.lines?.length ? cached.lines : undefined
   if (!ask) return undefined
-  const text = await ask((await log()).slice(0, SUMMARY_INPUT_CAP)).catch(
-    // No summary model, or it failed: the commit list stands in for the summary.
-    () => undefined,
-  )
+  const text = await ask((await log()).slice(0, SUMMARY_INPUT_CAP)).catch(meansNone)
   const lines = text === undefined ? [] : summaryLines(text)
   await writeJson(file, { range, lines })
   return lines.length ? lines : undefined
 }
 
-/**
- * Run `work` holding the clone-wide lock update also holds (`.git/ultimate-update.lock`), so no two fetches of one
- * clone overlap across the Ultimates on it; undefined without running while another holds it.
- */
 async function withLock<T>(git: Git, root: string, work: () => Promise<T>) {
   let held: Awaited<ReturnType<typeof acquireLock>>
   try {
@@ -178,7 +153,6 @@ async function withLock<T>(git: Git, root: string, work: () => Promise<T>) {
   }
 }
 
-/** Ask the summary model once with the range's commit messages; undefined without one. */
 async function askModel(host: ExtensionHost, input: string) {
   const conversations = host.need(ConversationsApi)
   const model = await conversations.summaryModel()
@@ -193,7 +167,6 @@ async function askModel(host: ExtensionHost, input: string) {
   return response.stopReason === 'stop' ? response.text : undefined
 }
 
-/** Why a merge must wait: the lander is landing into the clone (it moves the same branch). */
 async function landing(host: ExtensionHost) {
   let index
   try {
@@ -201,7 +174,6 @@ async function landing(host: ExtensionHost) {
       .harness()
       .snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, context)
   } catch {
-    // Storage is closed (a core swap): nothing lands from this home meanwhile.
     return undefined
   }
   const root = await realpath(host.ultimateRoot)
@@ -210,7 +182,6 @@ async function landing(host: ExtensionHost) {
     : undefined
 }
 
-/** Whether the clone is the project: only there can a branch's landing merge upstream into it. */
 const isProject = async (host: ExtensionHost) =>
   (await realpath(host.ultimateRoot)) === (await realpath(host.projectRoot))
 
@@ -222,7 +193,6 @@ type Shared = {
   latest: UpstreamState | undefined
 }
 
-/** Shared across reloads: a reload installs the new facet before the old one closes, and only one tick may run. */
 const shared = (host: ExtensionHost) =>
   host.resource<Shared>('upstream-sync.state', () => ({
     ticking: undefined,
@@ -230,10 +200,6 @@ const shared = (host: ExtensionHost) =>
     latest: undefined,
   }))
 
-/**
- * Compare the clone with upstream and keep the result for `state`. A `check` fetches when due (always with `force`)
- * and summarizes a new range once, under the clone's lock; a plain refresh only reads.
- */
 async function refresh(host: ExtensionHost, check: boolean, force = false) {
   const root = host.ultimateRoot
   const git = gitIn(root)
@@ -286,7 +252,6 @@ async function currentState(host: ExtensionHost): Promise<UpstreamState> {
   return shared(host).latest!
 }
 
-/** What @ultimate reads when the user asks for the merge. */
 const mergeInput = (state: UpstreamState) => {
   const { branch, root, ahead, behind } = state
   return [
@@ -298,16 +263,13 @@ const mergeInput = (state: UpstreamState) => {
 }
 
 export default function upstreamSync(host: ExtensionHost) {
-  // Resolved where they are called; declared here so the catalogue lists them.
   host.need(WorkspacesApi)
   host.need(ConversationsApi)
   host.need(SubagentsApi)
   host.want(PauseApi)
-  // A preview never fetches: it must not race the host on the same clone.
   if (preview()) return defineExtension({ name: 'upstream-sync' })
   const state = shared(host)
   const tick = () => {
-    // Paused: no fetch starts until Play; the next tick after it catches up.
     if (host.want(PauseApi)?.paused()) return
     state.ticking ??= refresh(host, true)
       .catch((error: unknown) => host.notice(`Upstream check: ${String(error)}`))
@@ -315,11 +277,11 @@ export default function upstreamSync(host: ExtensionHost) {
         state.ticking = undefined
       })
   }
-  const start = setTimeout(tick, 30_000)
-  const timer = setInterval(tick, TICK)
+  const cancelFirstTick = deadline(30_000, tick)
+  const stopTicking = every(TICK, tick)
   host.onClose(async () => {
-    clearTimeout(start)
-    clearInterval(timer)
+    cancelFirstTick()
+    stopTicking()
     await state.ticking
   })
   return defineExtension({ name: 'upstream-sync' })
@@ -332,7 +294,6 @@ export const actions = {
   check: implementAction(CheckAction, async (_args, { host }) => {
     if (preview()) return currentState(host)
     const state = shared(host)
-    // A background tick may be mid-check without forcing: let it finish, then fetch now. A second click joins.
     await state.ticking
     state.checking ??= refresh(host, true, true).finally(() => {
       state.checking = undefined
@@ -355,7 +316,6 @@ export const actions = {
       {
         type: 'input',
         content: mergeInput(latest),
-        // One ask per range: a second click while @ultimate is on it adds nothing.
         requestId: `upstream-merge:${head}..${remoteHead}`,
         whenBusy: 'followUp',
       },

@@ -6,11 +6,6 @@ import { openArchitecture } from './link.tsx'
 import { ArchitectureDoc } from './refs.ts'
 import type { ArchitectureComments, ArchitectureQuestion } from './refs.ts'
 
-/**
- * A question the user asked the architecture chat about a part, in the chat's transcript: their words as their turn,
- * under a chip naming the part (`Components · node surface · v3`) that opens the surface with it marked. The part's
- * context the model reads stays out of sight.
- */
 export function QuestionCard({ entry }: { entry: EntryRecord }) {
   const question = entry.data as ArchitectureQuestion
   const { branch, version, diagram, kind, part } = question
@@ -51,10 +46,6 @@ export function QuestionCard({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/**
- * Feedback the user sent on a version, in its recipient's transcript: on the user's side, like their typed messages,
- * as Review's card. Each comment's chip opens the surface at that branch, version, diagram and part.
- */
 export function CommentsCard({ entry }: { entry: EntryRecord }) {
   const { branch, version, comments, note } = entry.data as ArchitectureComments
   const doc = useDocOf(branch, ArchitectureDoc)
@@ -95,7 +86,6 @@ export function CommentsCard({ entry }: { entry: EntryRecord }) {
           )}
           <ol className="divide-y divide-border/60">
             {comments.map((comment, index) => (
-              // oxlint-disable-next-line react/no-array-index-key -- Fixed submitted comments can share the same part.
               <li className="space-y-1.5 px-3 py-2.5" key={index}>
                 <button
                   className="flex max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded border border-border/70 bg-background/60 px-1.5 py-0.5 font-mono text-[11px] hover:border-brand/50 hover:text-foreground"

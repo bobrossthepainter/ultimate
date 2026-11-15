@@ -1,3 +1,4 @@
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { WorkflowIcon } from 'lucide-react'
 import { lazy, Suspense } from 'react'
 import { api, defineWebExtension, getState } from '@/sdk'
@@ -6,7 +7,6 @@ import { Frame, Loading } from './frame.tsx'
 import { ArchitectureLink, openArchitecture } from './link.tsx'
 import { DrawAction } from './refs.ts'
 
-// Mermaid loads with the surface, not with the app.
 const Viewer = lazy(() => import('./surface.tsx'))
 
 function ArchitectureSurface() {
@@ -23,8 +23,7 @@ function ArchitectureSurface() {
   )
 }
 
-/** The branch conversation `id` stands for: itself, or the branch its architect draws. */
-function branchOf(id: number) {
+function branchOf(id: ConversationId) {
   const summary = getState().conversations.find((conversation) => conversation.id === id)
   return summary?.label === 'architect' && summary.parentConversationId !== undefined
     ? summary.parentConversationId

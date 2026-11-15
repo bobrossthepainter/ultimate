@@ -3,6 +3,7 @@
  * time through Mermaid's single global renderer, and `token` reads a theme token as hex for a diagram's own styles.
  * Importing this loads Mermaid (several MB): import it only from a lazily loaded module.
  */
+import { keepLast } from '../../lib/errors.ts'
 import mermaid from 'mermaid'
 
 /** A theme token as `#rrggbb`: Mermaid derives shades from its colours and cannot read `oklch()` or `var()`. */
@@ -28,7 +29,6 @@ function config(theme: 'dark' | 'light') {
   return {
     startOnLoad: false,
     securityLevel: 'strict',
-    // Without it a parse error also leaves Mermaid's error graphic at the end of the page.
     suppressErrorRendering: true,
     flowchart: { nodeSpacing: 30, rankSpacing: 36, padding: 10, minNodeWidth: 60 },
     fontSize: 13,
@@ -78,7 +78,6 @@ function natural(svg: string) {
   return new XMLSerializer().serializeToString(element)
 }
 
-// Mermaid keeps one global configuration and render scratch space: renders run one at a time.
 let queue: Promise<unknown> = Promise.resolve()
 let configured: string | undefined
 
@@ -94,8 +93,6 @@ export function draw(id: string, code: string, theme: 'dark' | 'light') {
     }
     return mermaid.render(id, code).then(({ svg }) => natural(svg))
   })
-  queue = next.catch(() => {
-    // A failed diagram is reported by its own block; the next render must still run.
-  })
+  queue = next.catch(keepLast)
   return next
 }

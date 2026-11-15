@@ -2,7 +2,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 // First: helpers mocks the faux provider's token pacing, which must apply before the server modules load.
 import { eventHost, idleNeed, until, temp, removeTemp } from '../../../test/helpers.ts'
 import { awaitWithContext } from '@earendil-works/chord/context'
-import { projectSettings } from '../../../server/project-setup.ts'
+import { projectSettings } from '../../../lib/project-setup.ts'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -37,15 +37,18 @@ import { Runs, Started, Subagents } from '../api.ts'
 import type { ActionContext } from '../../../server/actions.ts'
 import codemode from '../../codemode/server.ts'
 import { Metadata } from '../../../server/metadata.ts'
-import { UiState } from '../../../server/ui-state.ts'
+import { UiState } from '../../../shared/ui-state.ts'
 import { discoverAgents, parseDefinition, serializeDefinition } from '../../../lib/agents.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
 const directories: string[] = []
 const hosts: OpenHost[] = []
 afterEach(async () => {
-  for (const host of hosts.splice(0)) await host.close()
-  for (const path of directories.splice(0)) await removeTemp(path)
+  // Both lists before the first await, so a hook past its timeout cannot delete the next test's folders.
+  const closing = hosts.splice(0)
+  const taken = directories.splice(0)
+  for (const host of closing) await host.close()
+  for (const path of taken) await removeTemp(path)
 })
 const definition = (body = 'Original instructions') =>
   `---\nname: scout\ndescription: Search\ntools: [read, bash]\n---\n${body}\n`

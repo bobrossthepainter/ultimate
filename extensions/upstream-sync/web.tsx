@@ -1,3 +1,5 @@
+import { every } from '../../lib/timers.ts'
+import { keepLast } from '../../lib/errors.ts'
 import { ArrowDownIcon, LoaderCircleIcon, RefreshCwIcon, TriangleAlertIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -27,7 +29,6 @@ function Popup({
   merge: () => void
 }) {
   const branch = state.branch ?? 'main'
-  // Under a summary the commit list folds to the first few.
   const shown = Math.min(state.commits.length, state.summary ? 3 : 5)
   return (
     <>
@@ -150,21 +151,14 @@ function Popup({
   )
 }
 
-/** The status-line item: shown only while upstream has commits the clone lacks, or a fetch failed. */
 function Upstream() {
-  const { data: state, refetch } = useAction(
-    StateAction,
-    null,
-    // A failed poll keeps the last state; the next one tries again.
-    { onError: () => {} },
-  )
+  const { data: state, refetch } = useAction(StateAction, null, { onError: keepLast })
   const [busy, setBusy] = useState(false)
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState<string>()
   const { showSurface, switchConversation } = useUltimate()
   useEffect(() => {
-    const timer = setInterval(() => void refetch(), 60_000)
-    return () => clearInterval(timer)
+    return every(60_000, () => void refetch())
   }, [refetch])
   if (!state || state.off || (!state.behind && !state.error)) return null
   const check = () => {
@@ -173,10 +167,8 @@ function Upstream() {
     api
       .action(CheckAction)
       .catch((cause: unknown) => setError(failure(cause)))
-      // The check leaves its answer as the server's state.
       .finally(() => void refetch().finally(() => setChecking(false)))
   }
-  // Hands the merge to @ultimate and opens its conversation, where the branch it starts shows up.
   const merge = () => {
     setBusy(true)
     setError(undefined)

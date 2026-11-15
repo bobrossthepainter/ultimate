@@ -8,7 +8,7 @@ import type { Status } from '../extensions/caddy/refs.ts'
 import type { CaddyService } from '../extensions/caddy/api.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { createAccess } from '../server/request-security.ts'
-import { projectHome } from '../server/project.ts'
+import { projectHome } from '../lib/project-paths.ts'
 import { temp } from './helpers.ts'
 
 const closes: (() => Promise<void>)[] = []

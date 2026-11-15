@@ -29,6 +29,7 @@ export type AutomationsService = {
   /** Ids of the automations whose script process is alive. */
   scripts(): Promise<string[]>
 }
-/** Optional automation service. */
+/** The automations service. */
 export const AutomationsApi = defineApi<AutomationsService>()('automations')
+export const tier = 'core'
 export { Fired, Started, Exited, Done, Escalated } from './refs.ts'

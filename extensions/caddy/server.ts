@@ -1,13 +1,12 @@
+import { meansNone, overshadowed } from '../../lib/errors.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { access, chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { constants, existsSync } from 'node:fs'
 import { request } from 'node:http'
 import { basename, isAbsolute, join } from 'node:path'
 import { defineExtension } from '@earendil-works/pi-durable'
-// oxlint-disable-next-line no-restricted-imports -- the route registry uses the shared process lock and liveness check
-import { acquireLock, alive } from '../../server/lock.ts'
-// oxlint-disable-next-line no-restricted-imports -- the project's own server is the one on its default, lock-held home
-import { projectHome } from '../../server/project.ts'
+import { acquireLock, alive } from '../../lib/lock.ts'
+import { projectHome } from '../../lib/project-paths.ts'
 import { exec } from '../../lib/exec.ts'
 import { spawn } from '../../lib/spawn.ts'
 import { readJson, writeJson } from '../../lib/json-file.ts'
@@ -30,12 +29,7 @@ import {
 import type { Config, Overview, Project, Status } from './refs.ts'
 
 export const TOKEN = 'CADDY_DNS_API_TOKEN'
-/** `caddy` in user settings: the setup, and the projects ticked "serve by Caddy" by root, with their HTTPS port. */
 type Settings = Partial<Config> & { serve?: Record<string, { port: number }> }
-/**
- * One routed port (the registry's key): the project's root, its loopback target, and the server that owns the route.
- * A `published` route is another extension's loopback service (`CaddyApi.publish`), kept while its owner runs.
- */
 type Route = { root: string; target: string; owner: string; published?: true }
 type Registry = { routes: Record<string, Route>; token?: string }
 
@@ -43,7 +37,6 @@ const paths = (userHome: string) => {
   const dir = join(userHome, '.ultimate/caddy')
   return {
     dir,
-    // CADDY_COMMAND names another binary; tests point it at a stub.
     binary: process.env.CADDY_COMMAND ?? join(dir, 'caddy'),
     socket: join(dir, 'admin.sock'),
     boot: join(dir, 'admin.caddyfile'),
@@ -65,10 +58,6 @@ const PORT = (value: unknown): value is number =>
 const file = (value: unknown) =>
   typeof value === 'string' && isAbsolute(value) && !/["\\\n\r{}]/.test(value)
 
-/**
- * The setup as Caddy gets it, every value checked where it enters the Caddyfile: settings are a hand-editable file, so
- * a value the panel would refuse fails here too instead of reaching Caddy as a directive.
- */
 export function configOf(settings: Settings): Config {
   const { domain, port = 9443, dns, cert, key } = settings
   const invalid = (field: string) =>
@@ -86,21 +75,13 @@ export function configOf(settings: Settings): Config {
     ...(!dns && cert && key && { cert, key }),
   }
 }
-/** The origin Caddy serves a project on: the domain at the project's port; 443 drops out, as browsers send it. */
 const originOf = (port: number, config: Config) =>
   new URL(`https://${config.domain}:${port}`).origin
 
-/** The admin endpoint, owner-only on a socket so no other user's process can reconfigure Caddy. */
 const globals = (files: Paths) =>
   [`\tadmin "unix/${files.socket}|0600"`, '\tpersist_config off'].join('\n')
 
-/**
- * The whole Caddyfile: one site per routed port on the domain, each proxying to its project. The DNS token is a
- * placeholder Caddy fills from its own environment, so neither this file nor Caddy's loaded config holds it.
- */
 export function caddyfile(config: Config, routes: Record<string, Route>, files: Paths) {
-  // Public resolvers for the challenge: LAN DNS that overrides the domain locally often fails `_acme-challenge` lookups
-  // (SERVFAIL), and Caddy then cannot find the zone to write the TXT record to.
   const tls = config.dns
     ? `\ttls {\n\t\tdns ${config.dns} {env.${TOKEN}}\n\t\tresolvers 1.1.1.1 8.8.8.8\n\t}`
     : `\ttls "${config.cert}" "${config.key}"`
@@ -120,7 +101,6 @@ ${globals(files)}
 ${sites.join('')}`
 }
 
-/** A request to Caddy's admin socket: its status and body. */
 function admin(socket: string, method: string, path: string, body?: string) {
   return new Promise<{ status: number; body: string }>((resolve, reject) => {
     const call = request(
@@ -146,11 +126,9 @@ function admin(socket: string, method: string, path: string, body?: string) {
 const running = (files: Paths) =>
   admin(files.socket, 'GET', '/config/').then(
     (response) => response.status === 200,
-    // No socket, or nothing listening on it: Caddy is not running.
     () => false,
   )
 
-/** The binary's version and whether it carries `dns.providers.<dns>`; undefined when it is missing. */
 async function probe(files: Paths, dns?: string) {
   try {
     await access(files.binary, constants.X_OK)
@@ -163,11 +141,9 @@ async function probe(files: Paths, dns?: string) {
   return { version, module: modules.split('\n').includes(`dns.providers.${dns}`) }
 }
 
-/** Starts Caddy in the background with only its admin socket; `caddy start` returns once it serves. */
 async function start(files: Paths, token: string | undefined) {
   await writeFile(files.boot, `{\n${globals(files)}\n}\n`)
   const child = spawn(files.binary, ['start', '--config', files.boot, '--adapter', 'caddyfile'], {
-    // `caddy run` keeps the stdio it inherits: pipes here would hold it to this process.
     stdio: 'ignore',
     env: { ...process.env, ...(token && { [TOKEN]: token }) },
   })
@@ -181,18 +157,12 @@ async function start(files: Paths, token: string | undefined) {
 const stop = (files: Paths) =>
   admin(files.socket, 'POST', '/stop').then(
     () => undefined,
-    () => {
-      // It may close the socket before answering; the next check finds it stopped either way.
-    },
+    () => {},
   )
 
 const digest = (token: string | undefined) =>
   token ? createHash('sha256').update(token).digest('hex').slice(0, 16) : undefined
 
-/**
- * A route lives while its owner runs and its root is still ticked with that port: unticking frees a port at once, for
- * the next project to take, even before the old server removes its route; a route from before ports matches no port.
- */
 const holds = (port: string, route: Route, settings: Settings) =>
   alive(Number(route.owner.split(':')[0])) &&
   (route.published || String(settings.serve?.[route.root]?.port) === port)
@@ -217,15 +187,10 @@ async function withRegistry<T>(
   }
 }
 
-/**
- * Writes the Caddyfile for `routes` and loads it, starting Caddy when it is not running and restarting it when the
- * token it started with changed. Throws Caddy's own message when it refuses the config.
- */
 async function apply(files: Paths, config: Config, registry: Registry, token: string | undefined) {
   const text = caddyfile(config, registry.routes, files)
   await writeFile(files.caddyfile, text)
   const live = await running(files)
-  // Any change of token, also from none (own certificate) to one, needs a Caddy started with the new environment.
   const hash = digest(token) ?? 'none'
   const stale = live && registry.token !== hash
   if (stale) await stop(files)
@@ -239,17 +204,13 @@ async function apply(files: Paths, config: Config, registry: Registry, token: st
     let message: string | undefined
     try {
       message = (JSON.parse(loaded.body) as { error?: string }).error
-    } catch {
-      // Not Caddy's JSON error: the status below says enough.
+    } catch (error) {
+      overshadowed(error)
     }
     throw new Error(message ?? `Caddy refused the config (${loaded.status})`)
   }
 }
 
-/**
- * Changes `caddy` in user settings under a machine-wide lock: every Ultimate's panel writes it, and settings files
- * serialize writes only within one process.
- */
 async function updateCaddy(
   userHome: string,
   change: (previous: Settings, published: Set<number>) => Settings,
@@ -261,11 +222,6 @@ async function updateCaddy(
   })
 }
 
-/**
- * Runs `use` while holding the machine-wide settings lock: ticking a project and publishing a service both give out
- * ports, so each reads the other's (settings' `serve`, the registry's live published routes) under this one lock.
- * Taken before the registry lock, never inside it.
- */
 async function allocating<T>(userHome: string, use: (published: Set<number>) => Promise<T>) {
   const files = paths(userHome)
   await mkdir(files.dir, { recursive: true, mode: 0o700 })
@@ -281,16 +237,10 @@ async function allocating<T>(userHome: string, use: (published: Set<number>) => 
   }
 }
 
-/** A preview or scratch home: it neither routes through Caddy nor touches the machine's services. */
 const scratch = (host: ExtensionHost) => host.home !== projectHome(host.projectRoot, host.userHome)
 
-/** A project's systemd user service, an instance of `ultimate@.service` (scripts/setup-machine.ts) named after its home. */
 const unitOf = (home: string) => `ultimate@${basename(home)}.service`
 
-/**
- * Each home's service, by home: installed once setup-machine wrote its `service.env` and systemd loads the template,
- * active while systemd runs it. Empty off Linux or without a reachable user systemd, so the panel offers none.
- */
 async function services(homes: string[]): Promise<Map<string, NonNullable<Project['service']>>> {
   if (process.platform !== 'linux' || !homes.length) return new Map()
   const { stdout } = await exec(
@@ -298,7 +248,6 @@ async function services(homes: string[]): Promise<Map<string, NonNullable<Projec
     ['--user', 'show', '-p', 'LoadState,ActiveState', ...homes.map(unitOf)],
     { timeout: 10000 },
   ).catch(() => {
-    // No user systemd (a container, no session bus): there are no services to show.
     return { stdout: '' }
   })
   const blocks = stdout.trim() ? stdout.trim().split('\n\n') : []
@@ -321,7 +270,6 @@ async function services(homes: string[]): Promise<Map<string, NonNullable<Projec
   )
 }
 
-/** The first port from `base` up that no other served project has. */
 function nextPort(base: number, taken: Set<number>) {
   let port = base
   while (taken.has(port)) port++
@@ -333,7 +281,6 @@ const statuses = new WeakMap<ExtensionHost, Status>()
 const retries = new WeakMap<ExtensionHost, () => Promise<void>>()
 export const reloadOnSettings = true
 
-/** The token is declared only while a DNS provider is set; a certificate of your own needs none. */
 export async function secrets(host: ExtensionHost) {
   return (await settingsOf(host.userHome)).dns
     ? [
@@ -359,10 +306,7 @@ export const actions: Record<string, ExtensionAction> = {
     const settings = await settingsOf(host.userHome)
     const config = configOf(settings)
     const [binary, live, token, registry, ports, projects] = await Promise.all([
-      probe(files, config.dns).catch(() => {
-        // A binary that fails to answer shows as not installed; Install replaces it.
-        return undefined
-      }),
+      probe(files, config.dns).catch(meansNone),
       running(files),
       readSecret(host.userHome, TOKEN),
       readJson<Registry>(files.registry, { routes: {} }),
@@ -396,7 +340,6 @@ export const actions: Record<string, ExtensionAction> = {
         const served = settings.serve?.[project.root]?.port
         const port = ports.ports?.[project.root]?.port
         const current = project.current
-        // This server runs whatever its lock says: a preview's home holds none.
         const url = current ? host.system().process.url : project.running?.url
         const service = units.get(project.home)
         return [
@@ -439,7 +382,6 @@ export const actions: Record<string, ExtensionAction> = {
     if (!(await host.projects()).some((project) => project.root === root))
       throw new Error(`No Ultimate project at ${root}`)
     let port: number | undefined
-    // Ports another extension published (CaddyApi) while its server runs are taken too.
     await updateCaddy(host.userHome, (previous, published) => {
       const serve = { ...previous.serve }
       if (on) {
@@ -465,8 +407,6 @@ export const actions: Record<string, ExtensionAction> = {
     const project = (await host.projects()).find((entry) => entry.root === root)
     if (!project) throw new Error(`No Ultimate project at ${root}`)
     if (run === 'install') {
-      // The script writes the template for this clone and node, the project's service.env, and starts it unless the
-      // project runs by hand, which its output then names as the step left to the user.
       const { stdout } = await exec(
         process.execPath,
         [join(host.ultimateRoot, 'scripts/setup-machine.ts'), '--project', root],
@@ -479,7 +419,6 @@ export const actions: Record<string, ExtensionAction> = {
       throw new Error('Stop this Ultimate from another one, or with systemctl.')
     if (run === 'start' && (project.current || project.running))
       throw new Error(`${project.name} already runs; stop it first.`)
-    // --no-block: systemctl returns once the job is queued, so a stop never waits on the server it stops.
     await exec('systemctl', ['--user', run, '--no-block', unitOf(project.home)], {
       timeout: 10000,
     })
@@ -507,9 +446,6 @@ export const actions: Record<string, ExtensionAction> = {
     const temporary = `${files.binary}.${process.pid}.tmp`
     await writeFile(temporary, new Uint8Array(await response.arrayBuffer()))
     await chmod(temporary, 0o755)
-    // Under the registry lock, so no server routes meanwhile: a running Caddy keeps the old binary until it stops, then
-    // the new one starts with every live route, whichever project asked for the install. The setup is read again here,
-    // since it may have changed during the download.
     await withRegistry(files, host.userHome, async (registry) => {
       const current = configOf(await settingsOf(host.userHome))
       if (current.dns !== dns) {
@@ -526,20 +462,16 @@ export const actions: Record<string, ExtensionAction> = {
       if (live && current.domain && (!dns || token)) await apply(files, current, registry, token)
     })
     const version = (await probe(files))?.version ?? 'unknown'
-    // This project's own route, when it waited for a binary; a reloaded facet has already run with the new one.
     await retries.get(host)?.()
     return { version }
   }),
 }
-/** Only the user ticks projects, changes the setup, downloads a binary or starts and stops services. */
 export const userActions = ['configure', 'serve', 'install', 'service']
-/** The panel polls the overview while open. */
 export const pollActions = ['overview', 'status']
 
 export default function caddy(host: ExtensionHost) {
   const files = paths(host.userHome)
   const owner = `${process.pid}:${randomUUID()}`
-  // Only the project's own server, on its default home, is served; previews and scratch homes never are.
   const temporary = scratch(host)
   let status: Status = { state: 'off' }
   let routed: string | undefined
@@ -558,7 +490,6 @@ export default function caddy(host: ExtensionHost) {
     const name = routed
     routed = undefined
     await withRegistry(files, host.userHome, async (registry) => {
-      // Already dropped when another project took the port; Caddy still serves it until this apply.
       if (registry.routes[name]?.owner === owner) delete registry.routes[name]
       if (config.domain && (await running(files))) await apply(files, config, registry, token)
     })
@@ -591,7 +522,6 @@ export default function caddy(host: ExtensionHost) {
           state: 'missing-module',
           hint: `This Caddy lacks caddy-dns/${config.dns}; install it again in Hosting.`,
         })
-      // An entry from before ports (a subdomain) is not served; ticking it again gives it a port.
       if (!PORT(entry.port)) {
         await unroute(config, token)
         return set({ state: 'off', hint: 'Tick this project again in Hosting to give it a port.' })
@@ -610,7 +540,6 @@ export default function caddy(host: ExtensionHost) {
         routed = port
       })
       remove?.()
-      // The listener is loopback-only, so this Host and Origin can only arrive through the local Caddy.
       remove = host.access.allow({ origin: url, verify: () => ({ login: 'reverse-proxy' }) })
       set({ state: 'ready', url })
     } catch (error) {
@@ -621,7 +550,6 @@ export default function caddy(host: ExtensionHost) {
       host.notice(`Caddy: ${status.hint}`)
     }
   }
-  // One run at a time: a retry during a run waits for it.
   function begin() {
     current ??= run().finally(() => (current = undefined))
     return (opening = current)
@@ -641,8 +569,6 @@ export default function caddy(host: ExtensionHost) {
     set({ state: 'off' })
   })
   host.want(TailscaleApi)
-  // A published route belongs to this process, not to this facet's install: it outlives a reload of caddy, and goes
-  // with the process. Its cleanup needs no service, so it runs after every provider is gone at shutdown.
   const ours = (route: Route) => route.owner.split(':')[0] === String(process.pid)
   host.resource('caddy:published', () => {
     host.onClose(async () => {
@@ -670,8 +596,6 @@ export default function caddy(host: ExtensionHost) {
       if (!(await probe(files, config.dns))) return undefined
       const key = String(port)
       await allocating(host.userHome, async () => {
-        // A ticked project keeps its port while it is stopped, so a published service never takes it. Read again under
-        // the lock: a tick meanwhile may have taken it.
         const serve = (await settingsOf(host.userHome)).serve ?? {}
         const reserved = Object.entries(serve).find(([, entry]) => entry.port === port)
         if (reserved) throw new Error(`Port ${port} is served for ${reserved[0]}`)
@@ -700,7 +624,6 @@ export default function caddy(host: ExtensionHost) {
   return defineExtension({ name: 'caddy' })
 }
 
-// Read by tests: the Caddyfile on disk, which never holds the token.
 export const caddyfilePath = (userHome: string) => paths(userHome).caddyfile
 export const readCaddyfile = (userHome: string) =>
   existsSync(caddyfilePath(userHome)) ? readFile(caddyfilePath(userHome), 'utf8') : undefined

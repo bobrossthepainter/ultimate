@@ -1,3 +1,5 @@
+import { every } from '../../lib/timers.ts'
+import { keepLast } from '../../lib/errors.ts'
 import { ExternalLinkIcon, GlobeLockIcon, LoaderCircleIcon, RefreshCwIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -42,13 +44,9 @@ function Heading({ children, meta }: { children: ReactNode; meta?: ReactNode }) 
   )
 }
 
-/**
- * The overview, read on mount, every 5 s while the panel shows (other Ultimates start, stop and register their
- * routes on their own), and when this server's extensions reload after a settings change.
- */
 function useOverview() {
   const system = useSystem()
-  const overview = useAction(OverviewAction, null, { onError: () => {} })
+  const overview = useAction(OverviewAction, null, { onError: keepLast })
   const { refetch } = overview
   const signature = JSON.stringify([
     system?.access.origins,
@@ -58,19 +56,15 @@ function useOverview() {
   useEffect(() => {
     if (signature === seen.current) return
     seen.current = signature
-    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     void refetch()
   }, [signature, refetch])
   useEffect(() => {
-    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
-    const timer = setInterval(() => void refetch(), 5000)
-    return () => clearInterval(timer)
+    return every(5000, () => void refetch())
   }, [refetch])
   useEvent('secrets:changed', () => void refetch())
   return overview
 }
 
-/** Runs `act`, then refetches; shows its failure under the button. */
 function useRun(after: () => Promise<unknown>) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
@@ -89,7 +83,6 @@ function useRun(after: () => Promise<unknown>) {
   return { busy, error, run }
 }
 
-/** Domain, port, and either a DNS provider (with its token in Secrets) or a certificate of your own. */
 function Setup({ data, refetch }: { data: Overview; refetch: () => Promise<unknown> }) {
   const { config } = data
   const [domain, setDomain] = useState(config.domain ?? '')
@@ -238,7 +231,6 @@ function Setup({ data, refetch }: { data: Overview; refetch: () => Promise<unkno
   )
 }
 
-/** The Caddy binary: missing, lacking the provider's module, or installed; one button downloads it. */
 function Binary({ data, refetch }: { data: Overview; refetch: () => Promise<unknown> }) {
   const { caddy, config } = data
   const { busy, error, run } = useRun(refetch)
@@ -282,7 +274,6 @@ function Binary({ data, refetch }: { data: Overview; refetch: () => Promise<unkn
   )
 }
 
-/** Where a row's link goes from this page: Caddy when it serves, else the tailnet from a tailnet page, else loopback. */
 function href(project: Project) {
   if (project.url && project.routed) return project.url
   if (!project.running) return undefined
@@ -307,7 +298,6 @@ function Row({
   const [output, setOutput] = useState<string>()
   const on = !!project.port
   const link = href(project)
-  // Install a missing service, stop one systemd runs or keeps restarting (never this server's own), start a stopped one.
   const act = !project.service
     ? undefined
     : !project.service.installed
@@ -491,12 +481,10 @@ function HostingPanel() {
   )
 }
 
-/** "caddy" in the status line while this Ultimate is ticked: green when served, amber when it needs a fix. */
 function Indicator() {
   const ui = useUltimate()
   const system = useSystem()
-  // Failures show in the panel, not as notices: the status line reads it on every page.
-  const status = useAction(StatusAction, null, { onError: () => {} })
+  const status = useAction(StatusAction, null, { onError: keepLast })
   const { refetch } = status
   const signature = JSON.stringify([
     system?.access.origins,
@@ -507,7 +495,6 @@ function Indicator() {
   useEffect(() => {
     if (signature === seen.current) return
     seen.current = signature
-    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     void refetch()
   }, [signature, refetch])
   const state = status.data?.state

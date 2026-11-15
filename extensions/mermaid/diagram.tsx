@@ -4,7 +4,6 @@ import { Button } from '@/components/ui/button'
 import { cn, errorMessage, useStore } from '@/sdk'
 import { draw } from './ui.tsx'
 
-/** A `mermaid` fence drawn as its diagram, in the theme's colours, with its source a click away. */
 export default function Diagram({ code, core }: { code: string; core: ReactNode }) {
   const theme = useStore((state) => state.ui.theme)
   const id = `mermaid-${useId().replace(/[^a-zA-Z0-9-]/g, '')}`
@@ -45,7 +44,6 @@ export default function Diagram({ code, core }: { code: string; core: ReactNode 
       <div className="w-full rounded-md border bg-terminal p-3">
         <div
           className="flex justify-center [&_svg]:h-auto [&_svg]:max-w-full"
-          // Mermaid's own output at securityLevel strict, sanitised by its DOMPurify pass.
           dangerouslySetInnerHTML={{ __html: result.svg }}
         />
       </div>

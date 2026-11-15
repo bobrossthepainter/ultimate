@@ -1,5 +1,6 @@
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { LoaderIcon, MessagesSquareIcon, RotateCwIcon, XIcon } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useEffectEvent, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   api,
@@ -12,19 +13,17 @@ import {
 } from '@/sdk'
 import { ChatAction, ChatDoc } from './refs.ts'
 
-/** Whether the branch's chat is working, for the header button's dot while the panel is closed. */
-export function useChatBusy(branch: number) {
+export function useChatBusy(branch: ConversationId) {
   const chat = useDocOf(branch, ChatDoc)
   return useConversationSummary(chat?.id)?.busy ?? false
 }
 
-/** The header button that opens and closes the architecture chat. */
 export function DiscussButton({
   branch,
   open,
   onToggle,
 }: {
-  branch: number
+  branch: ConversationId
   open: boolean
   onToggle: () => void
 }) {
@@ -48,18 +47,13 @@ export function DiscussButton({
   )
 }
 
-/**
- * The architecture chat beside the diagrams: a copy of the branch's architect at its latest answer, made on first open.
- * It answers questions, sketches alternatives, and suggests comments into the pending list of the version it was opened
- * at. A newer version offers a new chat on it.
- */
 export function ChatPanel({
   branch,
   latest,
   phone,
   onClose,
 }: {
-  branch: number
+  branch: ConversationId
   latest: number
   phone: boolean
   onClose: () => void
@@ -75,12 +69,10 @@ export function ChatPanel({
       .catch((failure: unknown) => setError(errorMessage(failure)))
       .finally(() => setStarting(false))
   }
-  // Made lazily: the first open asks for it, once the branch's document has said there is none.
   const missing = chat !== undefined && chat?.id === undefined
+  const startMissingChat = useEffectEvent(() => start(false))
   useEffect(() => {
-    if (missing) start(false)
-    // `start` is a new function each render; only a missing chat calls it.
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
+    if (missing) startMissingChat()
   }, [missing, branch])
   const stale = chat?.version !== undefined && chat.version < latest
   return (
@@ -154,7 +146,6 @@ export function ChatPanel({
   )
 }
 
-/** What the chat knows and can do, above its transcript. */
 function Intro({ version }: { version?: number }) {
   return (
     <p className="shrink-0 border-b border-border/40 px-3 py-2 text-[12px] leading-snug text-muted-foreground">
