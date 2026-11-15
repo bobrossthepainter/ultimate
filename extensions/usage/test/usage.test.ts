@@ -5,7 +5,7 @@ import { UsageDoc } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryId, Tx } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import usage, { actions, spokeReport } from '../server.ts'
-import { merge } from '../aggregate.ts'
+import { createCallLog, merge } from '../aggregate.ts'
 import type { Started } from '../aggregate.ts'
 import type { Report } from '../refs.ts'
 import type { ExtensionHost } from '../../../server/extensions.ts'
@@ -224,6 +224,25 @@ describe('usage report', () => {
   })
 })
 
+describe('call log', () => {
+  it('keeps a failed zero-token response from hiding the rebuild after it, when calls arrive one by one', () => {
+    const id = 7 as ConversationId
+    const entry = (n: number, message: AssistantMessage) =>
+      ({ id: n as EntryId, conversationId: id, kind: 'pi.assistant', model: [message] }) as const
+    const log = createCallLog()
+    log.add(id, [
+      entry(1, call(START, { input: 10, output: 10, cacheRead: 0, cacheWrite: 80_000 })),
+    ])
+    log.add(id, [
+      entry(2, call(START + 60_000, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })),
+    ])
+    log.add(id, [
+      entry(3, call(START + 2 * HOUR, { input: 10, output: 10, cacheRead: 0, cacheWrite: 80_000 })),
+    ])
+    expect(log.calls.map((item) => item.rebuild?.cause)).toEqual([undefined, undefined, 'expired'])
+  })
+})
+
 describe('spokes', () => {
   const target = {
     url: 'http://127.0.0.1:1',
@@ -247,12 +266,16 @@ describe('spokes', () => {
       if (extension === 'usage') throw new Error('my-app on laptop: Unknown extension action')
       const { op, args: readArgs } = args as { op: string; args: unknown[] }
       if (op === 'conversations') return [{ id: 1 }, { id: 2 }]
-      return { models: { 'openai/gpt': bucket(readArgs[1] === 1 ? 1 : 2) }, tools: {} }
+      return {
+        models: { 'openai/gpt': bucket(readArgs[1] === 1 ? 1 : 2) },
+        tools: readArgs[1] === 2 ? { web_search: bucket(0.25) } : {},
+      }
     })
     expect(report.fallback).toBe(true)
     expect(report.instance).toEqual({ project: 'my-app', machine: 'laptop' })
     expect(report.byModel['openai/gpt'].cost.input).toBe(3)
     expect(report.total.tokens.cacheWrite).toBe(8)
+    expect(report.undated).toEqual({ cost: 0.25, tokens: 10 })
     expect(asked[0]).toBe('usage/report')
   })
 

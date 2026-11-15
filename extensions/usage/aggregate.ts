@@ -1,7 +1,7 @@
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
-import { cacheBusts } from '../../lib/context-usage.ts'
+import { cacheBusts, promptTokens } from '../../lib/context-usage.ts'
 import type { Bucket, Kinds, RebuildCause, Report } from './refs.ts'
 
 export type Call = {
@@ -92,7 +92,10 @@ export function createCallLog() {
           }),
         })
       }
-      const lastAssistant = window.findLastIndex((entry) => assistant(entry) !== undefined)
+      const lastAssistant = window.findLastIndex((entry) => {
+        const message = assistant(entry)
+        return message !== undefined && promptTokens(message.usage) > 0
+      })
       conversations.set(conversation, {
         tail: lastAssistant < 0 ? window : window.slice(lastAssistant),
         last: newest,
@@ -160,8 +163,6 @@ const day = (at: number) => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
-const BRANCHES = 40
-
 export function merge(reports: readonly Report[], instance: Report['instance']): Report {
   const merged: Report = {
     instance,
@@ -210,9 +211,7 @@ export function merge(reports: readonly Report[], instance: Report['instance']):
     merged.undated.tokens += report.undated.tokens
   }
   merged.daily = [...days.values()].toSorted((a, b) => a.day.localeCompare(b.day))
-  merged.branches = merged.branches
-    .toSorted((a, b) => sum(b.total.cost) - sum(a.total.cost))
-    .slice(0, BRANCHES)
+  merged.branches = merged.branches.toSorted((a, b) => sum(b.total.cost) - sum(a.total.cost))
   return merged
 }
 
@@ -284,7 +283,6 @@ export function summarize(
     byModel,
     branches: [...branches]
       .toSorted(([, a], [, b]) => sum(b.total.cost) - sum(a.total.cost))
-      .slice(0, BRANCHES)
       .map(([id, branch]) => {
         const title = options.title(id)
         return { id, ...(title !== undefined && { title }), ...branch }

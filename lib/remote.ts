@@ -110,21 +110,36 @@ export async function reachable(host: ExtensionHost) {
     seen.add(key)
     spokes.push({ project, ...(machine !== undefined && { machine }), label })
   }
-  const projects = await host.projects()
-  for (const item of projects) if (item.current) seen.add(`${item.name.toLowerCase()}@${here}`)
+  const projects = await Promise.all(
+    (await host.projects()).map(async (item) => ({
+      ...item,
+      key: item.root ? (await projectIdentity(item.root))?.key : undefined,
+    })),
+  )
   for (const item of projects)
-    if (!item.current && item.running) add(item.name, undefined, `${item.name} on this machine`)
+    if (item.current) seen.add(`${(item.key ?? item.name).toLowerCase()}@${here}`)
+  for (const item of projects)
+    if (!item.current && item.running)
+      add(item.key ?? item.name, undefined, `${item.name} on this machine`)
   for (const item of await userConfiguredRemotes(host))
     add(item.name, item.machine, `${item.name} on ${item.machine}`)
   const cloud = await cloudConfig(host)
   if (cloud)
     try {
       const register = await fetchRegister(cloud)
+      for (const entry of register.projects)
+        if (entry.latest.tailnet && entry.latest.machine !== here)
+          add(entry.key, entry.latest.machine, `${entry.name} on ${entry.latest.machine}`)
+      const keys = new Map(register.projects.map((entry) => [entry.hash, entry.key]))
       for (const machine of register.machines)
         if (machine.machine !== here)
-          for (const project of Object.values(machine.projects))
+          for (const [hash, project] of Object.entries(machine.projects))
             if (project.tailnet)
-              add(project.name, machine.machine, `${project.name} on ${machine.machine}`)
+              add(
+                keys.get(hash) ?? project.name,
+                machine.machine,
+                `${project.name} on ${machine.machine}`,
+              )
     } catch (error) {
       errors.push(`cloud register: ${String(error)}`)
     }

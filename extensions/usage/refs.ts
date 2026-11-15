@@ -43,7 +43,7 @@ export type Report = {
   byRole: Record<string, Bucket & { rebuilds: number; rebuildCost: number }>
   /** By `provider/model`; `subscription` when this instance reaches that provider through a plan, not per token. */
   byModel: Record<string, Bucket & { subscription: boolean }>
-  /** The 40 costliest top-level conversations (branches, standing agents) with their subagents, and each role's cost in it. */
+  /** Every top-level conversation (branch, standing agent) with its subagents, costliest first, and each role's cost in it. */
   branches: {
     id: ConversationId
     title?: string

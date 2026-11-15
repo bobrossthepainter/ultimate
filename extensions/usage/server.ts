@@ -159,7 +159,11 @@ export function fallbackFromUsage(
 ): Report {
   const total = emptyBucket()
   const byModel: Report['byModel'] = {}
-  for (const state of usages)
+  const undated = { cost: 0, tokens: 0 }
+  for (const state of usages) {
+    const tools = usageSpend({ models: {}, tools: state.tools })
+    undated.cost += tools.cost
+    undated.tokens += tools.tokens
     for (const [model, bucket] of Object.entries(state.models)) {
       const one = {
         calls: 0,
@@ -179,6 +183,7 @@ export function fallbackFromUsage(
       addBucket((byModel[model] ??= { ...emptyBucket(), subscription: false }), one)
       addBucket(total, one)
     }
+  }
   return {
     instance,
     generatedAt: Date.now(),
@@ -188,7 +193,7 @@ export function fallbackFromUsage(
     byModel,
     branches: [],
     rebuilds: { count: 0, cost: 0, byCause: {} },
-    undated: { cost: 0, tokens: 0 },
+    undated,
     fallback: true,
   }
 }
