@@ -10,6 +10,8 @@ import { definePoint } from '@/sdk'
 export const UnderUltimate = definePoint<ConversationId | undefined, ReactNode>(
   'sidebar.under-ultimate',
 )
+/** Rows nested under an in-flight branch's row (`side-chat` lists its open side chats). Input is the branch's id. */
+export const UnderBranch = definePoint<ConversationId, ReactNode>('sidebar.under-branch')
 /**
  * Top-level conversations no section lists (`side-chat` names its side chats, open or ended, `voice-live` the Voice
  * conversation; both nest under @ultimate instead); several extensions may provide it and the sidebar takes the union.

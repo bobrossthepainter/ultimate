@@ -14,6 +14,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { Standing } from '../subagents/api.ts'
+import { Branch } from '../lineage/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
 import { DiscardAction, InjectAction, OpenAction, SideChatDoc, SideChatsDoc } from './refs.ts'
@@ -52,58 +53,41 @@ export const userActions = ['open', 'discard', 'inject']
 const terminal = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
 const crashSafeSummaryWriteRequest = (side: ConversationId) => `sidechat:summary:${side}`
 
-async function lastSettledInputAnswer(host: ExtensionHost, main: ConversationId): Promise<EntryId> {
+export async function newestClosedRound(tx: Tx, main: ConversationId): Promise<EntryId> {
+  const results = new Set<string>()
+  let newest: EntryId | undefined
+  let skipOpenRound = false
   let cursor: Cursor | undefined
-  let answer: EntryId | undefined
   do {
-    const page = await host.scanSubmissions(
-      { conversationId: main, status: 'done' },
-      100,
-      cursor,
-      context,
-    )
-    for (const input of page.items)
-      if (
-        input.type === 'input' &&
-        input.status === 'done' &&
-        (answer === undefined || input.answer > answer)
+    const page = await tx.scanEntries({ conversationId: main, order: 'descending' }, 100, cursor)
+    for (const entry of page.items) {
+      if (skipOpenRound) return entry.id
+      newest ??= entry.id
+      const messages = entry.model ?? []
+      for (const message of messages)
+        if (message.role === 'toolResult') results.add(message.toolCallId)
+      const calls = messages.flatMap((message) =>
+        message.role === 'assistant'
+          ? message.content.flatMap((part) => (part.type === 'toolCall' ? [part.id] : []))
+          : [],
       )
-        answer = input.answer
-    cursor = page.next
-  } while (cursor)
-  if (answer === undefined) throw new Error('@ultimate has no finished turn to fork yet')
-  return answer
-}
-
-async function answerIncludingClosingToolResults(
-  tx: Tx,
-  main: ConversationId,
-  answer: EntryId,
-): Promise<EntryId> {
-  const entry = (await tx.entry(answer))!
-  const pending = new Set(
-    entry.model?.flatMap((message) =>
-      message.role === 'assistant'
-        ? message.content.flatMap((part) => (part.type === 'toolCall' ? [part.id] : []))
-        : [],
-    ) ?? [],
-  )
-  if (!pending.size) return answer
-  let cursor: Cursor | undefined
-  do {
-    const page = await tx.scanEntries(
-      { conversationId: main, minEntryId: answer, order: 'ascending' },
-      100,
-      cursor,
-    )
-    for (const result of page.items) {
-      for (const message of result.model ?? [])
-        if (message.role === 'toolResult') pending.delete(message.toolCallId)
-      if (!pending.size) return result.id
+      if (!calls.length) continue
+      if (calls.every((call) => results.has(call))) return newest
+      skipOpenRound = true
     }
     cursor = page.next
   } while (cursor)
-  throw new Error(`Finished answer #${main}/${answer} is missing its tool results`)
+  if (newest === undefined || skipOpenRound) throw new Error(`#${main} has nothing to fork yet`)
+  return newest
+}
+
+export function blockedInReadOnlySideChat(name: string, args: Record<string, unknown>) {
+  if (tracksEffect(name, args)) return true
+  if (['subagent', 'goal', 'ultimate.action', 'ultimate.tell'].includes(name)) return true
+  if (name === 'plan') return args.action !== 'show'
+  if (name === 'workspace') return args.action !== 'status'
+  if (name === 'instance') return !['list', 'logs'].includes(String(args.action))
+  return false
 }
 
 function sideId(args: unknown): ConversationId {
@@ -310,19 +294,22 @@ export const actions = {
   open: implementAction(OpenAction, async (args, { host, conversationId }) => {
     const text = args && typeof args === 'object' && !Array.isArray(args) ? args.text : undefined
     if (typeof text !== 'string' || !text.trim()) throw new Error('Expected nonempty text')
-    if (conversationId === undefined) throw new Error('Open a side chat from @ultimate')
+    if (conversationId === undefined) throw new Error('Open a side chat from @ultimate or a branch')
     const main = conversationId
-    await host.harness().commit(async (tx) => {
+    const id = await host.harness().commit(async (tx) => {
       if ((await tx.doc(Side, main)).of !== undefined)
         throw new Error('A side chat cannot open another side chat')
-      if ((await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate !== main)
-        throw new Error('Only @ultimate can open a side chat')
-    }, context)
-    const answer = await lastSettledInputAnswer(host, main)
-    const id = await host.harness().commit(async (tx) => {
-      const at = await answerIncludingClosingToolResults(tx, main, answer)
+      const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate === main
+      const branch = !(await tx.conversation(main))?.owner && !!(await tx.doc(Branch, main)).branch
+      if (!ultimate && !branch) throw new Error('Open a side chat from @ultimate or a branch')
+      const at = await newestClosedRound(tx, main)
       const fork = await tx.forkConversation(main, at, { ownership: { kind: 'ownerless' } })
-      Object.assign(await tx.doc(Side, fork.id), { of: main, at, effects: false })
+      Object.assign(await tx.doc(Side, fork.id), {
+        of: main,
+        at,
+        effects: false,
+        ...(branch ? { readOnly: true } : {}),
+      })
       Object.assign(await tx.doc(host.metadata, fork.id), {
         title: 'Side chat',
         label: 'side-chat',
@@ -359,7 +346,15 @@ export function tracksEffect(name: string, args: Record<string, unknown>) {
   ].includes(name)
 }
 
-export function sideReminder(side: ConversationId, main: number, at: Date) {
+export function sideReminder(side: ConversationId, main: number, at: Date, readOnly: boolean) {
+  const time = at.toTimeString().slice(0, 5)
+  if (readOnly)
+    return [
+      `You are in a side chat (#${side}): a read-only temporary copy of branch #${main}, forked at ${time}. The branch keeps running without you, in the same checkout.`,
+      'The user asks questions here while the branch works. Answer here, in place, from what you know and what you can read.',
+      'Never change files or state: no edit or write, and no command that writes (git checkout, commit, stash, reset, installs, formatters, builds into the checkout). Tools with effects (edit, write, branch, subagent, message, note, notify, remember, plan or workspace changes, automation changes) are refused.',
+      'When the user is done, they choose Discard or Summarize & inject, which leaves the branch a summary to read. There is no side chat inside a side chat.',
+    ].join('\n')
   return [
     `You are in a side chat (#${side}): a temporary copy of @ultimate (#${main}), forked at ${at.toTimeString().slice(0, 5)}. Main keeps running without you.`,
     'It is for quick lookups and small side tasks. Answer here, in place.',
@@ -388,7 +383,7 @@ export default (host: ExtensionHost) =>
                 model: [
                   {
                     role: 'user',
-                    content: sideReminder(conversationId, side.of, new Date()),
+                    content: sideReminder(conversationId, side.of, new Date(), !!side.readOnly),
                     timestamp: Date.now(),
                   },
                 ],
@@ -404,6 +399,10 @@ export default (host: ExtensionHost) =>
             if (side.of === undefined) return undefined
             if (side.ended || (await tx.doc(Ending, api.conversationId)).mode)
               return { block: 'This side chat has ended' }
+            if (side.readOnly && blockedInReadOnlySideChat(call.name, call.arguments))
+              return {
+                block: `A side chat of a branch is read-only: ${call.name} is refused. Answer the user here instead.`,
+              }
             const attemptedPersistentEffect = tracksEffect(call.name, call.arguments)
             if (attemptedPersistentEffect) side.effects = true
             return undefined

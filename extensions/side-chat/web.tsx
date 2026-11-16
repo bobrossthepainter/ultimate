@@ -29,6 +29,7 @@ import {
   provide,
   useConversation,
   useConversations,
+  useConversationSummary,
   useDoc,
   useDocOf,
   useUltimate,
@@ -36,7 +37,7 @@ import {
 } from '@/sdk'
 import type { ComposerTarget } from '@/sdk'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
-import { UnderUltimate, Unlisted } from '../sidebar/ui.tsx'
+import { UnderBranch, UnderUltimate, Unlisted } from '../sidebar/ui.tsx'
 import { createEndings, endings, frontSide, openSides, togglesSideMode } from './logic.ts'
 import { DiscardAction, InjectAction, OpenAction, SideChatDoc, SideChatsDoc } from './refs.ts'
 import { SideChatSummaryEntry } from './entries.ts'
@@ -60,21 +61,35 @@ const useSideMode = () =>
 
 const sideEndings = createEndings(errorMessage)
 
-function useMain() {
-  const main = useDocOf(ROOT, StandingDoc)?.ultimate
-  const index = useDocOf(main, SideChatsDoc) ?? undefined
-  return { main, index }
+function useMainName(id: ConversationId | undefined) {
+  const ultimate = useDocOf(ROOT, StandingDoc)?.ultimate
+  const summary = useConversationSummary(id)
+  if (id === undefined) return undefined
+  if (id === ultimate) return '@ultimate'
+  if (summary?.label === 'coordinator' && summary.ownerTaskId === undefined)
+    return `#${id}${summary.title ? ` · ${summary.title}` : ''}`
+  return undefined
 }
+
+function useMain() {
+  const id = useConversation((conversation) => conversation.id)
+  const name = useMainName(id)
+  const main = name === undefined ? undefined : id
+  const index = useDocOf(main, SideChatsDoc) ?? undefined
+  return { main, name, index }
+}
+
+const shortName = (name: string) => (name === '@ultimate' ? name : 'the branch')
 
 const ease = 'cubic-bezier(0.2, 0.8, 0.2, 1)'
 const sheetTransitionMs = 420
 const unmountAfterExitPaddingMs = 60
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
-function ModeSwitch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+function ModeSwitch({ on, name, onToggle }: { on: boolean; name: string; onToggle: () => void }) {
   return (
     <button
-      aria-label={`Composer sends to ${on ? 'a new side chat' : '@ultimate'} · Tab switches`}
+      aria-label={`Composer sends to ${on ? 'a new side chat' : name} · Tab switches`}
       aria-pressed={on}
       data-ui="side-chat-switch"
       className="relative flex h-5 cursor-pointer items-center rounded-full bg-muted/60 p-0.5 font-mono text-[10.5px] outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -111,16 +126,15 @@ function ModeSwitch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
 }
 
 function StableComposerFrame({ core, dock }: { core: ReactNode; dock?: boolean }) {
-  const id = useConversation((conversation) => conversation.id)
-  const { main, index } = useMain()
-  const active = id !== undefined && id === main && !dock
+  const { main, name = '@ultimate', index } = useMain()
+  const active = main !== undefined && !dock
   const on = useSideMode() && active
   const [front, setFront] = useFront()
   const sideCoveringMainComposer = active ? frontSide(front, index) : undefined
   const parked = openSides(index).filter((item) => item.id !== sideCoveringMainComposer?.id)
   const target: ComposerTarget | undefined = on
     ? {
-        placeholder: 'Ask on the side — @ultimate keeps running…',
+        placeholder: `Ask on the side — ${shortName(name)} keeps running…`,
         send: async (text) => {
           const opened = await api.action(OpenAction, { text }, { conversationId: main })
           setSide(false)
@@ -132,7 +146,7 @@ function StableComposerFrame({ core, dock }: { core: ReactNode; dock?: boolean }
     if (!active || !(event.target instanceof HTMLTextAreaElement)) return
     const popup = event.target.getAttribute('aria-expanded') === 'true'
     const key = { ...event, isComposing: event.nativeEvent.isComposing }
-    if (!togglesSideMode(key, { conversation: id, ultimate: main, popup })) return
+    if (!togglesSideMode(key, { forkable: active, popup })) return
     event.preventDefault()
     setSide(!on)
   }
@@ -168,8 +182,8 @@ function StableComposerFrame({ core, dock }: { core: ReactNode; dock?: boolean }
               <span className="truncate pointer-coarse:hidden">
                 {on ? (
                   <>
-                    <span className="text-brand">↵</span> forks @ultimate · <Kbd>Tab</Kbd> back to
-                    normal
+                    <span className="text-brand">↵</span> forks {shortName(name)} · <Kbd>Tab</Kbd>{' '}
+                    back to normal
                   </>
                 ) : (
                   <>
@@ -179,7 +193,7 @@ function StableComposerFrame({ core, dock }: { core: ReactNode; dock?: boolean }
               </span>
             )}
           </div>
-          <ModeSwitch on={on} onToggle={() => setSide(!on)} />
+          <ModeSwitch name={name} on={on} onToggle={() => setSide(!on)} />
         </div>
         <div
           className={cn(
@@ -221,13 +235,12 @@ function MainBlocked({ onBack }: { onBack: () => void }) {
 }
 
 function Stage() {
-  const id = useConversation((conversation) => conversation.id)
-  const { main, index } = useMain()
+  const { main, name = '@ultimate', index } = useMain()
   const [front, setFront] = useFront()
   const phone = useViewport() === 'phone'
   const ref = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
-  const isMain = id !== undefined && id === main
+  const isMain = main !== undefined
   const current = isMain ? frontSide(front, index) : undefined
   const [mountedThroughExit, setShown] = useState<ConversationId>()
   if (current && mountedThroughExit !== current.id) setShown(current.id)
@@ -295,7 +308,7 @@ function Stage() {
           type="button"
         >
           <span className="size-1.5 rounded-full bg-brand motion-safe:animate-pulse" />
-          @ultimate keeps working · <span className="text-foreground">show main</span>
+          {shortName(name)} keeps working · <span className="text-foreground">show main</span>
         </button>
       )}
       {mountedThroughExit !== undefined && (
@@ -323,6 +336,7 @@ function Stage() {
             <SidePane
               front={inFront}
               index={index}
+              name={name}
               onPark={() => setFront(null)}
               phone={phone}
               side={mountedThroughExit}
@@ -337,12 +351,14 @@ function Stage() {
 function SidePane({
   side,
   index,
+  name,
   front,
   phone,
   onPark,
 }: {
   side: number
   index?: SideChatIndex
+  name: string
   front: boolean
   phone: boolean
   onPark: () => void
@@ -365,7 +381,7 @@ function SidePane({
         <GitForkIcon className="size-3.5 text-brand" />
         <span className="text-[13px] font-semibold">Side chat</span>
         <span className="truncate font-mono text-[11px] text-muted-foreground">
-          temporary copy of @ultimate
+          {state?.readOnly ? 'read-only copy of' : 'temporary copy of'} {name}
         </span>
         <button
           aria-label="Back to main, keep the side chat"
@@ -377,7 +393,7 @@ function SidePane({
           <MinimizeIcon className="size-3.5" />
         </button>
       </header>
-      {openedAt !== undefined && <Cut at={openedAt} />}
+      {openedAt !== undefined && <Cut at={openedAt} name={name} />}
       <Conversation variant={phone ? 'dock' : 'main'} />
       <footer
         className={cn('shrink-0 border-t border-border/60 py-2', phone ? 'px-3' : 'px-5')}
@@ -438,7 +454,7 @@ function SidePane({
   )
 }
 
-function Cut({ at }: { at: number }) {
+function Cut({ at, name }: { at: number; name: string }) {
   return (
     <div
       className="flex shrink-0 items-center gap-3 px-5 pt-3 font-mono text-[11px] text-muted-foreground"
@@ -447,7 +463,7 @@ function Cut({ at }: { at: number }) {
       <span className="h-px flex-1 border-t border-dashed border-border" />
       <span className="flex shrink-0 items-center gap-1.5">
         <GitForkIcon className="size-3 text-brand" />
-        forked from @ultimate at {formatTime(at)}
+        forked from {name} at {formatTime(at)}
         <span className="max-sm:hidden">· knows everything up to here</span>
       </span>
       <span className="h-px flex-1 border-t border-dashed border-border" />
@@ -490,6 +506,16 @@ const SummaryCard = renderEntry(SideChatSummaryEntry, function SummaryCard({ ent
 })
 
 function useSideRows(main: ConversationId | undefined): ReactNode {
+  const actions = useUltimate()
+  return useRows(main, () => talkToUltimate(actions))
+}
+
+function useBranchSideRows(branch: ConversationId): ReactNode {
+  const actions = useUltimate()
+  return useRows(branch, () => actions.switchConversation(branch))
+}
+
+function useRows(main: ConversationId | undefined, showMain: () => unknown): ReactNode {
   const index = useDocOf(main, SideChatsDoc) ?? undefined
   const [front, setFront] = useFront()
   const actions = useUltimate()
@@ -514,7 +540,7 @@ function useSideRows(main: ConversationId | undefined): ReactNode {
               if (inFront) return setFront(null)
               setFront(item.id)
               if (actions.conversationId === main) return
-              void talkToUltimate(actions)
+              void showMain()
             }}
             type="button"
           >
@@ -537,14 +563,22 @@ function useSideRows(main: ConversationId | undefined): ReactNode {
   )
 }
 
-function useSideIds(main: ConversationId | undefined): ReadonlySet<number> {
-  const sides = (useDocOf(main, SideChatsDoc) ?? undefined)?.sides
-  return useMemo(() => new Set(sides?.map((side) => side.id)), [sides])
+function useSideIds(): ReadonlySet<number> {
+  const conversations = useConversations()
+  const ids = conversations.flatMap((conversation) =>
+    conversation.label === 'side-chat' ? [conversation.id] : [],
+  )
+  const key = ids.join()
+  return useMemo(() => new Set(key ? key.split(',').map(Number) : []), [key])
 }
 
 export default defineWebExtension({
   composer: StableComposerFrame,
   slots: { 'conversation.overlay': [Stage] },
   entries: { 'sidechat.summary': SummaryCard },
-  provides: [provide(UnderUltimate, useSideRows), provide(Unlisted, useSideIds)],
+  provides: [
+    provide(UnderUltimate, useSideRows),
+    provide(UnderBranch, useBranchSideRows),
+    provide(Unlisted, useSideIds),
+  ],
 })

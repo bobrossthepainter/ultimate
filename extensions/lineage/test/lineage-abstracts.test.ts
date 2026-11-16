@@ -24,7 +24,7 @@ it.concurrent('updates an open abstract in place and freezes it into a landing',
   server.host.registry.install(defineExtension({ name: 'lineage-test', tasks: [anchor] }))
   const lineage = {
     branchOf: (id: number, ctx: typeof context) =>
-      branchOf({ harness: () => server.harness }, id as ConversationId, ctx),
+      branchOf({ harness: () => server.harness, doc: () => undefined }, id as ConversationId, ctx),
     abstract,
   }
   const first = await branchFrom(server, { from: 1, prompt: 'Abstract me' })
@@ -232,7 +232,11 @@ it.concurrent('summarizes a branch into its title and its abstract in the tree r
                   rootOf: (id: number, ctx: typeof context) =>
                     rootOf({ harness: () => server.harness }, id as ConversationId, ctx),
                   branchOf: (id: number, ctx: typeof context) =>
-                    branchOf({ harness: () => server.harness }, id as ConversationId, ctx),
+                    branchOf(
+                      { harness: () => server.harness, doc: () => undefined },
+                      id as ConversationId,
+                      ctx,
+                    ),
                   abstract,
                 } satisfies TreesService)
               : undefined) as NonNullable<SummaryHost['want']>,

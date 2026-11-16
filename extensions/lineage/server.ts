@@ -36,7 +36,7 @@ import {
   UsageDoc,
 } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
-import { actingAs } from '../../lib/acting-as.ts'
+import { actingAs, isSideChat } from '../../lib/acting-as.ts'
 import type { ActionInput } from '../../lib/actions.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -254,12 +254,18 @@ async function unownedRootBeforeWrites(
 }
 
 export async function branchOf(
-  host: Pick<ExtensionHost, 'harness'>,
+  host: Pick<ExtensionHost, 'harness' | 'doc'>,
   id: ConversationId,
   ctx: Context,
 ) {
   const roots = await rootsOf(host, ctx)
-  const root = await host.harness().commit((tx) => unownedRootBeforeWrites(tx, id, roots), ctx)
+  const root = await host
+    .harness()
+    .commit(
+      async (tx) =>
+        (await isSideChat(host, tx, id)) ? undefined : unownedRootBeforeWrites(tx, id, roots),
+      ctx,
+    )
   if (root === undefined) return undefined
   const intent = (await host.harness().snapshot(Branch, id, ctx))?.branch?.intent
   return { root, ...(intent ? { intent } : {}) }
@@ -1347,6 +1353,7 @@ export default function lineageExtension(host: ExtensionHost) {
       hook(GenerationTask, {
         beforeInput: async (input, api, ctx) => {
           await refuseTally(api.tx, api.conversationId)
+          if (await isSideChat(host, api.tx, api.conversationId)) return undefined
           return catchup(host, input, api, ctx, treeOf)
         },
       }),

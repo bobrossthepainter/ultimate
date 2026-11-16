@@ -11,9 +11,9 @@ const tab = {
   metaKey: false,
   isComposing: false,
 }
-const atUltimate = { conversation: 44 as ConversationId, ultimate: 44, popup: false }
+const atUltimate = { forkable: true, popup: false }
 
-it('toggles side chat mode on a bare Tab in @ultimate’s composer only', () => {
+it('toggles side chat mode on a bare Tab in a forkable composer only', () => {
   expect(togglesSideMode(tab, atUltimate)).toBe(true)
   // Shift+Tab stays the thinking level; other chords and IME composition keep their meaning.
   expect(togglesSideMode({ ...tab, shiftKey: true }, atUltimate)).toBe(false)
@@ -22,11 +22,8 @@ it('toggles side chat mode on a bare Tab in @ultimate’s composer only', () => 
   expect(togglesSideMode({ ...tab, key: 'Enter' }, atUltimate)).toBe(false)
   // An open autocomplete or mention popup owns Tab.
   expect(togglesSideMode(tab, { ...atUltimate, popup: true })).toBe(false)
-  // A side chat's composer, or any other conversation's, has no side mode: one level only.
-  expect(togglesSideMode(tab, { ...atUltimate, conversation: 82 as ConversationId })).toBe(false)
-  expect(
-    togglesSideMode(tab, { conversation: 44 as ConversationId, ultimate: undefined, popup: false }),
-  ).toBe(false)
+  // A side chat's composer, or a subagent's, has no side mode: one level only.
+  expect(togglesSideMode(tab, { ...atUltimate, forkable: false })).toBe(false)
 })
 
 it('keeps only open side chats in front and in the sidebar', () => {

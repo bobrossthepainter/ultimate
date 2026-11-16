@@ -16,12 +16,12 @@ import {
 } from '@earendil-works/pi-durable'
 import { context } from '../../../server/harness.ts'
 import { Messages } from '../../messages/api.ts'
-import { branchOf, rootOf } from '../../lineage/server.ts'
+import { abstract, branchOf, rootOf } from '../../lineage/server.ts'
 import { Branch } from '../../lineage/api.ts'
 import { Automations } from '../../automations/server.ts'
-import { Index, Side, tracksEffect } from '../server.ts'
+import { blockedInReadOnlySideChat, Index, Side, tracksEffect } from '../server.ts'
 import type { endTask } from '../server.ts'
-import { fauxServer, post, sourceCopy, temp, until } from '../../../test/helpers.ts'
+import { fauxServer, post, seedTally, sourceCopy, temp, until } from '../../../test/helpers.ts'
 
 let ultimateRoot: string
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
@@ -145,7 +145,7 @@ async function entries(server: Awaited<ReturnType<typeof fauxServer>>, id: numbe
 }
 
 describe('side chats', () => {
-  it('forks the last completed run while main is busy, preserves the entire prompt including codemode and all tools, and stays outside lineage', async () => {
+  it('forks before the open tool round while main is busy, preserves the entire prompt including codemode and all tools, and stays outside lineage', async () => {
     const f = await fixture()
     const mainBefore = f.requests.at(-1)!
     const finished = (await entries(f.server, f.main)).at(-1)!.id
@@ -183,7 +183,11 @@ describe('side chats', () => {
     )
     const side = await f.open()
     const doc = await f.server.harness.snapshot(Side, side, context)
-    expect(doc).toEqual({ of: f.main, at: finished, effects: false })
+    const beforeOpenRound = (await entries(f.server, f.main)).findLast(
+      (entry) => entry.id < unfinished.id,
+    )!.id
+    expect(beforeOpenRound).toBeGreaterThanOrEqual(finished)
+    expect(doc).toEqual({ of: f.main, at: beforeOpenRound, effects: false })
     const fork = (await f.server.harness.conversation(side, context))!
     const sideEntries = await entries(f.server, side)
     expect(sideEntries.some((entry) => entry.id === unfinished.id)).toBe(false)
@@ -207,7 +211,7 @@ describe('side chats', () => {
       ),
     )
     expect((await f.server.harness.snapshot(AgentDoc, side, context))!.tools).toContain('compact')
-    const host = { harness: () => f.server.harness }
+    const host = { harness: () => f.server.harness, doc: () => Side }
     expect(await branchOf(host, side, context)).toBeUndefined()
     expect(await rootOf(host, side, context)).toBeUndefined()
     expect((await f.server.harness.snapshot(Branch, side, context))?.branch).toBeUndefined()
@@ -218,14 +222,14 @@ describe('side chats', () => {
     )
     const listed = f.server.api.conversations().find((conversation) => conversation.id === side)!
     expect(listed.label).toBe('side-chat')
-    expect(listed.branchOf).toEqual({ conversationId: f.main, at: finished })
+    expect(listed.branchOf).toEqual({ conversationId: f.main, at: beforeOpenRound })
     const index = await f.server.harness.snapshot(Index, f.main, context)
-    expect(index!.sides).toEqual([{ id: side, at: finished, openedAt: expect.any(Number) }])
+    expect(index!.sides).toEqual([{ id: side, at: beforeOpenRound, openedAt: expect.any(Number) }])
     expect((await f.action('open', { text: 'nested' }, side)).data.error).toMatch(
       /cannot open another/,
     )
     expect((await f.action('open', { text: 'wrong' }, ROOT_CONVERSATION_ID)).data.error).toMatch(
-      /Only @ultimate/,
+      /from @ultimate or a branch/,
     )
     const second = await f.open('ANOTHER')
     expect(second).not.toBe(side)
@@ -256,7 +260,7 @@ describe('side chats', () => {
     ).toMatchObject({ title: 'Side chat' })
   })
 
-  it('includes terminal tool results and ignores completed generations inside an unfinished run', async () => {
+  it('forks mid-run at the newest finished tool round, its results included', async () => {
     const f = await fixture()
     await f.call(f.main, 'message', { to: 'user', text: 'finished tool-terminated turn' })
     const closing = (await entries(f.server, f.main)).at(-1)!
@@ -266,11 +270,94 @@ describe('side chats', () => {
     f.gate.afterTool = true
     const running = f.call(f.main, 'note', { to: ROOT_CONVERSATION_ID, text: 'still working' })
     await until(() => f.gate.entered)
-    // This tool round's generation is completed, but no input submission is answered yet.
+    const noteResult = (await entries(f.server, f.main)).findLast((entry) =>
+      entry.model?.some((message) => message.role === 'toolResult'),
+    )!
+    expect(noteResult.id).toBeGreaterThan(closing.id)
+    // No input is answered yet, but the round that ran the note is finished: the copy sees it.
     const side = await f.open()
-    expect((await f.server.harness.snapshot(Side, side, context))!.at).toBe(closing.id)
+    expect((await f.server.harness.snapshot(Side, side, context))!.at).toBe(noteResult.id)
+    expect(JSON.stringify(await entries(f.server, side))).toContain('still working')
     f.hold.resolve()
     await running
+  })
+
+  it('opens a read-only side chat from a busy branch, outside lineage, that refuses effects and keeps Discard', async () => {
+    const f = await fixture()
+    await seedTally(f.server.harness)
+    const branchInTree = (intent: string) =>
+      f.server.harness.commit(async (tx) => {
+        const at = (await tx.scanEntries({ conversationId: ROOT_CONVERSATION_ID }, 1)).items[0].id
+        const fork = await tx.forkConversation(ROOT_CONVERSATION_ID, at, {
+          ownership: { kind: 'ownerless' },
+        })
+        await tx.appendEntry(fork.id, { kind: 'test.work', data: {} })
+        ;(await tx.doc(Branch, fork.id)).branch = { from: ROOT_CONVERSATION_ID, at, intent }
+        return fork.id
+      }, context)
+    const branch = await branchInTree('BRANCH WORK')
+    await f.ask(branch, 'BRANCH START')
+    const sibling = await branchInTree('SIBLING WORK')
+    // A sibling's abstract after the branch started: a branch's next input would catch up on it, a side chat's never.
+    await f.server.harness.commit(
+      async (tx) =>
+        abstract(tx, sibling, {
+          text: 'State: sibling moved on.',
+          at: (await tx.scanEntries({ conversationId: sibling }, 1)).items[0].id,
+        }),
+      context,
+    )
+    f.gate.afterTool = true
+    const running = f.call(branch, 'note', { to: ROOT_CONVERSATION_ID, text: 'branch step' })
+    await until(() => f.gate.entered)
+    const opened = await f.action('open', { text: 'WHAT NOW' }, branch)
+    expect([opened.status, opened.data.error]).toEqual([200, undefined])
+    const side = opened.data.result.id as ConversationId
+    await (await f.server.harness.conversation(side, context))!.waitForIdle(context)
+    expect(await f.server.harness.snapshot(Side, side, context)).toMatchObject({
+      of: branch,
+      readOnly: true,
+      effects: false,
+    })
+    f.gate.afterTool = false
+    f.hold.resolve()
+    await running
+    expect(JSON.stringify(await entries(f.server, side))).toContain('branch step')
+    const own = (await entries(f.server, side)).filter((entry) => entry.conversationId === side)
+    expect(JSON.stringify(own)).toContain(`read-only temporary copy of branch #${branch}`)
+    expect(JSON.stringify(own)).not.toContain('sibling moved on')
+    const host = { harness: () => f.server.harness, doc: () => Side }
+    expect(await branchOf(host, side, context)).toBeUndefined()
+    for (const [name, args] of [
+      ['write', { path: 'x.txt', content: 'x' }],
+      ['note', { to: ROOT_CONVERSATION_ID, text: 'x' }],
+    ] as const) {
+      await f.call(side, name, args)
+      expect(JSON.stringify(await entries(f.server, side))).toContain(
+        `A side chat of a branch is read-only: ${name} is refused`,
+      )
+    }
+    for (const [name, args] of [
+      ['subagent', { action: 'list' }],
+      ['branch', {}],
+      ['plan', { action: 'create' }],
+      ['workspace', { action: 'submit' }],
+      ['instance', { action: 'start' }],
+      ['ultimate.action', {}],
+      ['edit', {}],
+    ] as const)
+      expect(blockedInReadOnlySideChat(name, args)).toBe(true)
+    for (const [name, args] of [
+      ['read', {}],
+      ['bash', {}],
+      ['codemode', {}],
+      ['workspace', { action: 'status' }],
+      ['plan', { action: 'show' }],
+      ['ultimate.entries', {}],
+    ] as const)
+      expect(blockedInReadOnlySideChat(name, args)).toBe(false)
+    expect((await f.server.harness.snapshot(Side, side, context))!.effects).toBe(false)
+    expect((await f.action('discard', { id: side })).status).toBe(200)
   })
 
   it('refuses side-chat lifecycle actions invoked by an agent', async () => {

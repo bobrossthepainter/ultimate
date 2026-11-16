@@ -208,3 +208,12 @@ so branches adding divergences in parallel do not edit the same lines.
   role, model and branch (with cache hit rate and rebuilds), and the same for every other Ultimate it reaches (hub
   and spokes); spokes without the extension show their `pi.usage` totals
 - Upstream: local-only (written generically, so it could be given back)
+
+### Side chats from branches
+
+- Touches: `extensions/side-chat/` (open from a branch, fork at the newest finished step, read-only branch copies,
+  labels naming main), `extensions/lineage/server.ts` (`branchOf` and catch-up skip side chats), `lib/acting-as.ts`
+  (`isSideChat`), `extensions/sidebar/` (`sidebar.under-branch` point), `agents/coordinator.md` (one paragraph)
+- Why: ask a running branch questions without disturbing it; a branch is usually mid-run, so the fork point moved
+  from the last answered input to the newest finished tool round, for @ultimate too
+- Upstream: candidate

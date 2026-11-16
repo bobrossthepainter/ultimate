@@ -53,7 +53,7 @@ import { LanderState } from './lander.tsx'
 import { StandingPhase, WaitingOnUser } from './ultimate.tsx'
 import { useShell, useSidebarState } from './state.tsx'
 import { topLevelRows } from './listed.ts'
-import { UnderUltimate, Unlisted } from './ui.tsx'
+import { UnderBranch, UnderUltimate, Unlisted } from './ui.tsx'
 
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
 
@@ -451,6 +451,9 @@ function Tree({
     parked: parked.has(branch.id),
     subagents: [
       <EpicLine id={branch.id} key="epic" working={working.get(branch.id) === 'self'} />,
+      <AllProvided input={branch.id} key="under" point={UnderBranch}>
+        {(rows) => rows}
+      </AllProvided>,
       ...subagentLines(branch.id),
     ],
   }))
