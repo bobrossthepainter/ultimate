@@ -45,6 +45,7 @@ import {
   useViewport,
 } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
+import { branchOf, useNotDrawable } from './branch.tsx'
 import { Canvas, Composer, popoverAt } from './canvas.tsx'
 import { ChatPanel, DiscussButton } from './chat.tsx'
 import { PartSource } from './code.tsx'
@@ -64,10 +65,7 @@ const tone = { added: 'bg-diff-add', changed: 'bg-warning', removed: 'bg-diff-de
 function useDefaultBranch(branches: Record<string, { version: number; at: string }>) {
   const { conversationId } = useUltimate()
   const shown = useConversationSummary(conversationId)
-  const own =
-    shown?.label === 'architect' && shown.parentConversationId !== undefined
-      ? shown.parentConversationId
-      : conversationId
+  const own = conversationId === undefined ? undefined : branchOf(shown, conversationId)
   if (own !== undefined && branches[own]) return own
   return Object.entries(branches)
     .toSorted(([, a], [, b]) => b.at.localeCompare(a.at))
@@ -487,10 +485,15 @@ function Unchanged({ version, previous }: { version: ArchitectureVersion; previo
 
 export default function ArchitectureSurface() {
   const index = useDocOf(ROOT, ArchitectureIndexDoc)
-  const branches = index?.branches ?? {}
+  const notDrawable = useNotDrawable()
+  const branches = Object.fromEntries(
+    Object.entries(index?.branches ?? {}).filter(
+      ([id]) => !notDrawable(parseConversationId(Number(id))),
+    ),
+  )
   const [view, setView] = useView()
   const fallback = useDefaultBranch(branches)
-  const branch = view.branch ?? fallback
+  const branch = view.branch !== undefined && !notDrawable(view.branch) ? view.branch : fallback
   const doc = useDocOf(branch, ArchitectureDoc)
   const versions = doc?.versions ?? []
   const latest = versions.at(-1)
@@ -593,18 +596,24 @@ export default function ArchitectureSurface() {
 
 function NoBranch() {
   const { conversationId } = useUltimate()
+  const shown = useConversationSummary(conversationId)
+  const branch = conversationId === undefined ? undefined : branchOf(shown, conversationId)
+  const notDrawable = useNotDrawable()
+  const reason = branch === undefined ? 'No conversation on screen' : notDrawable(branch)
   return (
     <div className="flex flex-1 items-center justify-center p-6">
       <div className="max-w-md text-center">
         <WorkflowIcon className="mx-auto mb-3 size-6 text-muted-foreground/50" />
         <p className="text-[14px] text-foreground/90">No architecture drawn yet</p>
         <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
-          The architect draws a branch only when you ask. Draw one now for the conversation on
-          screen.
+          The architect draws a branch only when you ask.{' '}
+          {reason
+            ? `${reason}: open a branch to draw it.`
+            : 'Draw one now for the conversation on screen.'}
         </p>
-        {conversationId !== undefined && (
+        {branch !== undefined && reason === undefined && (
           <div className="mt-4 flex justify-center">
-            <Draw branch={conversationId} />
+            <Draw branch={branch} />
           </div>
         )}
       </div>

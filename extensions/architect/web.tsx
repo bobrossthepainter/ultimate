@@ -1,7 +1,7 @@
-import type { ConversationId } from '@earendil-works/pi-durable'
 import { WorkflowIcon } from 'lucide-react'
 import { lazy, Suspense } from 'react'
-import { api, defineWebExtension, getState } from '@/sdk'
+import { api, defineWebExtension } from '@/sdk'
+import { drawableBranchNow } from './branch.tsx'
 import { CommentsCard, QuestionCard } from './card.tsx'
 import { Frame, Loading } from './frame.tsx'
 import { ArchitectureLink, openArchitecture } from './link.tsx'
@@ -21,13 +21,6 @@ function ArchitectureSurface() {
       <Viewer />
     </Suspense>
   )
-}
-
-function branchOf(id: ConversationId) {
-  const summary = getState().conversations.find((conversation) => conversation.id === id)
-  return summary?.label === 'architect' && summary.parentConversationId !== undefined
-    ? summary.parentConversationId
-    : id
 }
 
 export default defineWebExtension({
@@ -50,10 +43,13 @@ export default defineWebExtension({
     {
       id: 'architect.draw',
       title: 'Draw architecture',
-      when: (context) => context.conversationId !== undefined,
+      when: (context) =>
+        context.conversationId !== undefined &&
+        drawableBranchNow(context.conversationId) !== undefined,
       run: async (context) => {
         if (context.conversationId === undefined) return
-        const branch = branchOf(context.conversationId)
+        const branch = drawableBranchNow(context.conversationId)
+        if (branch === undefined) return
         await api.action(DrawAction, { conversation: branch })
         openArchitecture({ branch })
       },

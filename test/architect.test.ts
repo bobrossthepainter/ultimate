@@ -142,6 +142,25 @@ it('draws versions in one architect under the branch, and sends feedback to the 
       return response.data.result as { architect: number; started: boolean }
     }
 
+    // A standing agent has no branch to draw: Draw on @ultimate's conversation is refused and starts no architect (#7770).
+    const ultimate = (
+      await post(server, '/api/extensions/subagents/actions/standing', {
+        args: { name: 'ultimate' },
+      })
+    ).data.result as number
+    const refused = await post(server, '/api/extensions/architect/actions/draw', {
+      args: { conversation: ultimate },
+    })
+    expect(JSON.stringify(refused.data)).toContain('is @ultimate, a standing agent')
+    expect(
+      (await server.harness.snapshot(Versions, ultimate as ConversationId, context))?.architect,
+    ).toBeUndefined()
+    const owned = await server.harness.commit(
+      (tx) => tx.scanConversations({ ownerConversationId: ultimate as ConversationId }, 10),
+      context,
+    )
+    expect(owned.items).toEqual([])
+
     const first = await draw()
     expect(first.started).toBe(true)
     const second = await draw()
