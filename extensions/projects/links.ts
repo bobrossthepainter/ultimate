@@ -5,7 +5,10 @@ export type Page = { hostname: string; protocol: string }
 export const onLoopback = ({ hostname }: Page) =>
   /^(127\.0\.0\.1|localhost|\[::1\])$|\.localhost$/.test(hostname)
 
-const port = (url: string) => new URL(url).port || '80'
+const port = (url: string) => {
+  const parsed = new URL(url)
+  return parsed.port || (parsed.protocol === 'https:' ? '443' : '80')
+}
 
 const servedHere = (project: RunningProject, page: Page) =>
   project.served?.find((origin) => new URL(origin).hostname === page.hostname)
