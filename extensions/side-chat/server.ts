@@ -20,6 +20,13 @@ import type { SummaryModel } from '../conversations/summary-model.ts'
 import { DiscardAction, InjectAction, OpenAction, SideChatDoc, SideChatsDoc } from './refs.ts'
 import type { SideChat, SideChatIndex, SideChatSummary } from './refs.ts'
 import { SideChatSummaryEntry } from './entries.ts'
+import {
+  blockedInReadOnlySideChat,
+  readOnlyRefusal,
+  tracksEffect,
+} from '../../lib/side-chat-guard.ts'
+
+export { blockedInReadOnlySideChat, tracksEffect }
 
 export const Side = defineDoc<Partial<SideChat>>({
   kind: SideChatDoc.kind,
@@ -79,15 +86,6 @@ export async function newestClosedRound(tx: Tx, main: ConversationId): Promise<E
   } while (cursor)
   if (newest === undefined || skipOpenRound) throw new Error(`#${main} has nothing to fork yet`)
   return newest
-}
-
-export function blockedInReadOnlySideChat(name: string, args: Record<string, unknown>) {
-  if (tracksEffect(name, args)) return true
-  if (['subagent', 'goal', 'ultimate.action', 'ultimate.tell'].includes(name)) return true
-  if (name === 'plan') return args.action !== 'show'
-  if (name === 'workspace') return args.action !== 'status'
-  if (name === 'instance') return !['list', 'logs'].includes(String(args.action))
-  return false
 }
 
 function sideId(args: unknown): ConversationId {
@@ -251,8 +249,14 @@ export function endTask(host: ExtensionHost) {
             return
           }
           const text = response.text.trim()
-          const at = await host.harness().commit((tx) => tx.entry(side.at!), ctx)
-          const time = new Date(at!.model![0].timestamp).toISOString().slice(11, 16)
+          const openedAt = await host
+            .harness()
+            .commit(
+              async (tx) =>
+                (await tx.doc(Index, side.of!)).sides.find((item) => item.id === id)!.openedAt,
+              ctx,
+            )
+          const time = new Date(openedAt).toISOString().slice(11, 16)
           const data: SideChatSummary = { side: id, at: side.at!, from: id, to: side.of!, text }
           await (await host.harness().conversation(side.of!, ctx))!.submit(
             {
@@ -330,22 +334,6 @@ export const actions = {
   inject: implementAction(InjectAction, (args, { host }) => end(host, sideId(args), 'injected')),
 }
 
-export function tracksEffect(name: string, args: Record<string, unknown>) {
-  if (name === 'todo') return args.action === 'add' || args.action === 'done'
-  if (name === 'automation') return !['list', 'runs', 'log'].includes(String(args.action))
-  return [
-    'branch',
-    'message',
-    'note',
-    'notify',
-    'remember',
-    'setup',
-    'restart',
-    'edit',
-    'write',
-  ].includes(name)
-}
-
 export function sideReminder(side: ConversationId, main: number, at: Date, readOnly: boolean) {
   const time = at.toTimeString().slice(0, 5)
   if (readOnly)
@@ -400,9 +388,7 @@ export default (host: ExtensionHost) =>
             if (side.ended || (await tx.doc(Ending, api.conversationId)).mode)
               return { block: 'This side chat has ended' }
             if (side.readOnly && blockedInReadOnlySideChat(call.name, call.arguments))
-              return {
-                block: `A side chat of a branch is read-only: ${call.name} is refused. Answer the user here instead.`,
-              }
+              return { block: readOnlyRefusal(call.name) }
             const attemptedPersistentEffect = tracksEffect(call.name, call.arguments)
             if (attemptedPersistentEffect) side.effects = true
             return undefined

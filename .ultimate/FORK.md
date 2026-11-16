@@ -239,7 +239,9 @@ so branches adding divergences in parallel do not edit the same lines.
 
 - Touches: `extensions/side-chat/` (open from a branch, fork at the newest finished step, read-only branch copies,
   labels naming main), `extensions/lineage/server.ts` (`branchOf` and catch-up skip side chats), `lib/acting-as.ts`
-  (`isSideChat`), `extensions/sidebar/` (`sidebar.under-branch` point), `agents/coordinator.md` (one paragraph)
+  (`isSideChat`), `lib/side-chat-guard.ts` and `extensions/codemode/server.ts` (codemode's nested tools and globals
+  get the side-chat guard), `extensions/sidebar/` (`sidebar.under-branch` point), `agents/coordinator.md` (one
+  paragraph)
 - Why: ask a running branch questions without disturbing it; a branch is usually mid-run, so the fork point moved
   from the last answered input to the newest finished tool round, for @ultimate too
 - Upstream: candidate

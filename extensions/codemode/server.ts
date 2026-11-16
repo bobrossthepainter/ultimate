@@ -39,6 +39,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ActionContext } from '../../server/actions.ts'
 import { READS, readProject } from './projects.ts'
 import { REMOTE_BYTES } from '../../lib/remote.ts'
+import { guardSideChatCall } from '../../lib/side-chat-guard.ts'
 import type { Read } from './projects.ts'
 import { closedChapter, compactEntry, id, limit, readChapter, searchHit } from './chapters.ts'
 import type { EntriesOptions, HistoryRead, SearchOptions } from './chapters.ts'
@@ -427,6 +428,7 @@ function globals(
     execute: async (args, options) => {
       const settle = record?.(`ultimate.${helper.name}`, args as unknown[])
       try {
+        await guardSideChatCall(host, conversationId, `ultimate.${helper.name}`, {}, context)
         const value = await helper.execute(args, options)
         settle?.('ok')
         return value
@@ -532,6 +534,13 @@ export default function codemode(host: ExtensionHost) {
                   ),
           }
           try {
+            await guardSideChatCall(
+              host,
+              api.conversationId,
+              resolved.name,
+              (args ?? {}) as Record<string, unknown>,
+              context,
+            )
             const prepared = resolved.prepareArguments ? resolved.prepareArguments(args) : args
             const validated = validateToolArguments(resolved, {
               type: 'toolCall',

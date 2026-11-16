@@ -356,8 +356,48 @@ describe('side chats', () => {
       ['ultimate.entries', {}],
     ] as const)
       expect(blockedInReadOnlySideChat(name, args)).toBe(false)
+    // Codemode runs nested tools and globals without beforeTool: they are refused too.
+    await f.call(side, 'codemode', {
+      code: "await tools.write({path: 'x.txt', content: 'x'})",
+    })
+    await f.call(side, 'codemode', {
+      code: "await ultimate.action('conversations', 'conclude', {ids: [1]})",
+    })
+    const refusals = JSON.stringify(
+      (await entries(f.server, side)).filter((entry) =>
+        entry.model?.some(
+          (message) => message.role === 'toolResult' && message.toolName === 'codemode',
+        ),
+      ),
+    )
+    expect(refusals).toContain('read-only: write is refused')
+    expect(refusals).toContain('read-only: ultimate.action is refused')
     expect((await f.server.harness.snapshot(Side, side, context))!.effects).toBe(false)
     expect((await f.action('discard', { id: side })).status).toBe(200)
+  })
+
+  it('injects from a fork point with no model content', async () => {
+    const f = await fixture()
+    await f.server.harness.commit(
+      (tx) => tx.appendEntry(f.main, { kind: 'test.bookkeeping', data: {} }),
+      context,
+    )
+    const side = await f.open()
+    const at = (await f.server.harness.snapshot(Side, side, context))!.at!
+    expect((await f.server.harness.commit((tx) => tx.entry(at), context))!.model).toBeUndefined()
+    await writeFile(join(ultimateRoot, '.ultimate/settings.json'), JSON.stringify({}))
+    try {
+      const injected = await f.action('inject', { id: side })
+      expect([injected.status, injected.data.error]).toEqual([200, undefined])
+      expect(
+        (await entries(f.server, f.main)).filter((entry) => entry.kind === 'sidechat.summary'),
+      ).toHaveLength(1)
+    } finally {
+      await writeFile(
+        join(ultimateRoot, '.ultimate/settings.json'),
+        JSON.stringify({ summaryModel: 'unavailable/test' }),
+      )
+    }
   })
 
   it('refuses side-chat lifecycle actions invoked by an agent', async () => {
