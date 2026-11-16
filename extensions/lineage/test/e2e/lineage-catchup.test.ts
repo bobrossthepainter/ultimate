@@ -87,6 +87,14 @@ async function catchupFixture() {
           [fauxToolCall('write', { path: join(projectRoot, 'schema.ts'), content: 'own edit\n' })],
           { stopReason: 'toolUse' },
         )
+      if (last.role === 'user' && text === 'edit inside and outside')
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('write', { path: join(projectRoot, 'schema.ts'), content: 'own edit\n' }),
+            fauxToolCall('write', { path: join(home, 'outside.md'), content: 'notes\n' }),
+          ],
+          { stopReason: 'toolUse' },
+        )
       if (
         (last.role === 'toolResult' && text.includes('schema.ts')) ||
         (last.role === 'user' && text === 'resume during restart')
@@ -167,6 +175,18 @@ it('catches up once on an idle resume, puts overlap first, and reads it before t
     (await reopened.root.context(context)).entries.filter((entry) => entry.kind === 'lineage.note'),
   ).toHaveLength(1)
   expect(f.requests.at(-1)!.filter((message) => message === text)).toHaveLength(1)
+})
+
+it('marks the overlap on a file inside the repository when the conversation also edited one outside', async () => {
+  const f = await catchupFixture()
+  await ask(f.server, ROOT_CONVERSATION_ID, 'edit inside and outside')
+  repoGit(f.projectRoot, 'commit', '-am', 'Fix schema')
+  await ask(f.server, ROOT_CONVERSATION_ID, 'continue work')
+  const [note] = (await f.server.root.context(context)).entries.filter(
+    (entry) =>
+      entry.kind === 'lineage.note' && (entry.data as { source?: string }).source === 'main',
+  )
+  expect((note.data as { text: string }).text).toMatch(/\*\*Overlap\*\* .*Fix schema.*`schema.ts`/)
 })
 
 it('does not catch up when a note and new commits arrive in the middle of a run', async () => {
