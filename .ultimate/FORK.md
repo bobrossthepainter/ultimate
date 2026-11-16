@@ -208,3 +208,18 @@ so branches adding divergences in parallel do not edit the same lines.
   role, model and branch (with cache hit rate and rebuilds), and the same for every other Ultimate it reaches (hub
   and spokes); spokes without the extension show their `pi.usage` totals
 - Upstream: local-only (written generically, so it could be given back)
+
+### @ultimate routes forwarded insights
+
+- Touches: `agents/ultimate.md` (one sentence in "Coordinators and messages")
+- Why: A research handover or insight forwarded from another project or session sat as background instead of being
+  acted on; @ultimate now routes it to a branch in the same turn and tells the user where it went
+- Upstream: candidate
+
+### Stable selectors in verify-ui
+
+- Touches: `skills/verify-ui/SKILL.md` (one bullet under "How")
+- Why: In #27553, 6 of 7 browser failures came from ambiguous selectors and guessing the ⌘K palette. The bullet names
+  the attributes the app already sets (`data-ui="surface-tabs"`, `data-surface`, `data-ui="palette"`, cmdk's
+  `data-value`), checked against the running UI
+- Upstream: candidate
