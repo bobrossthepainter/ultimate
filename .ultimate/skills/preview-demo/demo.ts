@@ -62,7 +62,7 @@ async function stop() {
   if (existsSync(file)) {
     const pid = Number(readFileSync(file, 'utf8'))
     const caddy = join(state, 'caddy-port')
-    if (existsSync(caddy) && alive(pid)) {
+    if (existsSync(caddy)) {
       const { unpublishRoute } = await import(resolve(process.cwd(), 'extensions/caddy/server.ts'))
       await unpublishRoute(process.env.HOME, pid, Number(readFileSync(caddy, 'utf8')))
     }
@@ -71,40 +71,6 @@ async function stop() {
     if (alive(pid)) process.kill(-pid, 'SIGKILL')
   }
   rmSync(state, { recursive: true, force: true })
-}
-
-/**
- * The Caddy port and origin this demo will be served at when the live project is served by Caddy, as `instance start`
- * serves previews: on a free port of the preview range, owned by the demo's own pid, so Caddy drops it when it dies.
- */
-async function reserveCaddy(checkout: string) {
-  const { publishRoute, previewOrigin } = await import(
-    resolve(checkout, 'extensions/caddy/server.ts')
-  )
-  const { CADDY_PREVIEW_PORTS } = await import(resolve(checkout, 'extensions/instance/server.ts'))
-  const root = process.env.ULTIMATE_PROJECT
-  const registry = join(process.env.HOME!, '.ultimate/caddy/routes.json')
-  const taken = existsSync(registry)
-    ? Object.keys(JSON.parse(readFileSync(registry, 'utf8')).routes ?? {}).map(Number)
-    : []
-  const published = (CADDY_PREVIEW_PORTS as number[]).findLast((each) => !taken.includes(each))
-  const origin: string | undefined =
-    published && (await previewOrigin(process.env.HOME, root, published))
-  if (!origin) return undefined
-  return {
-    origin,
-    publish: async (pid: number) => {
-      const served = await publishRoute(
-        process.env.HOME,
-        root,
-        `${pid}:demo`,
-        published,
-        `http://127.0.0.1:${port}`,
-      )
-      if (served) writeFileSync(join(state, 'caddy-port'), String(published))
-      return served as string | undefined
-    },
-  }
 }
 
 async function start() {
@@ -133,27 +99,65 @@ async function start() {
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.startsWith('ULTIMATE_')),
   )
-  const caddy = await reserveCaddy(checkout)
   const log = openSync(join(state, 'server.log'), 'a')
-  const child = spawn(process.execPath, ['server/main.ts'], {
-    cwd: checkout,
-    detached: true,
-    stdio: ['ignore', log, log],
-    env: {
-      ...env,
-      ULTIMATE_HOME: home,
-      ULTIMATE_PROJECT: dir,
-      ULTIMATE_USER_HOME: userHome,
-      ULTIMATE_PORT: String(port),
-      ULTIMATE_NO_OPEN: '1',
-      ULTIMATE_INSTANCE_OWNER: String(owner),
-      ULTIMATE_MODEL: values.model,
-      ...(caddy && { ULTIMATE_PROXY_ORIGIN: caddy.origin }),
-    },
-  })
-  writeFileSync(join(state, 'pid'), String(child.pid))
-  child.unref()
-  const served = caddy && (await caddy.publish(child.pid!))
+  const launch = (origin?: string) => {
+    const server = spawn(process.execPath, ['server/main.ts'], {
+      cwd: checkout,
+      detached: true,
+      stdio: ['ignore', log, log],
+      env: {
+        ...env,
+        ULTIMATE_HOME: home,
+        ULTIMATE_PROJECT: dir,
+        ULTIMATE_USER_HOME: userHome,
+        ULTIMATE_PORT: String(port),
+        ULTIMATE_NO_OPEN: '1',
+        ULTIMATE_INSTANCE_OWNER: String(owner),
+        ULTIMATE_MODEL: values.model,
+        ...(origin && { ULTIMATE_PROXY_ORIGIN: origin }),
+      },
+    })
+    writeFileSync(join(state, 'pid'), String(server.pid))
+    server.unref()
+    return server
+  }
+  // Served by Caddy like `instance start` previews, from the top of their range down, owned by the demo's pid.
+  const caddy = await import(resolve(checkout, 'extensions/caddy/server.ts'))
+  const { CADDY_PREVIEW_PORTS } = await import(resolve(checkout, 'extensions/instance/server.ts'))
+  let child: ReturnType<typeof spawn> | undefined
+  let served: string | undefined
+  for (const published of (CADDY_PREVIEW_PORTS as number[]).toReversed()) {
+    const origin = await caddy.previewOrigin(
+      process.env.HOME,
+      process.env.ULTIMATE_PROJECT,
+      published,
+    )
+    if (!origin) break
+    child = launch(origin)
+    try {
+      served = await caddy.publishRoute(
+        process.env.HOME,
+        process.env.ULTIMATE_PROJECT,
+        `${child.pid}:demo`,
+        published,
+        `http://127.0.0.1:${port}`,
+      )
+      if (served) writeFileSync(join(state, 'caddy-port'), String(published))
+      break
+    } catch (error) {
+      if (String(error).includes(' is served for ')) {
+        const pid = child.pid!
+        process.kill(-pid, 'SIGKILL')
+        for (let i = 0; i < 40 && alive(pid); i++)
+          await new Promise((done) => setTimeout(done, 250))
+        child = undefined
+        continue
+      }
+      console.error(`Not served by Caddy: ${String(error)}`)
+      break
+    }
+  }
+  child ??= launch()
   for (let i = 0; i < 240; i++) {
     if (!alive(child.pid!)) break
     const ok = await fetch(`http://127.0.0.1:${port}/api/models`).then(

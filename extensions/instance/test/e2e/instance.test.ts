@@ -310,27 +310,38 @@ it('selects shared, isolated main and owned child checkouts with the main projec
 it('serves a preview through Caddy while it runs, when the host is served by Caddy', async () => {
   const f = await fixture()
   const routes = new Map<number, string>()
+  const bothPublishing = Promise.withResolvers<void>()
+  let publishing = 0
   f.services.set('caddy', {
     publish: async (port: number, target: string) => {
       if (port === 9490) throw new Error('Port 9490 is served for /elsewhere')
+      if (++publishing === 2) bothPublishing.resolve()
+      await bothPublishing.promise
       routes.set(port, target)
       return `https://lan.example:${port}`
     },
     unpublish: async (port: number) => void routes.delete(port),
   })
   try {
-    const preview = JSON.parse(await f.call('instance', { action: 'start' })) as Preview & {
-      caddy: string
-    }
-    expect(preview.caddy).toBe('https://lan.example:9491')
-    expect([...routes]).toEqual([[9491, preview.url]])
-    expect((await f.list())[0]).toMatchObject({ id: preview.id, caddy: preview.caddy })
+    const [preview, other] = (
+      await Promise.all([f.run({ action: 'start' }), f.run({ action: 'start' })])
+    ).map((text) => JSON.parse(text) as Preview & { caddy: string })
+    expect([preview.caddy, other.caddy].toSorted()).toEqual([
+      'https://lan.example:9491',
+      'https://lan.example:9492',
+    ])
+    expect(routes.get(Number(new URL(preview.caddy).port))).toBe(preview.url)
+    await f.run({ action: 'stop', id: other.id })
+    expect([...routes.values()]).toEqual([preview.url])
+    expect((await f.list()).find(({ id }) => id === preview.id)).toMatchObject({
+      caddy: preview.caddy,
+    })
     const status = await new Promise<number>((answered, reject) =>
       request(
         `${preview.url}/api/models`,
         {
           headers: {
-            host: 'lan.example:9491',
+            host: new URL(preview.caddy).host,
             origin: preview.caddy,
             'x-forwarded-for': '192.168.1.20',
           },

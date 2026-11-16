@@ -274,7 +274,11 @@ export function remember(
   for (const port of [...byPort.keys()].slice(0, -50)) byPort.delete(port)
   writeFileSync(join(host.home, 'previews.json'), JSON.stringify([...byPort.values()]))
 }
-function stop(host: Pick<ExtensionHost, 'want'>, instances: Map<string, Instance>, id: string) {
+function stop(
+  host: Pick<ExtensionHost, 'want' | 'resource'>,
+  instances: Map<string, Instance>,
+  id: string,
+) {
   const instance = instances.get(id)
   if (!instance) return Promise.reject(new Error(`Unknown instance: ${id}`))
   instance.stopping ??= stopInstance(host, instances, instance).catch((error: unknown) => {
@@ -284,7 +288,7 @@ function stop(host: Pick<ExtensionHost, 'want'>, instances: Map<string, Instance
   return instance.stopping
 }
 async function stopInstance(
-  host: Pick<ExtensionHost, 'want'>,
+  host: Pick<ExtensionHost, 'want' | 'resource'>,
   instances: Map<string, Instance>,
   instance: Instance,
 ) {
@@ -314,32 +318,43 @@ function freeLoopbackPort() {
   })
 }
 
-export async function publishPreview(
-  host: Pick<ExtensionHost, 'want' | 'resource' | 'onClose' | 'home' | 'notice'>,
-) {
+const claimedCaddyPorts = (host: Pick<ExtensionHost, 'resource'>) =>
+  host.resource('instance.caddy', () => new Set<number>())
+
+export async function publishPreview(host: Pick<ExtensionHost, 'want' | 'resource' | 'notice'>) {
   const caddy = host.want(CaddyApi)
   if (!caddy) return undefined
-  const ours = new Set([...running(host).values()].flatMap((item) => item.caddy?.port ?? []))
+  const claimed = claimedCaddyPorts(host)
   const loopback = await freeLoopbackPort()
-  for (const port of CADDY_PREVIEW_PORTS.filter((free) => !ours.has(free))) {
+  for (const port of CADDY_PREVIEW_PORTS) {
+    if (claimed.has(port)) continue
+    claimed.add(port)
     let url: string | undefined
     try {
       url = await caddy.publish(port, `http://127.0.0.1:${loopback}`)
     } catch (error) {
+      claimed.delete(port)
       if (String(error).includes(' is served for ')) continue
       host.notice(`Preview not served by Caddy: ${String(error)}`)
       return undefined
     }
-    return url ? { port, loopback, url } : undefined
+    if (url) return { port, loopback, url }
+    claimed.delete(port)
+    return undefined
   }
   return undefined
 }
 
-function unpublishPreview(host: Pick<ExtensionHost, 'want'>, item: Instance) {
+async function unpublishCaddyPort(host: Pick<ExtensionHost, 'want' | 'resource'>, port: number) {
+  await host.want(CaddyApi)?.unpublish(port)
+  claimedCaddyPorts(host).delete(port)
+}
+
+function unpublishPreview(host: Pick<ExtensionHost, 'want' | 'resource'>, item: Instance) {
   const { caddy } = item
   if (!caddy) return Promise.resolve()
   item.unpublishing ??= (async () => {
-    await host.want(CaddyApi)?.unpublish(caddy.port)
+    await unpublishCaddyPort(host, caddy.port)
     item.caddy = undefined
   })().finally(() => (item.unpublishing = undefined))
   return item.unpublishing
@@ -514,7 +529,7 @@ export default function instanceExtension(
           grace: 5000,
         })
       } catch (error) {
-        if (caddy) await host.want(CaddyApi)?.unpublish(caddy.port)
+        if (caddy) await unpublishCaddyPort(host, caddy.port)
         throw error
       }
       const { child } = group
