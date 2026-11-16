@@ -122,11 +122,32 @@ it('draws versions in one architect under the branch, and sends feedback to the 
           ],
           { stopReason: 'toolUse' },
         )
+      if (last?.role === 'user' && last.content === 'Draw yourself.')
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('codemode', {
+              code: `return await ultimate.action('architect', 'draw', { conversation: ${branch} })`,
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        )
       return fauxAssistantMessage('Adds the surface.')
     }
     server.host.faux!.setResponses([route])
     const branch = (await post(server, '/api/conversations', { title: 'Feature' })).data
       .id as number
+
+    // Drawings start only on the user's request: an agent's draw is refused.
+    const coordinator = (await server.harness.conversation(branch as ConversationId, context))!
+    await (
+      await coordinator.submit({ type: 'input', content: 'Draw yourself.' }, context)
+    ).wait(context)
+    expect(JSON.stringify((await coordinator.context(context)).entries)).toContain(
+      'architect/draw is a user-only action',
+    )
+    expect(
+      (await server.harness.snapshot(Versions, branch as ConversationId, context))?.architect,
+    ).toBeUndefined()
     const busy = async (id: number) =>
       (await server.harness.snapshot(LiveDoc, id as ConversationId, context))?.run !== undefined
     const draw = async () => {

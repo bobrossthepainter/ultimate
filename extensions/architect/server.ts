@@ -654,7 +654,7 @@ async function chat(host: ExtensionHost, branch: ConversationId, fresh: boolean,
   }, ctx)
 }
 
-export const userActions = ['send', 'edit', 'chat', 'ask']
+export const userActions = ['draw', 'send', 'edit', 'chat', 'ask']
 
 export const actions = {
   draw: implementAction(DrawAction, async (args, { host }) => {
