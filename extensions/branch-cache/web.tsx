@@ -1,4 +1,4 @@
-import { ArchiveIcon, FlameIcon } from 'lucide-react'
+import { FlameIcon } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -42,15 +42,6 @@ function nextLine(state: BranchCacheState, now: number) {
   return 'Nothing due'
 }
 
-function compactedRecently(state: BranchCacheState) {
-  const compaction = state.compaction
-  return (
-    compaction !== undefined &&
-    compaction.error === undefined &&
-    (state.lastRequest === undefined || compaction.at >= state.lastRequest)
-  )
-}
-
 function Chip() {
   const id = useConversation((conversation) => conversation.id)
   const summary = useConversationSummary(id)
@@ -66,12 +57,10 @@ function Chip() {
   const on = state.warm || state.compact
   const warm = state.lastRequest !== undefined && state.lastRequest + TTL > now
   const red = failed(state) || state.compaction?.error !== undefined
-  const compacted = compactedRecently(state)
   const set = (change: { warm?: boolean; compact?: boolean }) =>
     api
       .action(SetAction, { id, ...change })
       .catch((error: unknown) => console.warn('Branch cache', error))
-  const Icon = compacted && !warm ? ArchiveIcon : FlameIcon
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -81,17 +70,17 @@ function Chip() {
             '-mx-1 flex cursor-pointer items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground',
             !on && 'text-muted-foreground/60',
           )}
-          data-branch-cache={on ? (warm ? 'warm' : compacted ? 'compacted' : 'cold') : 'off'}
+          data-branch-cache={on ? (warm ? 'warm' : 'cold') : 'off'}
           type="button"
         >
-          <Icon
+          <FlameIcon
             className={cn(
               'size-3',
-              on && warm && state.warm && 'text-amber-500',
+              on && (warm ? 'text-orange-500' : 'text-sky-500'),
               red && 'text-red-500',
             )}
           />
-          cache
+          branch
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 p-1 font-mono" side="top">

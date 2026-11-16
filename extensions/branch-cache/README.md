@@ -1,4 +1,4 @@
-Keeps a branch coordinator's Claude prompt cache warm while the branch waits, and compacts it before the cache runs cold, so its next turn does not write the whole context again. Off by default; the `cache` chip in a branch's status line has both switches.
+Keeps a branch coordinator's Claude prompt cache warm while the branch waits, and compacts it before the cache runs cold, so its next turn does not write the whole context again. Off by default; the `branch` chip in a branch's status line (flame orange while warm, blue when cold, grey while off) has both switches.
 
 ## Why
 
