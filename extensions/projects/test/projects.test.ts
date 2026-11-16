@@ -26,6 +26,7 @@ it('lists running projects and this one, with their own counts, another instance
     system: () => ({ process: { url: 'http://127.0.0.1:4747' } }),
     conversations: () => [{ busy: true }, { busy: false }],
     need: () => ({ openQuestions: async () => [{}, {}, {}] }),
+    want: () => undefined,
   } as unknown as ExtensionHost
   try {
     // Without a Tailscale registry nothing is on the tailnet.
@@ -66,6 +67,7 @@ it('names the Tailscale port of each project the registry knows, for pages opene
     system: () => ({ process: { url: 'http://127.0.0.1:4747' } }),
     conversations: () => [],
     need: () => ({ openQuestions: async () => [] }),
+    want: () => undefined,
   } as unknown as ExtensionHost
   const projects = await list(host, new AbortController().signal)
   // Only a numeric port counts; a project the registry does not hold, or holds without one, has none.

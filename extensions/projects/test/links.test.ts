@@ -33,3 +33,13 @@ it('goes to the page’s own host on the Tailscale port from a tailnet page, and
   expect(target(unpublished, tailnet)).toBeUndefined()
   expect([shownPort(published, tailnet), shownPort(unpublished, tailnet)]).toEqual([':4752', '—'])
 })
+
+it('goes to the origin a reverse proxy serves a project at from a page on that proxy’s host, and nowhere for one it does not serve', () => {
+  const proxied = { ...unpublished, served: ['https://ultimate.example.com:9444'] }
+  const proxy = { hostname: 'ultimate.example.com', protocol: 'https:' }
+  expect(target(proxied, proxy)).toBe('https://ultimate.example.com:9444/')
+  expect(target(unpublished, proxy)).toBeUndefined()
+  expect(shownPort(proxied, proxy)).toBe(':9444')
+  expect(target(proxied, tailnet)).toBeUndefined()
+  expect(target(proxied, loopback)).toBe('http://127.0.0.1:4750/')
+})

@@ -619,6 +619,17 @@ export default function caddy(host: ExtensionHost) {
         if (config.domain && (await running(files))) await apply(files, config, registry, token)
       })
     },
+    async served() {
+      const settings = await settingsOf(host.userHome)
+      const config = configOf(settings)
+      if (!config.domain) return {}
+      const registry = await readJson<Registry>(files.registry, { routes: {} })
+      return Object.fromEntries(
+        Object.entries(registry.routes)
+          .filter(([port, route]) => !route.published && holds(port, route, settings))
+          .map(([port, route]) => [route.root, originOf(Number(port), config)]),
+      )
+    },
   })
   set(status)
   return defineExtension({ name: 'caddy' })

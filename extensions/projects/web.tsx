@@ -130,7 +130,7 @@ function Row({
     name,
     project.repo?.name,
     shownPort(project, location),
-    unreachable && 'not on the tailnet',
+    unreachable && 'not served on this address',
     questions && `${questions} for you`,
     busy && 'working',
     here && 'this tab',

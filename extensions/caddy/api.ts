@@ -12,6 +12,8 @@ export type CaddyService = {
   publish(port: number, target: string): Promise<string | undefined>
   /** Stop serving `port` when this server published it; a no-op otherwise. */
   unpublish(port: number): Promise<void>
+  /** The origin each running project is served at now (`https://<domain>:<port>`), by project root. */
+  served(): Promise<Record<string, string>>
 }
 /** Publishing loopback services through Caddy; `want` it, since caddy is optional. */
 export const CaddyApi = defineApi<CaddyService>()('caddy')
