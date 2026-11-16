@@ -361,7 +361,7 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
       process.exit(1)
     }
   } else {
-    server = await prepareServer()
+    server = await prepareServer({ proxyOrigin: process.env.ULTIMATE_PROXY_ORIGIN })
     await server.go()
     console.log(`Ultimate: ${server.url}`)
   }

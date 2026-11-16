@@ -12,6 +12,8 @@ export type Preview = {
   running: boolean
   /** Where the tailnet reaches it while it runs, when it publishes itself there. */
   tailnet?: string
+  /** Where Caddy serves it on the LAN domain while it runs, when the host publishes it there. */
+  caddy?: string
 }
 
 /** No arguments → the previews that served their UI, running or stopped since; a failed start is not among them. */

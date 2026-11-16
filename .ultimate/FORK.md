@@ -223,3 +223,14 @@ so branches adding divergences in parallel do not edit the same lines.
   the attributes the app already sets (`data-ui="surface-tabs"`, `data-surface`, `data-ui="palette"`, cmdk's
   `data-value`), checked against the running UI
 - Upstream: candidate
+
+### Previews through Caddy
+
+- Touches: `extensions/instance/` (`server.ts` start/stop/list publish through an optional `want(CaddyApi)`, `web.tsx`
+  card, links and switcher, `refs.ts` `caddy`, README), `extensions/caddy/` (`publishRoute`/`unpublishRoute`,
+  README), `server/main.ts` (an unsupervised server honours `ULTIMATE_PROXY_ORIGIN`),
+  `.ultimate/skills/preview-demo/`, `skills/ui-preview-round/SKILL.md`, `extensions/instance/test/e2e/instance.test.ts`
+- Why: Previews were reachable only on loopback, so their links were useless from other LAN devices. When the host
+  project is served by Caddy, `instance start` and the preview demo publish the preview at
+  `https://<domain>:9490–9499`, and that link is the one handed to the user; without Caddy nothing changes
+- Upstream: local-only (Caddy is fork-only; the `server/main.ts` line is a candidate on its own)

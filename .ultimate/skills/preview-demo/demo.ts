@@ -61,11 +61,50 @@ async function stop() {
   const file = join(state, 'pid')
   if (existsSync(file)) {
     const pid = Number(readFileSync(file, 'utf8'))
+    const caddy = join(state, 'caddy-port')
+    if (existsSync(caddy) && alive(pid)) {
+      const { unpublishRoute } = await import(resolve(process.cwd(), 'extensions/caddy/server.ts'))
+      await unpublishRoute(process.env.HOME, pid, Number(readFileSync(caddy, 'utf8')))
+    }
     if (alive(pid)) process.kill(-pid, 'SIGTERM')
     for (let i = 0; i < 40 && alive(pid); i++) await new Promise((done) => setTimeout(done, 250))
     if (alive(pid)) process.kill(-pid, 'SIGKILL')
   }
   rmSync(state, { recursive: true, force: true })
+}
+
+/**
+ * The Caddy port and origin this demo will be served at when the live project is served by Caddy, as `instance start`
+ * serves previews: on a free port of the preview range, owned by the demo's own pid, so Caddy drops it when it dies.
+ */
+async function reserveCaddy(checkout: string) {
+  const { publishRoute, previewOrigin } = await import(
+    resolve(checkout, 'extensions/caddy/server.ts')
+  )
+  const { CADDY_PREVIEW_PORTS } = await import(resolve(checkout, 'extensions/instance/server.ts'))
+  const root = process.env.ULTIMATE_PROJECT
+  const registry = join(process.env.HOME!, '.ultimate/caddy/routes.json')
+  const taken = existsSync(registry)
+    ? Object.keys(JSON.parse(readFileSync(registry, 'utf8')).routes ?? {}).map(Number)
+    : []
+  const published = (CADDY_PREVIEW_PORTS as number[]).findLast((each) => !taken.includes(each))
+  const origin: string | undefined =
+    published && (await previewOrigin(process.env.HOME, root, published))
+  if (!origin) return undefined
+  return {
+    origin,
+    publish: async (pid: number) => {
+      const served = await publishRoute(
+        process.env.HOME,
+        root,
+        `${pid}:demo`,
+        published,
+        `http://127.0.0.1:${port}`,
+      )
+      if (served) writeFileSync(join(state, 'caddy-port'), String(published))
+      return served as string | undefined
+    },
+  }
 }
 
 async function start() {
@@ -94,6 +133,7 @@ async function start() {
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.startsWith('ULTIMATE_')),
   )
+  const caddy = await reserveCaddy(checkout)
   const log = openSync(join(state, 'server.log'), 'a')
   const child = spawn(process.execPath, ['server/main.ts'], {
     cwd: checkout,
@@ -108,10 +148,12 @@ async function start() {
       ULTIMATE_NO_OPEN: '1',
       ULTIMATE_INSTANCE_OWNER: String(owner),
       ULTIMATE_MODEL: values.model,
+      ...(caddy && { ULTIMATE_PROXY_ORIGIN: caddy.origin }),
     },
   })
   writeFileSync(join(state, 'pid'), String(child.pid))
   child.unref()
+  const served = caddy && (await caddy.publish(child.pid!))
   for (let i = 0; i < 240; i++) {
     if (!alive(child.pid!)) break
     const ok = await fetch(`http://127.0.0.1:${port}/api/models`).then(
@@ -120,7 +162,7 @@ async function start() {
     )
     if (ok) {
       console.log(
-        `url      http://127.0.0.1:${port}\nproject  ${dir}\nhome     ${home}\nlog      ${join(state, 'server.log')}`,
+        `${served ? `caddy    ${served}\n` : ''}url      http://127.0.0.1:${port}\nproject  ${dir}\nhome     ${home}\nlog      ${join(state, 'server.log')}`,
       )
       return
     }

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { cp, readFile, stat, symlink, writeFile } from 'node:fs/promises'
+import { request } from 'node:http'
 import { join, resolve } from 'node:path'
 import {
   fauxAssistantMessage,
@@ -56,7 +57,7 @@ async function fixture({ foreign = false } = {}) {
   await git(root, 'clone', '--no-hardlinks', checkout, source)
   await git(source, 'switch', '-c', 'preview-source')
   // The preview runs the clone's committed code: give it this checkout's preview and landing code.
-  for (const path of ['extensions/instance', 'extensions/workspaces', 'lib'])
+  for (const path of ['extensions/instance', 'extensions/workspaces', 'lib', 'server'])
     await cp(join(checkout, path), join(source, path), { recursive: true })
   await symlink(join(checkout, 'node_modules'), join(source, 'node_modules'))
   await writeFile(
@@ -77,6 +78,7 @@ async function fixture({ foreign = false } = {}) {
     'extensions/instance',
     'extensions/workspaces',
     'lib',
+    'server',
   )
   await git(source, 'commit', '-m', 'Configure preview setup')
   const project = foreign ? join(root, 'app') : source
@@ -301,6 +303,46 @@ it('selects shared, isolated main and owned child checkouts with the main projec
     await f.service.discard(child.conversationId, context)
     await f.service.discard(main.id, context)
     expect(await f.run({ action: 'start' }, main.id)).toContain('active, ready')
+  } finally {
+    await f.close()
+  }
+}, 120000)
+it('serves a preview through Caddy while it runs, when the host is served by Caddy', async () => {
+  const f = await fixture()
+  const routes = new Map<number, string>()
+  f.services.set('caddy', {
+    publish: async (port: number, target: string) => {
+      if (port === 9490) throw new Error('Port 9490 is served for /elsewhere')
+      routes.set(port, target)
+      return `https://lan.example:${port}`
+    },
+    unpublish: async (port: number) => void routes.delete(port),
+  })
+  try {
+    const preview = JSON.parse(await f.call('instance', { action: 'start' })) as Preview & {
+      caddy: string
+    }
+    expect(preview.caddy).toBe('https://lan.example:9491')
+    expect([...routes]).toEqual([[9491, preview.url]])
+    expect((await f.list())[0]).toMatchObject({ id: preview.id, caddy: preview.caddy })
+    const status = await new Promise<number>((answered, reject) =>
+      request(
+        `${preview.url}/api/models`,
+        {
+          headers: {
+            host: 'lan.example:9491',
+            origin: preview.caddy,
+            'x-forwarded-for': '192.168.1.20',
+          },
+        },
+        (response) => answered(response.statusCode!),
+      )
+        .on('error', reject)
+        .end(),
+    )
+    expect(status).toBe(200)
+    await f.run({ action: 'stop', id: preview.id })
+    expect(routes.size).toBe(0)
   } finally {
     await f.close()
   }

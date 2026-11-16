@@ -15,6 +15,8 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { createServer } from 'node:net'
+import type { AddressInfo } from 'node:net'
 import { basename, join, resolve as resolvePath } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import type { Context } from '@earendil-works/chord/context'
@@ -25,6 +27,7 @@ import type { ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Subagents } from '../subagents/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
+import { CaddyApi } from '../caddy/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import type { WorkspaceService } from '../workspaces/api.ts'
 import { cleanPreview, sweepPreviews } from './cleanup.ts'
@@ -151,6 +154,8 @@ export function previewEnv(
     ownerPid: number
     model?: string
     git?: { common: string; branch: string; config: string }
+    port?: number
+    proxyOrigin?: string
   },
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -180,10 +185,11 @@ export function previewEnv(
     ULTIMATE_PROJECT: options.project,
     HOME: options.userHome,
     ULTIMATE_USER_HOME: options.userHome,
-    ULTIMATE_PORT: '0',
+    ULTIMATE_PORT: String(options.port ?? 0),
     ULTIMATE_NO_OPEN: '1',
     ULTIMATE_INSTANCE_OWNER: String(options.ownerPid),
     ...(options.model ? { ULTIMATE_MODEL: options.model } : {}),
+    ...(options.proxyOrigin ? { ULTIMATE_PROXY_ORIGIN: options.proxyOrigin } : {}),
     ...(options.git
       ? {
           ULTIMATE_PREVIEW_BRANCH: options.git.branch,
@@ -199,6 +205,7 @@ type RetryableStopInFlight = Promise<void>
 interface Instance {
   id: string
   url: string
+  caddy?: { port: number; loopback: number; url: string }
   home: string
   pid: number
   temporary: boolean
@@ -207,21 +214,23 @@ interface Instance {
   group: Group
   output: string
   stopping?: RetryableStopInFlight
+  unpublishing?: Promise<void>
 }
 
-const info = ({ id, url, home, pid, conversationId }: Instance) => ({
+const info = ({ id, caddy, url, home, pid, conversationId }: Instance) => ({
   id,
+  ...(caddy && { caddy: caddy.url }),
   url,
   home,
   pid,
   conversationId,
 })
 const live = (item: Instance) => item.child.exitCode === null && item.child.signalCode === null
-function running(host: Pick<ExtensionHost, 'resource' | 'onClose' | 'home'>) {
+function running(host: Pick<ExtensionHost, 'resource' | 'onClose' | 'home' | 'want'>) {
   const instances: Map<string, Instance> = host.resource('instance', () => {
     host.onClose(async () => {
       const served = [...instances.values()].filter((item) => item.url)
-      await Promise.all([...instances.keys()].map((id) => stop(instances, id)))
+      await Promise.all([...instances.keys()].map((id) => stop(host, instances, id)))
       for (const item of served) remember(host, item)
     })
     return new Map<string, Instance>()
@@ -265,19 +274,24 @@ export function remember(
   for (const port of [...byPort.keys()].slice(0, -50)) byPort.delete(port)
   writeFileSync(join(host.home, 'previews.json'), JSON.stringify([...byPort.values()]))
 }
-function stop(instances: Map<string, Instance>, id: string) {
+function stop(host: Pick<ExtensionHost, 'want'>, instances: Map<string, Instance>, id: string) {
   const instance = instances.get(id)
   if (!instance) return Promise.reject(new Error(`Unknown instance: ${id}`))
-  instance.stopping ??= stopInstance(instances, instance).catch((error: unknown) => {
+  instance.stopping ??= stopInstance(host, instances, instance).catch((error: unknown) => {
     instance.stopping = undefined
     throw error
   })
   return instance.stopping
 }
-async function stopInstance(instances: Map<string, Instance>, instance: Instance) {
+async function stopInstance(
+  host: Pick<ExtensionHost, 'want'>,
+  instances: Map<string, Instance>,
+  instance: Instance,
+) {
   const unreapedGroupLeaderPid = instance.child.pid
   if (unreapedGroupLeaderPid !== undefined)
     await stopGroup(unreapedGroupLeaderPid, { leader: instance.group, grace: 5000 })
+  await unpublishPreview(host, instance)
   if (instance.temporary) {
     await unlink(join(instance.home, 'ultimate.lock')).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
@@ -285,6 +299,50 @@ async function stopInstance(instances: Map<string, Instance>, instance: Instance
     await cleanPreview(instance.home)
   }
   instances.delete(instance.id)
+}
+
+export const CADDY_PREVIEW_PORTS = [9490, 9491, 9492, 9493, 9494, 9495, 9496, 9497, 9498, 9499]
+
+function freeLoopbackPort() {
+  return new Promise<number>((resolve, reject) => {
+    const server = createServer()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo
+      server.close(() => resolve(port))
+    })
+  })
+}
+
+export async function publishPreview(
+  host: Pick<ExtensionHost, 'want' | 'resource' | 'onClose' | 'home' | 'notice'>,
+) {
+  const caddy = host.want(CaddyApi)
+  if (!caddy) return undefined
+  const ours = new Set([...running(host).values()].flatMap((item) => item.caddy?.port ?? []))
+  const loopback = await freeLoopbackPort()
+  for (const port of CADDY_PREVIEW_PORTS.filter((free) => !ours.has(free))) {
+    let url: string | undefined
+    try {
+      url = await caddy.publish(port, `http://127.0.0.1:${loopback}`)
+    } catch (error) {
+      if (String(error).includes(' is served for ')) continue
+      host.notice(`Preview not served by Caddy: ${String(error)}`)
+      return undefined
+    }
+    return url ? { port, loopback, url } : undefined
+  }
+  return undefined
+}
+
+function unpublishPreview(host: Pick<ExtensionHost, 'want'>, item: Instance) {
+  const { caddy } = item
+  if (!caddy) return Promise.resolve()
+  item.unpublishing ??= (async () => {
+    await host.want(CaddyApi)?.unpublish(caddy.port)
+    item.caddy = undefined
+  })().finally(() => (item.unpublishing = undefined))
+  return item.unpublishing
 }
 
 async function tailnet(host: Pick<ExtensionHost, 'want' | 'userHome'>) {
@@ -315,6 +373,7 @@ export const actions: Record<string, ExtensionAction> = {
           ...listed({ ...item, conversationId: item.conversationId! }),
           running: live(item),
           ...(live(item) && addresses.has(item.pid) && { tailnet: addresses.get(item.pid) }),
+          ...(live(item) && item.caddy && { caddy: item.caddy.url }),
         })),
       ...[...stopped(host).values()]
         .filter((item) => ![...running(host).values()].some((run) => run.url === item.url))
@@ -435,25 +494,35 @@ export default function instanceExtension(
       const reusedHomeAlreadyHasPrivateConfig = existsSync(userHome)
       if (!reusedHomeAlreadyHasPrivateConfig) await seedUserHome(host.userHome, userHome)
       await linkHome(host.userHome, userHome)
-      const env = previewEnv(process.env, {
-        home,
-        project,
-        userHome,
-        ownerPid: process.pid,
-        model:
-          args.model === undefined ? await previewModelSetting(host) : (args.model ?? undefined),
-        git: await previewGit(project, home),
-      })
-      const group = spawnGroup(process.execPath, ['server/main.ts'], {
-        cwd,
-        env,
-        grace: 5000,
-      })
+      const model =
+        args.model === undefined ? await previewModelSetting(host) : (args.model ?? undefined)
+      const previewGitGuard = await previewGit(project, home)
+      const caddy = await publishPreview(host)
+      let group: Group
+      try {
+        group = spawnGroup(process.execPath, ['server/main.ts'], {
+          cwd,
+          env: previewEnv(process.env, {
+            home,
+            project,
+            userHome,
+            ownerPid: process.pid,
+            model,
+            git: previewGitGuard,
+            ...(caddy && { port: caddy.loopback, proxyOrigin: caddy.url }),
+          }),
+          grace: 5000,
+        })
+      } catch (error) {
+        if (caddy) await host.want(CaddyApi)?.unpublish(caddy.port)
+        throw error
+      }
       const { child } = group
       const id = randomUUID()
       const item: Instance = {
         id,
         url: '',
+        ...(caddy && { caddy }),
         home,
         pid: child.pid ?? 0,
         temporary: !args.home,
@@ -493,7 +562,12 @@ export default function instanceExtension(
           item.output += String(error)
           reject(notReady())
         })
-        child.on('exit', () => reject(notReady()))
+        child.on('exit', () => {
+          reject(notReady())
+          unpublishPreview(host, item).catch((error: unknown) =>
+            host.notice(`Preview route not removed: ${String(error)}`),
+          )
+        })
         const signal = context.abortSignal
         if (signal?.aborted) reject(signal.reason)
         signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
@@ -505,7 +579,7 @@ export default function instanceExtension(
         context.abortSignal?.throwIfAborted()
         return info(item)
       } catch (error) {
-        await stop(instances, id)
+        await stop(host, instances, id)
         throw error
       }
     } catch (error) {
@@ -565,7 +639,7 @@ export default function instanceExtension(
       const ended = []
       for (const item of instances.values()) {
         if (item.conversationId === undefined || !concluded.has(item.conversationId)) continue
-        await stop(instances, item.id)
+        await stop(host, instances, item.id)
         if (item.url) remember(host, item)
         ended.push(item.id)
       }
@@ -604,7 +678,7 @@ export default function instanceExtension(
             if (args.action === 'list') result = [...instances.values()].filter(live).map(info)
             else if (args.action === 'stop') {
               const item = instances.get(args.id ?? '')
-              await stop(instances, args.id ?? '')
+              await stop(host, instances, args.id ?? '')
               if (item?.url) remember(host, item)
               result = { stopped: args.id }
             } else if (args.action === 'logs') {

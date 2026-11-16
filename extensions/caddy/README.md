@@ -65,7 +65,15 @@ project, without a restart:
 
 Unticking, or the server closing, removes its route and its origin. A server listening on every interface
 (`--host 0.0.0.0`) is refused, since a LAN client could then send the proxy's `Host` directly; previews and scratch
-homes are never served.
+homes never serve themselves.
+
+## Published services
+
+`CaddyApi.publish(port, target)` serves another loopback service of a ticked project at `https://<domain>:<port>`
+while its server runs: Plannotator review sessions on 9480–9483, and previews on 9490–9499 (`instance start`, which
+passes the origin to the preview as `ULTIMATE_PROXY_ORIGIN`). Such a route is owned by the publishing server's pid
+and drops out when it dies. `publishRoute` and `unpublishRoute` do the same for a script outside a server (the
+`preview-demo` skill), owned by the process it started.
 
 ## Actions
 
