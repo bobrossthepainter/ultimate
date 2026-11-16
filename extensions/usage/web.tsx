@@ -48,6 +48,8 @@ const percent = (part: number, whole: number) =>
 const amount = (bucket: Bucket, unit: Unit) =>
   unit === '$' ? total(bucket.cost) : total(bucket.tokens)
 const show = (value: number, unit: Unit) => (unit === '$' ? dollars(value) : formatTokens(value))
+const cacheHit = (tokens: Kinds) =>
+  percent(tokens.cacheRead, tokens.cacheRead + tokens.cacheWrite + tokens.input)
 const perCall = (value: number, calls: number, format: (value: number) => string) =>
   calls ? format(value / calls) : '–'
 
@@ -376,6 +378,7 @@ function Models({ report, unit }: { report: Report; unit: Unit }) {
         '$/call',
         'context/call',
         'fresh/call',
+        'cache hit',
       ]}
     >
       {models.map(([model, bucket]) => (
@@ -400,6 +403,7 @@ function Models({ report, unit }: { report: Report; unit: Unit }) {
           <Cell>
             {perCall(bucket.tokens.input + bucket.tokens.cacheWrite, bucket.calls, formatTokens)}
           </Cell>
+          <Cell>{cacheHit(bucket.tokens)}</Cell>
         </Row>
       ))}
     </Table>
@@ -411,8 +415,8 @@ function Branches({ report, unit, local }: { report: Report; unit: Unit; local: 
   if (!report.branches.length) return <Empty>no calls in this range</Empty>
   return (
     <Table
-      head={['branch', unit === '$' ? 'cost' : 'tokens', 'calls', 'roles']}
-      textColumns={[0, 3]}
+      head={['branch', unit === '$' ? 'cost' : 'tokens', 'calls', 'cache hit', 'roles']}
+      textColumns={[0, 4]}
     >
       {report.branches.map((branch) => {
         const cost = total(branch.total.cost)
@@ -438,6 +442,7 @@ function Branches({ report, unit, local }: { report: Report; unit: Unit; local: 
             </Cell>
             <Cell>{show(amount(branch.total, unit), unit)}</Cell>
             <Cell>{branch.total.calls.toLocaleString()}</Cell>
+            <Cell>{cacheHit(branch.total.tokens)}</Cell>
             <Cell className="text-left text-muted-foreground" left>
               {roles}
             </Cell>
@@ -501,8 +506,6 @@ function Body({
 }) {
   const whole = amount(report.total, unit)
   const subscription = Object.values(report.byModel).some((model) => model.subscription)
-  const prompt =
-    report.total.tokens.cacheRead + report.total.tokens.cacheWrite + report.total.tokens.input
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-1">
@@ -512,7 +515,7 @@ function Body({
         <span className="font-mono text-[11.5px] text-muted-foreground">
           {unit === '$' ? 'estimated at list price' : 'tokens'} ·{' '}
           {!report.fallback && `${report.total.calls.toLocaleString()} calls · `}cache hit{' '}
-          {percent(report.total.tokens.cacheRead, prompt)}
+          {cacheHit(report.total.tokens)}
           {unit === '$' &&
             report.undated.cost > 0 &&
             ` · plus ${dollars(report.undated.cost)} for tools, titles and pings, all time`}
