@@ -11,7 +11,9 @@ conversation, a child of the branch (owned by an `architect.anchor` task, so the
 made on its first run and reused after, its cwd the branch's worktree (the project checkout once that is gone).
 
 A run starts only when the user asks: **Draw**, in the surface or ⌘K **Draw architecture** (the `draw` action). It
-returns at once; a Draw while the architect still draws starts nothing. No agent has a tool to draw.
+returns at once; a Draw while the architect still draws starts nothing. No agent has a tool to draw. Only branches
+are drawn: `draw`, `chat` and `ask` refuse a standing agent (@ultimate, @voice, the lander), a root and a subagent
+(drawing from an architect draws its branch), and the surface hides them from its picker and ⌘K.
 
 Its brief names the branch, its worktree and target (the architect reads `git diff <target>...HEAD` and uncommitted
 work itself), the committed changed files (`git diff --stat`, which asks for implementation views), the branch's plan, its coordinator's latest answer, and the previous version as JSON, so diagram and

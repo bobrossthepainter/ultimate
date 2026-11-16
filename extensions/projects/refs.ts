@@ -18,6 +18,8 @@ export type RunningProject = {
   questions?: number
   /** Its HTTPS port on the tailnet, when Tailscale registered one: where a page opened over the tailnet reaches it. */
   tailnetPort?: number
+  /** Other HTTPS origins it is served at (a reverse proxy's): a page opened on one's host reaches it there. */
+  served?: string[]
 }
 
 /** No arguments → every running instance on this machine, this one included, in project order. */

@@ -8,6 +8,7 @@ import { githubRepo, readGithubRepo } from '../../lib/project-identity.ts'
 import type { GithubRepo } from '../../lib/project-identity.ts'
 import { postAction } from '../../lib/remote.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { CaddyApi } from '../caddy/api.ts'
 import { MessagesApi } from '../messages/api.ts'
 import { ListAction, PinAction } from './refs.ts'
 import type { RunningProject } from './refs.ts'
@@ -72,6 +73,7 @@ async function tailnetPorts(host: ExtensionHost) {
 
 export async function list(host: ExtensionHost, signal: AbortSignal): Promise<RunningProject[]> {
   const tailnet = await tailnetPorts(host)
+  const caddy = (await host.want(CaddyApi)?.served().catch(meansNone)) ?? {}
   return Promise.all(
     (await host.projects()).flatMap(({ name, root, running, current }) => {
       const processOrLockUrl = current ? host.system().process.url : running?.url
@@ -85,6 +87,7 @@ export async function list(host: ExtensionHost, signal: AbortSignal): Promise<Ru
             current,
             ...(repo && { repo: { name: repo.name, url: repo.url, visibility: repo.visibility } }),
             ...(root && tailnet[root] ? { tailnetPort: tailnet[root] } : {}),
+            ...(root && caddy[root] ? { served: [caddy[root]] } : {}),
             ...(current
               ? await localCounts(host)
               : await timedRemoteCounts(name, processOrLockUrl, signal)),
@@ -104,6 +107,7 @@ const readPin = async (path: string) => {
 
 export default function projects(host: ExtensionHost) {
   host.need(MessagesApi)
+  host.want(CaddyApi)
   return defineExtension({ name: 'projects' })
 }
 

@@ -29,8 +29,9 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { Exec } from '../exec/api.ts'
+import { Roots } from '../lineage/api.ts'
 import { parseError } from './parse.ts'
-import { SubagentsApi } from '../subagents/api.ts'
+import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import {
   ArchitectureDoc,
@@ -378,6 +379,23 @@ async function branchOf(host: ExtensionHost, id: number, ctx: Context) {
   return (await host.harness().snapshot(Of, id as ConversationId, ctx))?.branch ?? id
 }
 
+async function refuseNonBranch(host: ExtensionHost, id: ConversationId, ctx: Context) {
+  const found = await host.harness().commit((tx) => tx.conversation(id), ctx)
+  if (!found) throw new Error(`No conversation #${id}`)
+  if (found.owner) throw new Error(`#${id} is a subagent: the architect draws only branches`)
+  const roots = (await host.harness().snapshot(Roots, ROOT_CONVERSATION_ID, ctx))?.roots ?? [
+    ROOT_CONVERSATION_ID,
+  ]
+  if (roots.includes(id)) throw new Error(`#${id} is a root: the architect draws only branches`)
+  const standing = Object.entries(
+    (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)) ?? {},
+  ).find(([, agent]) => agent === id)?.[0]
+  if (standing)
+    throw new Error(`#${id} is @${standing}, a standing agent: the architect draws only branches`)
+  if (host.conversations().find((c) => c.id === id)?.label === 'lander')
+    throw new Error(`#${id} is a lander: the architect draws only branches`)
+}
+
 async function latestAnswer(host: ExtensionHost, id: number, ctx: Context) {
   const conversation = await host.harness().conversation(id as ConversationId, ctx)
   if (!conversation) return undefined
@@ -491,8 +509,7 @@ async function brief(host: ExtensionHost, branch: number, ctx: Context) {
 
 async function draw(host: ExtensionHost, requested: number, ctx: Context) {
   const branch = await branchOf(host, requested, ctx)
-  if (!conversationExists(host, branch))
-    throw new Error('conversation must be an existing conversation id')
+  await refuseNonBranch(host, branch as ConversationId, ctx)
   const definition = (
     await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
   ).definitions.find((item) => item.name === 'architect')
@@ -658,10 +675,12 @@ export const actions = {
     if (typeof id !== 'number' || !Number.isSafeInteger(id) || !conversationExists(host, id))
       throw new Error('branch must be an existing conversation id')
     const branch = (await branchOf(host, id, context)) as ConversationId
+    await refuseNonBranch(host, branch, context)
     return { chat: await chat(host, branch, record(args) && args.fresh === true, context) }
   }),
   ask: implementAction(AskAction, async (args, { host, device }) => {
     const { branch, version: number } = target(host, args)
+    await refuseNonBranch(host, branch, context)
     const version = (await host.harness().snapshot(Versions, branch, context))?.versions.find(
       (item) => item.version === number,
     )
