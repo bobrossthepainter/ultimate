@@ -6,7 +6,7 @@ description: 'Check the running Ultimate host after a landing card arrives, befo
 # Smoke-check a landing
 
 The landing card says what was merged; it does not prove the host runs it. Read it back, then report only what you
-read back (memory `verify-cross-project-status`): the sha, the errors, the models, the proof.
+read back: the sha, the errors, the models, the proof.
 
 ## Steps
 
@@ -15,14 +15,26 @@ read back (memory `verify-cross-project-status`): the sha, the errors, the model
    (`git diff --stat <before>..<sha> -- server shared patches pnpm-lock.yaml`). `web/`, `extensions/`, `agents/`,
    skills and docs reload on their own. Before restarting, list running previews and busy branches: a restart stops
    every preview. Tell each preview's owner (`note` its `conversationId`) before calling `restart`.
-3. **Health, after any restart:** the build generation went up and left no facet out, no extension has a load
+3. **Backup, when Pi Durable or Chord changed version** (`git diff <before>..<sha> -- package.json | rg
+   'pi-durable|chord'`): before the restart migrates storage, copy the project's database and check the copy. Read
+   its path from `ultimate.system()` (`persistence.path`); `<version>` is the new one:
+
+   ```bash
+   D=~/.ultimate/backups/pre-<version>-$(date +%Y%m%d-%H%M%S) && mkdir -p $D && node -e "const {DatabaseSync} = require('node:sqlite'); const [from, to] = process.argv.slice(1); new DatabaseSync(from, {readOnly: true}).exec(\`VACUUM INTO '\${to}'\`); console.log(new DatabaseSync(to, {readOnly: true}).prepare('pragma integrity_check').get())" <state.sqlite> $D/state.sqlite
+   ```
+
+   Restart only when it prints `integrity_check: 'ok'`.
+
+4. **`bin/` changed:** the supervisor runs the old code until the user restarts it (`pnpm start`); `restart` does
+   not apply it. Tell the user, separately from any core restart.
+5. **Health, after any restart:** the build generation went up and left no facet out, no extension has a load
    error, Claude Code is logged in with its models, and your own model in `pi.agent` is the one you expect.
-4. **Feature proof:** one read that shows the landed behaviour itself: the file on main, a document, an action's
+6. **Feature proof:** one read that shows the landed behaviour itself: the file on main, a document, an action's
    result, the served bundle, a screenshot. Never the card's word alone.
 
 ## One snippet
 
-Run it in codemode; it returns steps 1 to 3 as one small object. Add the feature proof by hand.
+Run it in codemode; it returns steps 1, 2 and 5 as one small object. Add the feature proof by hand.
 
 ```js
 const sh = async (command) => (await tools.bash({ command })).trim()
@@ -57,5 +69,6 @@ keep it in `jq`, out of your context. Run the snippet before a restart (previews
 
 ## Report
 
-The landed sha, whether it restarted and why, the health line (`generation`, extension errors, Claude Code models,
+The landed sha, whether it restarted and why, the backup path when one was taken, a pending supervisor restart, the
+health line (`generation`, extension errors, Claude Code models,
 own model), the feature proof, and anything unverified named as such.

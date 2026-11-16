@@ -58,7 +58,7 @@ draft})`, so the post or close the user picks sends exactly that text.
 After the go, keep the `--no-ff` merge from step 2 so the author's commits stay as they are (no squash, rebase or
 amend), and `workspace submit` it: the lander runs every check on the merged result and pushes. Fixes of your own go
 in separate commits after the merge; one that works around something names its origin (the PR number, the upstream
-issue) and intent in a comment at the code.
+issue) and intent in its commit message, never a code comment, and adds a regression test that fails without it.
 
 ## GitHub actions are not yours
 

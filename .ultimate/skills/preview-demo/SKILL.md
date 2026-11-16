@@ -20,7 +20,7 @@ does it in one call:
 Run from the worktree to preview. It needs `node_modules`, so run `pnpm install` there first if it is missing.
 
 ```bash
-node .ultimate/skills/preview-demo/demo.ts start            # prints url, project, home, log
+node .ultimate/skills/preview-demo/demo.ts start            # prints caddy (when served), url, project, home, log
 node .ultimate/skills/preview-demo/demo.ts start            # reset: stops it, fresh project and home, starts again
 node .ultimate/skills/preview-demo/demo.ts stop
 ```
@@ -46,7 +46,9 @@ Tell the user which link is which.
 
 ## What to hand over
 
-The link (plus the tailnet URL from the server log, if any) and the prompt to paste first:
+The `caddy` link when start printed one (the host is served by Caddy; it is published on 9499 down, owned by the
+demo's process), else the loopback link plus the tailnet URL from the server log, if any. Then the prompt to paste
+first:
 
 ```
 Please start three coordinators in parallel, one each, all small: (1) dark mode for the recipe list via prefers-color-scheme in style.css, (2) a search box above the list that filters recipes by name, (3) show the total cooking time of all recipes under the list. Each should just do it, commit and workspace submit without asking me anything. Tell me as each one lands.

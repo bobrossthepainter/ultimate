@@ -569,7 +569,7 @@ export default function caddy(host: ExtensionHost) {
     set({ state: 'off' })
   })
   host.want(TailscaleApi)
-  const ours = (route: Route) => route.owner.split(':')[0] === String(process.pid)
+  const ours = (route: Route) => ownedBy(route, process.pid)
   host.resource('caddy:published', () => {
     host.onClose(async () => {
       const config = configOf(await settingsOf(host.userHome))
@@ -586,39 +586,9 @@ export default function caddy(host: ExtensionHost) {
     return true
   })
   host.implement(CaddyApi, {
-    async publish(port, target) {
-      const settings = await settingsOf(host.userHome)
-      const config = configOf(settings)
-      if (temporary || !settings.serve?.[host.projectRoot] || !config.domain) return undefined
-      if (!config.dns && !config.cert) return undefined
-      const token = config.dns ? await readSecret(host.userHome, TOKEN) : undefined
-      if (config.dns && !token) return undefined
-      if (!(await probe(files, config.dns))) return undefined
-      const key = String(port)
-      await allocating(host.userHome, async () => {
-        const serve = (await settingsOf(host.userHome)).serve ?? {}
-        const reserved = Object.entries(serve).find(([, entry]) => entry.port === port)
-        if (reserved) throw new Error(`Port ${port} is served for ${reserved[0]}`)
-        await withRegistry(files, host.userHome, async (registry) => {
-          const holder = registry.routes[key]
-          if (holder && !(holder.published && ours(holder)))
-            throw new Error(`Port ${port} is served for ${holder.root}`)
-          registry.routes[key] = { root: host.projectRoot, target, owner, published: true }
-          await apply(files, config, registry, token)
-        })
-      })
-      return originOf(port, config)
-    },
-    async unpublish(port) {
-      const config = configOf(await settingsOf(host.userHome))
-      const token = config.dns ? await readSecret(host.userHome, TOKEN) : undefined
-      await withRegistry(files, host.userHome, async (registry) => {
-        const route = registry.routes[String(port)]
-        if (!route?.published || !ours(route)) return
-        delete registry.routes[String(port)]
-        if (config.domain && (await running(files))) await apply(files, config, registry, token)
-      })
-    },
+    publish: async (port, target) =>
+      temporary ? undefined : publishRoute(host.userHome, host.projectRoot, owner, port, target),
+    unpublish: (port) => unpublishRoute(host.userHome, process.pid, port),
     async served() {
       const settings = await settingsOf(host.userHome)
       const config = configOf(settings)
@@ -633,6 +603,64 @@ export default function caddy(host: ExtensionHost) {
   })
   set(status)
   return defineExtension({ name: 'caddy' })
+}
+
+const ownedBy = (route: Route, pid: number) => route.owner.split(':')[0] === String(pid)
+
+async function servable(userHome: string, root: string | undefined) {
+  const settings = await settingsOf(userHome)
+  const config = configOf(settings)
+  if (!root || !settings.serve?.[root] || !config.domain) return undefined
+  if (!config.dns && !config.cert) return undefined
+  const token = config.dns ? await readSecret(userHome, TOKEN) : undefined
+  if (config.dns && !token) return undefined
+  if (!(await probe(paths(userHome), config.dns))) return undefined
+  return { config, token }
+}
+
+export async function previewOrigin(userHome: string, root: string | undefined, port: number) {
+  const ready = await servable(userHome, root)
+  return ready && originOf(port, ready.config)
+}
+
+export async function publishRoute(
+  userHome: string,
+  root: string,
+  owner: string,
+  port: number,
+  target: string,
+) {
+  const files = paths(userHome)
+  const ready = await servable(userHome, root)
+  if (!ready) return undefined
+  const { config, token } = ready
+  const key = String(port)
+  const pid = Number(owner.split(':')[0])
+  await allocating(userHome, async () => {
+    const serve = (await settingsOf(userHome)).serve ?? {}
+    const reserved = Object.entries(serve).find(([, entry]) => entry.port === port)
+    if (reserved) throw new Error(`Port ${port} is served for ${reserved[0]}`)
+    await withRegistry(files, userHome, async (registry) => {
+      const holder = registry.routes[key]
+      if (holder && !(holder.published && ownedBy(holder, pid)))
+        throw new Error(`Port ${port} is served for ${holder.root}`)
+      registry.routes[key] = { root, target, owner, published: true }
+      await apply(files, config, registry, token)
+    })
+  })
+  return originOf(port, config)
+}
+
+export async function unpublishRoute(userHome: string, pid: number, port: number) {
+  const files = paths(userHome)
+  const config = configOf(await settingsOf(userHome))
+  const token = config.dns ? await readSecret(userHome, TOKEN) : undefined
+  await withRegistry(files, userHome, async (registry) => {
+    const route = registry.routes[String(port)]
+    if (route && !(route.published && ownedBy(route, pid))) return
+    delete registry.routes[String(port)]
+    if (config.domain && (await running(files))) await apply(files, config, registry, token)
+  })
 }
 
 export const caddyfilePath = (userHome: string) => paths(userHome).caddyfile

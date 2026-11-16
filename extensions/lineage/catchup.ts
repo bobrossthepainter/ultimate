@@ -6,7 +6,7 @@ import type {
   EntryRecord,
   Tx,
 } from '@earendil-works/pi-durable'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { onCommit } from '../../lib/commits.ts'
 import type { Context } from '@earendil-works/chord/context'
 import { AgentDoc, defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -125,8 +125,9 @@ async function changedFiles(host: ExtensionHost, id: ConversationId, main: Main,
           if (part.type !== 'toolCall' || !['edit', 'write'].includes(part.name)) continue
           const path = part.arguments.path
           if (typeof path !== 'string') continue
-          const absolute = isAbsolute(path) ? path : resolve(cwd, path)
-          files.add(relative(main.cwd, absolute))
+          const inRepo = relative(main.cwd, isAbsolute(path) ? path : resolve(cwd, path))
+          if (inRepo && inRepo !== '..' && !inRepo.startsWith(`..${sep}`) && !isAbsolute(inRepo))
+            files.add(inRepo)
         }
       }
     }
@@ -173,7 +174,7 @@ async function catchupText(
         range,
         '--',
         ...ownFilePathspecForBoundedMergeNames,
-      ).catch(() => '')
+      )
     : ''
   const parse = (records: string) =>
     records

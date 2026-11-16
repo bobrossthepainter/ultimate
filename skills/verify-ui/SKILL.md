@@ -25,6 +25,14 @@ Never claim a UI change works without an image of it.
   `(async () => { const r = await fetch('/api/x'); return r.status })()`. A bare `const x = …; return x` fails.
 - Scope selectors to the card or panel under test: `[data-entry-id="42"] button:has-text("Retry")`, not
   `button:has-text("Retry")`, which clicks the first match anywhere on the page.
+- Reach surfaces and commands by the attributes the app sets, never by guessed text:
+  - a surface: click `[data-ui="surface-tabs"] [data-surface="usage"]` (ids from
+    `[...document.querySelectorAll('[data-ui="surface-tabs"] [data-surface]')].map((e) => e.dataset.surface)`); the
+    shown one carries `aria-current="page"`. The tabs are hidden below 768 px wide: use the palette there;
+  - a ⌘K command: `press: 'Control+k'`, `wait: '[data-ui="palette"]'`, then click
+    `[data-ui="palette"] [cmdk-item][data-value$=" secrets.panel"]`. Each item's `data-value` is its title, a space and
+    its command id; list them with `eval` on `[data-ui="palette"] [cmdk-item]`. Click by id; typing into the palette
+    does not reliably filter it.
 - Wait on Ultimate's state, never a guessed time: `{send: 'prompt'}` submits without the composer, then
   `{until: 'idle'}` returns when that turn is done, `{until: 'quiet'}` when nothing runs (branches and subagents
   included), `{until: {entry: 'pi.tool-result'}}` or `{until: {event: 'workspaces.landed', where: {…}}}` when that

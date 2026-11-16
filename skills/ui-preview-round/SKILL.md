@@ -19,7 +19,7 @@ screenshots: send them with the request.
    judge exists: a long transcript, a running tool, a skill run, an error. Never fake state by writing entries; drive
    it as `verify-ui` describes (`send`, then `until`).
 4. **Look first yourself**: follow the `verify-ui` skill. Fix what is off before you ask anyone.
-5. **Ask for approval** the way your instructions ask decisions, with the screenshots as `images`. Include the URL (the tailnet URL when the preview chip
+5. **Ask for approval** the way your instructions ask decisions, with the screenshots as `images`. Include the URL (its `caddy` URL when `instance start` returned one, else the tailnet URL when the preview chip
    shows one), what changed, a short numbered "what to try" naming the conversation you seeded, and a choice question
    (approve as is, or change something).
 6. **Iterate**: each change is a new commit and a new round; keep the same preview running.

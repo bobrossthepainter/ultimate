@@ -35,6 +35,7 @@ git fetch upstream && git remote set-head upstream --auto
 
 ## After landing
 
-The update extension installs packages when the landing changed `pnpm-lock.yaml`, and the status line asks for a
-restart when `server/`, `shared/` or packages changed (`bin/` needs a human `pnpm start`). Say which in the report;
-never restart on your own.
+The update extension installs packages when the landing changed `pnpm-lock.yaml`. Whoever gets the landing card
+(usually @ultimate) follows the `ultimate-landing-smoke` skill: it covers the restart, the backup a Pi Durable or
+Chord bump needs before it, and a `bin/` change that only the user can apply. In your report, name which of these the
+merge brings; never restart on your own.

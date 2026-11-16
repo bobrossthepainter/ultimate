@@ -209,6 +209,32 @@ so branches adding divergences in parallel do not edit the same lines.
   and spokes); spokes without the extension show their `pi.usage` totals
 - Upstream: local-only (written generically, so it could be given back)
 
+### @ultimate routes forwarded insights
+
+- Touches: `agents/ultimate.md` (one sentence in "Coordinators and messages")
+- Why: A research handover or insight forwarded from another project or session sat as background instead of being
+  acted on; @ultimate now routes it to a branch in the same turn and tells the user where it went
+- Upstream: candidate
+
+### Stable selectors in verify-ui
+
+- Touches: `skills/verify-ui/SKILL.md` (one bullet under "How")
+- Why: In #27553, 6 of 7 browser failures came from ambiguous selectors and guessing the ⌘K palette. The bullet names
+  the attributes the app already sets (`data-ui="surface-tabs"`, `data-surface`, `data-ui="palette"`, cmdk's
+  `data-value`), checked against the running UI
+- Upstream: candidate
+
+### Previews through Caddy
+
+- Touches: `extensions/instance/` (`server.ts` start/stop/list publish through an optional `want(CaddyApi)`, `web.tsx`
+  card, links and switcher, `refs.ts` `caddy`, README), `extensions/caddy/` (`publishRoute`/`unpublishRoute`,
+  README), `server/main.ts` (an unsupervised server honours `ULTIMATE_PROXY_ORIGIN`),
+  `.ultimate/skills/preview-demo/`, `skills/ui-preview-round/SKILL.md`, `extensions/instance/test/e2e/instance.test.ts`
+- Why: Previews were reachable only on loopback, so their links were useless from other LAN devices. When the host
+  project is served by Caddy, `instance start` and the preview demo publish the preview at
+  `https://<domain>:9490–9499`, and that link is the one handed to the user; without Caddy nothing changes
+- Upstream: local-only (Caddy is fork-only; the `server/main.ts` line is a candidate on its own)
+
 ### Side chats from branches
 
 - Touches: `extensions/side-chat/` (open from a branch, fork at the newest finished step, read-only branch copies,

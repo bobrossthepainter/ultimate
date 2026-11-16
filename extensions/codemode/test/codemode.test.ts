@@ -419,11 +419,14 @@ it('applies each automation call in one script to its own arguments', async () =
      const id = created.split(' ')[0];
      await tools.automation({action:'subscribe', id, to:'@ultimate'});
      await tools.automation({action:'unsubscribe', id, to:'#${server.root.id}'});
-     const [stored] = await ultimate.action('automations', 'list');
-     return { line: await tools.automation({action:'list'}), subscribers: stored.subscribers };`,
+     const stored = (await ultimate.action('automations', 'list')).find((a) => a.id === id);
+     const listed = await tools.automation({action:'list'});
+     return { id, line: listed.split('\\n').find((line) => line.startsWith(id + ' ')), subscribers: stored.subscribers };`,
   )
+  const { id } = result.data.details.value as { id: string }
   expect(result.data.details.value).toEqual({
-    line: 'A1 Probe — Every 1 day — enabled → @ultimate',
+    id,
+    line: `${id} Probe — Every 1 day — enabled → @ultimate`,
     subscribers: ['@ultimate'],
   })
 })

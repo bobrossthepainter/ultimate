@@ -30,6 +30,7 @@ import type { Preview } from './refs.ts'
 interface Instance {
   id: string
   url: string
+  caddy?: string
   home: string
   pid: number
 }
@@ -70,6 +71,17 @@ function Card({ instance, status }: { instance: Instance; status: string }) {
               ? label(instance.url, instance.url, target.href)
               : instance.url}
             {target?.kind === 'tailnet' && <ExternalLinkIcon className="size-3" />}
+          </a>
+        )}
+        {instance.caddy && target?.kind !== 'off' && (
+          <a
+            className="flex items-center gap-1 text-muted-foreground hover:underline"
+            href={instance.caddy}
+            rel="noreferrer"
+            target="_blank"
+          >
+            {instance.caddy}
+            <ExternalLinkIcon className="size-3" />
           </a>
         )}
         <span className="text-muted-foreground/70">
@@ -191,6 +203,11 @@ function Poll() {
   return null
 }
 
+const onCaddy = (preview: Preview) =>
+  !!preview.caddy && new URL(preview.caddy).hostname === location.hostname
+const reachable = (preview: Preview) =>
+  onCaddy(preview) ? preview.caddy : (preview.tailnet ?? preview.caddy)
+
 type Target =
   | { kind: 'self' | 'tailnet'; href: string; open?: undefined }
   | { kind: 'frame'; href: string; open: (event: MouseEvent) => void }
@@ -207,10 +224,12 @@ function usePreviewTarget(href: string, isPreviewOwnUrl = false): Target | undef
   const live = known.find((item) => item.running)
   if (!live)
     return known.length || isPreviewOwnUrl ? { kind: 'off', reason: 'Not running' } : undefined
-  if (!canFrameLoopbackPreviews)
-    return live.tailnet
-      ? { kind: 'tailnet', href: at(live.tailnet, url) }
+  if (!canFrameLoopbackPreviews) {
+    const remote = reachable(live)
+    return remote
+      ? { kind: 'tailnet', href: at(remote, url) }
       : { kind: 'off', reason: 'Only on this machine' }
+  }
   const frame = at(live.url, url)
   return {
     kind: 'frame',
@@ -270,9 +289,13 @@ const port = (url: string) => `:${new URL(url).port}`
 
 function Switcher() {
   const current = useShown()?.preview
-  const data = usePreviews()?.filter((preview) => preview.running)
+  const data = usePreviews()?.filter(
+    (preview) => preview.running && (canFrameLoopbackPreviews || onCaddy(preview)),
+  )
   const conversations = useConversations()
   if (!data?.length) return null
+  const choose = (preview: Preview) =>
+    canFrameLoopbackPreviews ? show(preview) : window.open(preview.caddy, '_blank', 'noreferrer')
   const title = (preview: Preview) =>
     conversations.find((conversation) => conversation.id === preview.conversationId)?.title
   return (
@@ -309,7 +332,7 @@ function Switcher() {
             className="gap-2 py-1.5"
             data-instance={preview.id}
             key={preview.id}
-            onSelect={() => show(preview)}
+            onSelect={() => choose(preview)}
           >
             <span
               className={cn(
@@ -321,7 +344,7 @@ function Switcher() {
               {title(preview) && <span className="text-muted-foreground"> {title(preview)}</span>}
             </span>
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-              {port(preview.url)}
+              {port(preview.caddy ?? preview.url)}
             </span>
           </DropdownMenuItem>
         ))}
@@ -352,5 +375,5 @@ function Embedded() {
 export default defineWebExtension({
   tools: { instance: InstanceCall },
   link: PreviewLink,
-  slots: { 'titlebar.left': canFrameLoopbackPreviews ? [Switcher] : [], overlay: [Poll, Embedded] },
+  slots: { 'titlebar.left': [Switcher], overlay: [Poll, Embedded] },
 })
