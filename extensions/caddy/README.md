@@ -60,6 +60,8 @@ project, without a restart:
    reboot and the first ticked server to start brings it back.
 3. It registers `https://<domain>:<port>` as an allowed origin (`host.access.allow`), the runtime form of
    `--proxy-origin`. Cloud backups register it as the project's address when Tailscale publishes none.
+   `CaddyApi.served()` names the origin of every project routed now, by root; the projects rail links there from a
+   page on the domain.
 
 Unticking, or the server closing, removes its route and its origin. A server listening on every interface
 (`--host 0.0.0.0`) is refused, since a LAN client could then send the proxy's `Host` directly; previews and scratch

@@ -189,3 +189,13 @@ so branches adding divergences in parallel do not edit the same lines.
   re-sync them when upstream changes keep-warm's ping. Its `beforeCompact` hook (`order = -1`, before lineage) asks
   for the summary on the branch's own cached context instead of lineage's uncached source text
 - Upstream: candidate
+
+### Projects rail over Caddy
+
+- Touches: `extensions/projects/` (`refs.ts` `served`, `links.ts`, `server.ts` wants `CaddyApi`, `web.tsx` label),
+  `extensions/caddy/` (`CaddyApi.served()`)
+- Why: Upstream's rail links other Ultimates only over loopback or on their Tailscale port, so on a page served by
+  the fork's Caddy hosting (`https://<domain>:<port>`) every other project was greyed out "not on the tailnet".
+  Caddy now names each routed project's origin, and the rail links there when the page's host matches; the dimmed
+  label says "not served on this address"
+- Upstream: candidate (a generic "served origins" field any reverse proxy could fill)
