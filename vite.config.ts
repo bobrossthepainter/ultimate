@@ -68,11 +68,12 @@ export default defineConfig({
       {
         // Project commands go through the exec service. Ultimate's own host-local work spawns here: the exec service and
         // its ssh protocol, Caddy, Tailscale, updates, previews, automation scripts, Claude Code, the editor launcher,
-        // the lander's checks and disk usage, Plannotator sessions, and checking extension code with the clone's tools
-        // (extensions/exec/README.md).
+        // the lander's checks and disk usage, Plannotator sessions, the sounds narrator, and checking extension code with
+        // the clone's tools (extensions/exec/README.md).
         files: ['extensions/**', '**/.ultimate/extensions/**'],
         excludeFiles: [
           'extensions/{automations,caddy,check-extensions,claude-code,exec,instance,lineage,plannotator,ssh-exec,tailscale,update,upstream-sync,workspaces}/**',
+          'extensions/sounds/command.ts',
           // An extension's test/ folder is not part of the extension: tests set up their fixtures on this machine.
           'extensions/*/test/**',
         ],
@@ -82,6 +83,21 @@ export default defineConfig({
         files: ['**/*'],
         excludeFiles: ['test/**', 'extensions/*/test/**', 'lib/replay.ts'],
         rules: { 'ultimate/replay-safe-by-name': 'error' },
+      },
+      {
+        files: ['server/**', 'lib/**', 'shared/**', 'extensions/**/*.ts'],
+        excludeFiles: [
+          'test/**',
+          'extensions/*/test/**',
+          'lib/errors.ts',
+          'extensions/review/drafts.ts',
+          'extensions/sounds/conductor.ts',
+          'extensions/sounds/engine.ts',
+          'extensions/sounds/speaker.ts',
+          'extensions/sounds/tones.ts',
+          'extensions/voice-live/session.ts',
+        ],
+        rules: { 'ultimate/no-unowned-work': 'error' },
       },
       {
         files: [

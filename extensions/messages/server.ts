@@ -31,18 +31,19 @@ import { implementAction } from '../../lib/actions.ts'
 import { isOwed } from '../../lib/message-state.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import { imagesParameter, SCAN_PAGE } from './images.ts'
-import { owedRequest, parentOf, Started, starterOf } from './addresses.ts'
+import { owed, parentOf, Started, starterOf, stillServedAfter } from './addresses.ts'
 import { delivery } from './delivery.ts'
 import { notice } from './notice.ts'
 import { receiptOf, send } from './send.ts'
 import type { Device } from '../../shared/events.ts'
 import type { Context } from '@earendil-works/chord/context'
-import { reported, route, working } from './route.ts'
-import { projectsSection, remoteAction, remoteReplyAction, tell } from './remote.ts'
+import { answerRemoteRequest, reported, route, working } from './route.ts'
+import { projectsSection, remoteAction, remoteReplyAction, Tell, tell } from './remote.ts'
 import { branchTool } from './branch.ts'
+import { remoteProgress } from './progress.ts'
 import { safeToRerun } from '../../lib/replay.ts'
 export { gist, openQuestionsNote } from './questions.ts'
-export const docs = [Messages]
+export const docs = [Messages, Started]
 
 async function openMessage(host: ExtensionHost, messageId: number, ctx: Context) {
   const log = await host.harness().snapshot(Messages, ROOT_CONVERSATION_ID, ctx)
@@ -183,6 +184,7 @@ export const actions = {
         : await answer(host, messageId as number, text.trim(), ctx, { via: { via, primary } }),
     }
   }),
+  remoteProgress,
   remote: remoteAction,
   remoteReply: remoteReplyAction,
   async addresses(_args: unknown, { host }: ActionContext) {
@@ -203,6 +205,7 @@ export const actions = {
   },
 }
 
+export const pollActions = ['remoteProgress']
 export const userActions = ['remote', 'remoteReply']
 export default function messages(host: ExtensionHost) {
   host.need(LineageApi)
@@ -226,12 +229,16 @@ export default function messages(host: ExtensionHost) {
       ),
     dismiss: (messageId, ctx, device, call) => dismiss(host, messageId, ctx, { device, call }),
     send: (from, input, requestId, ctx) => send(host, from, input, ctx, { requestId }),
-    tell: (from, input, ctx, signal) => tell(host, from, input, ctx, signal),
-    owed: owedRequest,
+    tell: (from, input, ctx) => tell(host, from, input, ctx),
+    owed,
+    dropped: async (tx, by, serves, why, fired) => {
+      if (serves.from === 'remote' && !(await stillServedAfter(tx, serves, fired)))
+        await answerRemoteRequest(host, tx, by, serves, why, undefined, undefined, true)
+    },
   })
   return defineExtension({
     name: 'messages',
-    tasks: [delivery(host), route(host), notice(host)],
+    tasks: [delivery(host), route(host), notice(host), Tell],
     hooks: [
       hook(GenerationTask, {
         // Pi upstream: @earendil-works/pi-durable@1.5.2 — patched transactional beforeInput hook.

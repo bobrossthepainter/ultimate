@@ -1,7 +1,9 @@
 import { parseConversationId } from '../../lib/ids.ts'
 import type { ConversationId, Tx, TaskId } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord/context'
-import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { defineDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { FiredEntry, MessageEntry, ReplyEntry } from '../entries/api.ts'
+import type { DeliveredMessage } from './refs.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import type { Remote, Serves } from './refs.ts'
@@ -9,6 +11,38 @@ import { Messages } from './api.ts'
 import { isOwed } from '../../lib/message-state.ts'
 
 export type { Serves }
+
+export const Serving = defineDoc<{
+  keys: Record<string, number>
+  handed: Record<string, true>
+  handedOnBy: Record<string, string>
+}>({
+  kind: 'board.serving',
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ keys: {}, handed: {}, handedOnBy: {} }),
+})
+const ANSWERING_RUN = 0
+
+export function closeServed(
+  serving: { keys: Record<string, number>; handedOnBy: Record<string, string> },
+  key: string,
+) {
+  delete serving.keys[key]
+  for (const [entry, handedKey] of Object.entries(serving.handedOnBy))
+    if (handedKey === key) delete serving.handedOnBy[entry]
+}
+
+export async function stillServedAfter(tx: Tx, serves: Serves, fired?: number) {
+  const serving = await tx.doc(Serving, ROOT_CONVERSATION_ID)
+  if (!serves.remote || !Object.hasOwn(serving.keys, serves.remote.key)) return false
+  const firedRunHandedItOn = fired !== undefined && Object.hasOwn(serving.handedOnBy, String(fired))
+  const laterStepServesIt = fired !== undefined && serving.keys[serves.remote.key] > fired
+  return firedRunHandedItOn || laterStepServesIt
+}
 
 export async function owedRequest(tx: Tx, to: ConversationId): Promise<Serves | undefined> {
   const newestOwedRequestProxy = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.findLast(
@@ -20,6 +54,52 @@ export async function owedRequest(tx: Tx, to: ConversationId): Promise<Serves | 
     from: newestOwedRequestProxy.from,
     ...(newestOwedRequestProxy.remote ? { remote: { ...newestOwedRequestProxy.remote } } : {}),
   }
+}
+
+export async function serve(tx: Tx, to: ConversationId): Promise<Serves | undefined> {
+  const serving = await tx.doc(Serving, ROOT_CONVERSATION_ID)
+  const request = await owedRequest(tx, to)
+  if (request) {
+    if (request.remote) {
+      serving.keys[request.remote.key] = ANSWERING_RUN
+      serving.handed[request.remote.key] = true
+    }
+    return request
+  }
+  for (const submission of ((await tx.doc(LiveDoc, to)).run?.inputs ?? []).toReversed()) {
+    const record = await tx.submission(submission)
+    if (record?.type !== 'input' || record.entry === undefined) continue
+    const serves = (await tx.entry(FiredEntry, record.entry))?.data.serves
+    if (!serves?.remote || !Object.hasOwn(serving.keys, serves.remote.key)) continue
+    serving.keys[serves.remote.key] = record.entry
+    serving.handedOnBy[String(record.entry)] = serves.remote.key
+    return { message: serves.message, from: serves.from, remote: { ...serves.remote } }
+  }
+  return undefined
+}
+
+export async function branchesReadThisRun(tx: Tx, to: ConversationId) {
+  const log = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages
+  const read = new Set<ConversationId>()
+  for (const submission of (await tx.doc(LiveDoc, to)).run?.inputs ?? []) {
+    const record = await tx.submission(submission)
+    if (record?.type !== 'input' || record.entry === undefined) continue
+    const entry = await tx.entry(record.entry)
+    const data: Partial<DeliveredMessage> | undefined =
+      MessageEntry.is(entry) || ReplyEntry.is(entry) ? entry.data : undefined
+    if (!ReplyEntry.is(entry) && !(MessageEntry.is(entry) && data?.reply === false)) continue
+    if (typeof data?.from !== 'number' || data.echo === true) continue
+    if ((await tx.doc(Started, data.from)).by !== to) continue
+    const since = data.id ?? 0
+    if (!log.some((m) => m.from === to && m.to === data.from && m.id > since)) read.add(data.from)
+  }
+  return [...read]
+}
+
+export async function owed(tx: Tx, to: ConversationId, answersBack = true) {
+  const serves = answersBack ? await serve(tx, to) : undefined
+  const branches = await branchesReadThisRun(tx, to)
+  return { ...(serves ? { serves } : {}), ...(branches.length ? { branches } : {}) }
 }
 
 export const Started = defineDoc<{ by?: ConversationId; yielded?: TaskId; serves?: Serves }>({

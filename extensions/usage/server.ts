@@ -11,6 +11,7 @@ import type {
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { rebuiltOnOpen } from '../../lib/errors.ts'
 import { onCommit } from '../../lib/commits.ts'
 import { postAction, reachable, selfAddress } from '../../lib/remote.ts'
 import { Started as StartedEvent } from '../subagents/api.ts'
@@ -345,9 +346,12 @@ export default function usage(host: Host) {
       for (const [id, entries] of pending) count(id, entries)
       pending.clear()
     })()
-    index.ready.catch((error: unknown) => {
-      if (opened === epoch) host.notice(`Usage could not read the history: ${String(error)}`)
-    })
+    rebuiltOnOpen(
+      'open reads the usage history again',
+      index.ready.catch((error: unknown) => {
+        if (opened === epoch) host.notice(`Usage could not read the history: ${String(error)}`)
+      }),
+    )
   })
   return defineExtension({ name: 'usage' })
 }

@@ -33,8 +33,8 @@ import type { WorkspaceService } from '../workspaces/api.ts'
 import { cleanPreview, sweepPreviews } from './cleanup.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { git, isolatable } from '../../lib/git.ts'
-import { meansNone, overshadowed } from '../../lib/errors.ts'
-import { spawnGroup, stopGroup } from '../../lib/process-group.ts'
+import { inProcess, rebuiltOnOpen, meansNone, overshadowed } from '../../lib/errors.ts'
+import { spawnGroup, stopGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import { within } from '../../lib/timers.ts'
 import type { Group, GroupProcess } from '../../lib/process-group.ts'
 import { Previews } from '../conversations/api.ts'
@@ -212,10 +212,14 @@ interface Instance {
   conversationId?: ConversationId
   child: GroupProcess
   group: Group
+  pidFile: string
   output: string
   stopping?: RetryableStopInFlight
   unpublishing?: Promise<void>
 }
+
+const previewPids = (home: string) => join(home, 'preview-pids')
+const startedByThisProcess = (name: string) => name.startsWith(`${process.pid}-`)
 
 const info = ({ id, caddy, url, home, pid, conversationId }: Instance) => ({
   id,
@@ -294,7 +298,11 @@ async function stopInstance(
 ) {
   const unreapedGroupLeaderPid = instance.child.pid
   if (unreapedGroupLeaderPid !== undefined)
-    await stopGroup(unreapedGroupLeaderPid, { leader: instance.group, grace: 5000 })
+    await stopGroup(unreapedGroupLeaderPid, {
+      leader: instance.group,
+      grace: 5000,
+      pidFile: instance.pidFile,
+    })
   await unpublishPreview(host, instance)
   if (instance.temporary) {
     await unlink(join(instance.home, 'ultimate.lock')).catch((error: NodeJS.ErrnoException) => {
@@ -452,9 +460,15 @@ export default function instanceExtension(
   const starts = host.resource('instance.starts', () => ({ pending: 0 }))
   const projectIsUltimateSource = host.projectRoot === host.ultimateRoot
   host.onOpen(async () => {
-    void sweepPreviews(tmpdir(), host.notice).catch((error: unknown) => {
-      host.notice(`Preview sweep failed: ${String(error)}`)
+    await sweepPidFiles(previewPids(host.home), startedByThisProcess).catch((error: unknown) => {
+      host.notice(`Stopping previews a crash left running failed: ${String(error)}`)
     })
+    rebuiltOnOpen(
+      'every open sweeps preview directories again',
+      sweepPreviews(tmpdir(), host.notice).catch((error: unknown) => {
+        host.notice(`Preview sweep failed: ${String(error)}`)
+      }),
+    )
   })
   async function start(
     args: { home?: string; model?: string | null },
@@ -512,6 +526,8 @@ export default function instanceExtension(
       const model =
         args.model === undefined ? await previewModelSetting(host) : (args.model ?? undefined)
       const previewGitGuard = await previewGit(project, home)
+      await mkdir(previewPids(host.home), { recursive: true })
+      const pidFile = join(previewPids(host.home), `${process.pid}-${randomUUID()}.pid`)
       const caddy = await publishPreview(host)
       let group: Group
       try {
@@ -527,6 +543,7 @@ export default function instanceExtension(
             ...(caddy && { port: caddy.loopback, proxyOrigin: caddy.url }),
           }),
           grace: 5000,
+          pidFile,
         })
       } catch (error) {
         if (caddy) await unpublishCaddyPort(host, caddy.port)
@@ -544,6 +561,7 @@ export default function instanceExtension(
         conversationId,
         child,
         group,
+        pidFile,
         output: '',
       }
       instances.set(id, item)
@@ -579,8 +597,11 @@ export default function instanceExtension(
         })
         child.on('exit', () => {
           reject(notReady())
-          unpublishPreview(host, item).catch((error: unknown) =>
-            host.notice(`Preview route not removed: ${String(error)}`),
+          inProcess(
+            'the route belongs to the preview process that just exited',
+            unpublishPreview(host, item).catch((error: unknown) =>
+              host.notice(`Preview route not removed: ${String(error)}`),
+            ),
           )
         })
         const signal = context.abortSignal

@@ -290,11 +290,27 @@ function backend(host: ExtensionHost) {
     }
     return prepared
   }
-  async function owedAtCreation(tx: Tx, caller?: ConversationId) {
+  async function owedAtCreation(tx: Tx, subscribers: Subscriber[], caller?: ConversationId) {
     if (caller === undefined || (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate !== caller)
       return {}
-    const serves = await host.need(MessagesApi).owed(tx, caller)
-    return serves ? { serves: { ...serves, by: caller } } : {}
+    const firesWakeCaller = subscribers.some((s) => s === caller || s === '@ultimate')
+    const { serves, branches } = await host.need(MessagesApi).owed(tx, caller, firesWakeCaller)
+    return {
+      ...(serves ? { serves: { ...serves, by: caller } } : {}),
+      ...(branches ? { branches: { ids: branches, by: caller } } : {}),
+    }
+  }
+  async function dropServedRequest(tx: Tx, a: Automation) {
+    if (!a.serves) return
+    const { by, ...serves } = a.serves
+    await host
+      .need(MessagesApi)
+      .dropped(
+        tx,
+        by,
+        serves,
+        `Automation ${a.id} "${a.name}", which worked on your message ${serves.message}, was deleted before it fired; no result will come from it.`,
+      )
   }
   async function changeScript(
     tx: Tx,
@@ -335,23 +351,30 @@ function backend(host: ExtensionHost) {
           sub.fires
         )
           throw new Error(`Automation ${prepared.slug} already exists; pass another slug`)
+        const subscribers = [
+          ...new Set([
+            ...sub.subscribers,
+            ...(prepared.subscribers ?? (args.prompt || !caller ? [] : [caller])),
+          ]),
+        ]
         Object.assign(sub, runProfile, {
           enabled: true,
           updatedAt: Date.now(),
-          subscribers: [
-            ...new Set([
-              ...sub.subscribers,
-              ...(prepared.subscribers ?? (args.prompt || !caller ? [] : [caller])),
-            ]),
-          ],
+          subscribers,
           ...(args.key ? { key: args.key } : {}),
-          ...(await owedAtCreation(tx, caller)),
+          ...(await owedAtCreation(tx, subscribers, caller)),
         })
         sub.script!.state = 'writing'
         await deliver(tx, sub, 'create', 'writing', sub.script!.ask)
         return { result: sub }
       }
       const id = `A${state.next++}`
+      const subscribers = prepared.subscribers?.length
+        ? prepared.subscribers
+        : args.prompt
+          ? []
+          : [caller!]
+      const owed = await owedAtCreation(tx, subscribers, caller)
       const conversationId = await agentConversation(
         tx,
         prepared,
@@ -372,17 +395,13 @@ function backend(host: ExtensionHost) {
           state: 'writing',
           ...(args.secrets ? { secrets: args.secrets } : {}),
         },
-        subscribers: prepared.subscribers?.length
-          ? prepared.subscribers
-          : args.prompt
-            ? []
-            : [caller!],
+        subscribers,
         ...runProfile,
         createdAt: now,
         updatedAt: now,
         runs: [],
         fires: 0,
-        ...(await owedAtCreation(tx, caller)),
+        ...owed,
       }
       state.automations[id] = sub
       await deliver(tx, sub, 'create', 'writing', sub.script!.ask)
@@ -419,7 +438,10 @@ function backend(host: ExtensionHost) {
         sub.enabled = false
         if (sub.script!.state !== 'done') sub.script!.state = 'stopped'
       }
-      if (args.action === 'delete') delete state.automations[id]
+      if (args.action === 'delete') {
+        await dropServedRequest(tx, sub)
+        delete state.automations[id]
+      }
       return {
         result: args.action === 'delete' ? { id } : sub,
         effect: { id, action: 'pause', ...(pid ? { previousPid: pid } : {}) },
@@ -564,6 +586,11 @@ function backend(host: ExtensionHost) {
     const id = args.action === 'create' ? `A${state.next++}` : required(args.id, 'id')
     if (args.action === 'create') {
       const now = Date.now()
+      const subscribers = prepared.subscribers?.length
+        ? prepared.subscribers
+        : args.prompt
+          ? []
+          : [caller!]
       state.automations[id] = {
         id,
         name: required(args.name, 'name'),
@@ -574,12 +601,8 @@ function backend(host: ExtensionHost) {
         runs: [],
         fires: 0,
         ...(args.key ? { key: args.key } : {}),
-        subscribers: prepared.subscribers?.length
-          ? prepared.subscribers
-          : args.prompt
-            ? []
-            : [caller!],
-        ...(await owedAtCreation(tx, caller)),
+        subscribers,
+        ...(await owedAtCreation(tx, subscribers, caller)),
       }
     }
     const a = state.automations[id]
@@ -611,6 +634,7 @@ function backend(host: ExtensionHost) {
     delete a.scheduler
     if (args.action !== 'update') delete a.nextAt
     if (args.action === 'delete') {
+      await dropServedRequest(tx, a)
       delete state.automations[id]
       return { result: { id }, ...(abort ? { abort } : {}) }
     }

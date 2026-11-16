@@ -40,7 +40,7 @@ import type { Api, Catalogue } from '../shared/extension-api.ts'
 import { inExtensionTests } from '../shared/extension-api.ts'
 import { secretMetadata } from '../lib/secrets.ts'
 import type { Device } from '../shared/events.ts'
-import { inBackground, isMissing, meansNone } from '../lib/errors.ts'
+import { inProcess, isMissing, meansNone } from '../lib/errors.ts'
 
 export type ExtensionHost = Pick<
   PreparedHost,
@@ -186,8 +186,11 @@ export async function loadExtensions(
           if (open) log.notice(name, message)
         }
         notice(message)
-        void Promise.resolve(changed()).catch((error: unknown) =>
-          console.error('Publishing extension changes failed:', error),
+        inProcess(
+          'extension change notifications belong to this extension host',
+          Promise.resolve(changed()).catch((error: unknown) =>
+            console.error('Publishing extension changes failed:', error),
+          ),
         )
       },
       resource: <T>(key: string, create: () => T) =>
@@ -217,7 +220,10 @@ export async function loadExtensions(
           facetOpeners.get(facetHost)!.add(callback)
           openers.add(callback)
           if (open && [...facetHosts.values()].includes(facetHost))
-            inBackground(runOpener(callback))
+            inProcess(
+              'the onOpen callback belongs to this loaded extension facet',
+              runOpener(callback),
+            )
         }
       },
       onRelease: (callback) => {
@@ -362,7 +368,7 @@ export async function loadExtensions(
     },
     onOpen: (callback) => {
       openers.add(callback)
-      if (open) inBackground(runOpener(callback))
+      if (open) inProcess('the onOpen callback belongs to this extension host', runOpener(callback))
     },
     onRelease: (callback) => {
       releasers.add(callback)

@@ -1,4 +1,4 @@
-import { overshadowed, retriedLater } from '../../lib/errors.ts'
+import { inProcess, overshadowed, rebuiltOnOpen, retriedLater } from '../../lib/errors.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -53,7 +53,11 @@ export default async function sshExec(host: ExtensionHost) {
     statuses.set(target.id, { ...status, state: 'ready' })
   }
   const protocol = sshProtocol(sockets, (target, code) => {
-    if (code === 255) void check(target).catch(retriedLater)
+    if (code === 255)
+      inProcess(
+        'a reachability check only updates this process status',
+        check(target).catch(retriedLater),
+      )
     else if (code !== null) ready(target)
   })
   const routed: ExecTarget[] = targets.map((target) => ({
@@ -88,7 +92,8 @@ export default async function sshExec(host: ExtensionHost) {
     },
   })
   host.implement(SshExecApi, { status: () => [...statuses.values()] })
-  for (const target of targets) void check(target).catch(retriedLater)
+  for (const target of targets)
+    rebuiltOnOpen('every load checks each target again', check(target).catch(retriedLater))
   host.onClose(async () => {
     await Promise.all(targets.map((target) => release(target, sockets).catch(overshadowed)))
   })

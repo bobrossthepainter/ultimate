@@ -1,4 +1,5 @@
 import { ROOT } from '@/sdk'
+import { parseConversationId } from '../../lib/ids.ts'
 import {
   GitBranchIcon,
   CircleCheckIcon,
@@ -47,8 +48,8 @@ const settled = {
     tone: 'text-amber-700 dark:text-amber-300',
   },
   awaiting: {
-    label: 'Awaiting @ultimate',
-    word: 'Awaiting @ultimate',
+    label: 'Waiting',
+    word: 'Waiting',
     tone: 'text-brand',
   },
   done: { label: 'Done: its answer went to its parent', word: 'Done', tone: 'text-success' },
@@ -60,10 +61,12 @@ function Mark({
   working,
   unseen,
   state,
+  waitLabel,
 }: {
   working?: 'self' | 'subagents'
   unseen: boolean
   state?: ConversationState
+  waitLabel?: string
 }) {
   const shown = !working && state && state in settled ? (state as keyof typeof settled) : undefined
   const label = working
@@ -71,7 +74,7 @@ function Mark({
       ? 'Working'
       : 'Subagents working'
     : shown
-      ? settled[shown].label
+      ? ((shown === 'awaiting' ? waitLabel : undefined) ?? settled[shown].label)
       : 'New answer'
   return (
     <span className="flex size-3 shrink-0 items-center justify-center">
@@ -119,6 +122,7 @@ type RowProps = {
   now: number
   onConclude: (conclude: boolean) => void
   state?: ConversationState
+  waitLabel?: string
   activity?: string
   feature?: string
 }
@@ -142,6 +146,7 @@ function PhasedRow({
   onConclude,
   feature,
   state,
+  waitLabel,
   activity,
   displayPhase,
 }: RowProps & { displayPhase?: { label: ReactNode } }) {
@@ -159,7 +164,7 @@ function PhasedRow({
         ? 'Untitled conversation'
         : `#${conversation.id}`)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
-  const hasMetadata = feature || conversation.workspace || latest > 0
+  const hasMetadata = feature || conversation.workspace || latest > 0 || waitLabel
   const rename = () => {
     cancelled.current = false
     setEditing(true)
@@ -196,7 +201,12 @@ function PhasedRow({
     >
       {editing ? (
         <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
-          <Mark state={state} unseen={unseen} working={leadingMarkWorkingWithoutPhaseDot} />
+          <Mark
+            state={state}
+            waitLabel={waitLabel}
+            unseen={unseen}
+            working={leadingMarkWorkingWithoutPhaseDot}
+          />
           <input
             aria-label="Conversation title"
             autoFocus
@@ -233,12 +243,22 @@ function PhasedRow({
             type="button"
           >
             <span className="flex w-full min-w-0 items-center gap-1.5">
-              <Mark state={state} unseen={unseen} working={leadingMarkWorkingWithoutPhaseDot} />
+              <Mark
+                state={state}
+                waitLabel={waitLabel}
+                unseen={unseen}
+                working={leadingMarkWorkingWithoutPhaseDot}
+              />
               {title}
             </span>
             {hasMetadata && (
               <span className="flex w-full items-center gap-2 pr-5 pl-[18px] font-mono text-[10px] leading-4 text-muted-foreground">
                 {feature && <FeatureTag feature={feature} />}
+                {waitLabel && (
+                  <span className="min-w-0 truncate text-brand" title={waitLabel}>
+                    {waitLabel}
+                  </span>
+                )}
                 {conversation.workspace && (
                   <span className="shrink-0" title="Isolated checkout">
                     #{conversation.id}
@@ -449,7 +469,6 @@ type ChildRowProps = {
   conversation: ConversationSummary
   row?: OverviewRow
   shown: boolean
-  primary?: number
   parked?: boolean
 }
 
@@ -465,7 +484,6 @@ function TaskedSubagentLine({
   conversation,
   row,
   shown,
-  primary,
   parked,
   depth,
   task,
@@ -479,7 +497,6 @@ function TaskedSubagentLine({
       runState: row?.runState,
       busy: conversation.busy,
       parked,
-      primary,
     },
     log,
   )
@@ -521,6 +538,47 @@ function TaskedSubagentLine({
         {working ? 'working' : (known?.word.toLowerCase() ?? 'idle')}
       </span>
     </button>
+  )
+}
+
+const shownWaits = 3
+
+export function WaitLines({
+  waits,
+}: {
+  waits: readonly { id: number; title?: string; feature?: string }[]
+}) {
+  const actions = useShell()
+  const [all, setAll] = useState(false)
+  const hidden = waits.length - shownWaits
+  const shown = all || hidden <= 1 ? waits : waits.slice(0, shownWaits)
+  return (
+    <div data-ui="wait-lines">
+      {shown.map((wait) => (
+        <button
+          className="mx-2 flex h-6 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-5 text-left font-mono text-[10.5px] outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+          data-wait-line={wait.id}
+          key={wait.id}
+          onClick={() => actions.switchConversation(parseConversationId(wait.id))}
+          title={[`#${wait.id}`, wait.feature, wait.title].filter(Boolean).join(' · ')}
+          type="button"
+        >
+          <span className="w-2 shrink-0 text-muted-foreground/40">└</span>
+          <span className="shrink-0 text-brand">#{wait.id}</span>
+          {wait.feature && <FeatureTag className="max-w-[45%] shrink-0" feature={wait.feature} />}
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">{wait.title ?? ''}</span>
+        </button>
+      ))}
+      {!all && hidden > 1 && (
+        <button
+          className="mx-2 flex h-6 w-[calc(100%-1rem)] cursor-pointer items-center gap-1.5 rounded-md pl-5 font-mono text-[10.5px] text-muted-foreground outline-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+          onClick={() => setAll(true)}
+          type="button"
+        >
+          <span className="w-2 shrink-0 text-muted-foreground/40">└</span>+{hidden} more
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -584,7 +642,6 @@ function TaskedChildRow({
   conversation,
   row,
   shown,
-  primary,
   parked,
   task,
 }: ChildRowProps & { task?: { chip: ReactNode; title: string } }) {
@@ -597,7 +654,6 @@ function TaskedChildRow({
       runState: row?.runState,
       busy: conversation.busy,
       parked,
-      primary,
     },
     log,
   )

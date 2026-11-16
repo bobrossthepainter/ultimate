@@ -1,5 +1,5 @@
 import { deadline } from '../../lib/timers.ts'
-import { meansNone, overshadowed } from '../../lib/errors.ts'
+import { inProcess, meansNone, overshadowed, rebuiltOnOpen } from '../../lib/errors.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
@@ -287,18 +287,21 @@ async function launch(host: ExtensionHost, session: Running, args: string[], cwd
   group.child.once('error', (error) => ready.reject(error))
   group.child.once('exit', () => {
     ready.reject(new Error(output.trim() || 'Plannotator exited before it served'))
-    void closeOutput(group)
-      .then(() => {
-        const line = stdout.trim().split('\n').at(-1)
-        let decision: Decision | undefined
-        try {
-          decision = line ? (JSON.parse(line) as Decision) : undefined
-        } catch (error) {
-          meansNone(error)
-        }
-        return finish(host, session, decision?.decision ?? 'failed', decision, output)
-      })
-      .catch((error: unknown) => host.notice(`Plannotator: ${String(error)}`))
+    inProcess(
+      'the decision is read from the output of the Plannotator process that just exited',
+      closeOutput(group)
+        .then(() => {
+          const line = stdout.trim().split('\n').at(-1)
+          let decision: Decision | undefined
+          try {
+            decision = line ? (JSON.parse(line) as Decision) : undefined
+          } catch (error) {
+            meansNone(error)
+          }
+          return finish(host, session, decision?.decision ?? 'failed', decision, output)
+        })
+        .catch((error: unknown) => host.notice(`Plannotator: ${String(error)}`)),
+    )
   })
   const cancelServeDeadline = deadline(30000, () =>
     ready.reject(new Error('Plannotator did not serve within 30 s')),
@@ -551,7 +554,10 @@ export const actions: Record<string, ExtensionAction> = {
 }
 
 export default function plannotator(host: ExtensionHost) {
-  swept(host).catch((error: unknown) => host.notice(`Plannotator: ${String(error)}`))
+  rebuiltOnOpen(
+    'every load sweeps sessions a previous process left behind',
+    swept(host).catch((error: unknown) => host.notice(`Plannotator: ${String(error)}`)),
+  )
   state(host)
   host.want(CaddyApi)
   return defineExtension({

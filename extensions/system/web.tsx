@@ -20,7 +20,17 @@ import {
   useUltimate,
 } from '@/sdk'
 import { SYSTEM_TAB_KEY, SystemTab } from './ui.tsx'
-import { MessagesDoc, conversationState, emptyMessages } from '../messages/ui.tsx'
+import {
+  MessagesDoc,
+  conversationState,
+  conversationWait,
+  waitLabel,
+  useRemoteProgress,
+  useStarters,
+  useUnderway,
+  emptyMessages,
+} from '../messages/ui.tsx'
+import { useAutomations, timerWaits } from '../automations/ui.tsx'
 import { useConcludedSince, useOverview } from '../conversations/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { LaneTree } from './hierarchy.tsx'
@@ -48,24 +58,48 @@ function useStates(parked: ReadonlySet<number>) {
   const log = useDocOf(ROOT, MessagesDoc) ?? emptyMessages
   const overview = useOverview()
   const conversations = useConversations()
-  const primary = useDocOf(ROOT, StandingDoc)?.ultimate
+  const standing = useDocOf(ROOT, StandingDoc)
+  const primary = standing?.ultimate
+  const timers = timerWaits(useAutomations(5000).data, standing)
+  const starterOf = useStarters()
+  const underway = useUnderway()
+  const primaryWait =
+    primary === undefined
+      ? undefined
+      : conversationWait(
+          {
+            id: primary,
+            kind: 'primary',
+            runState: overview[primary]?.runState,
+            busy: underway(primary),
+          },
+          log,
+          timers,
+        )
+  const remote = useRemoteProgress(primaryWait?.on === 'remote' ? primaryWait.project : undefined)
   const concludedSince = useConcludedSince()
   return (lane: Lane) => {
     const id = lane.conversation
     const own = conversations.find((item) => item.id === id)
-    const state = conversationState(
-      {
-        id,
-        kind: id === primary ? 'primary' : own?.ownerTaskId !== undefined ? 'subagent' : 'other',
-        runState: overview[id]?.runState,
-        busy: own?.busy,
-        parked: parked.has(id),
-        primary,
-        concludedSince: concludedSince(id),
-      },
-      log,
-    )
-    return laneState(lane, state, overview[id] !== undefined)
+    const facts = {
+      id,
+      kind:
+        id === primary
+          ? ('primary' as const)
+          : own?.ownerTaskId !== undefined
+            ? ('subagent' as const)
+            : ('other' as const),
+      runState: overview[id]?.runState,
+      busy: own?.ownerTaskId !== undefined ? own.busy : underway(id),
+      parked: parked.has(id),
+      starter: starterOf(id),
+      concludedSince: concludedSince(id),
+    }
+    const state = conversationState(facts, log, timers)
+    return {
+      state: laneState(lane, state, overview[id] !== undefined),
+      label: waitLabel(conversationWait(facts, log, timers), primary, primaryWait, remote.data),
+    }
   }
 }
 
@@ -175,7 +209,9 @@ function Lanes({ parked, tabs }: { parked: ReadonlySet<number>; tabs: ReactNode 
   const lanes = useLanes(range, live)
   const stateOf = useStates(parked)
   const list = lanes.data?.lanes ?? []
-  const states = new Map(list.map((lane) => [lane.conversation, stateOf(lane)]))
+  const derived = list.map((lane) => [lane.conversation, stateOf(lane)] as const)
+  const states = new Map(derived.map(([id, value]) => [id, value.state]))
+  const labels = new Map(derived.map(([id, value]) => [id, value.label]))
 
   const worked = list.filter((lane) => lane.runs.length > 0)
   const running = worked.filter((lane) => states.get(lane.conversation) === 'running').length
@@ -239,6 +275,7 @@ function Lanes({ parked, tabs }: { parked: ReadonlySet<number>; tabs: ReactNode 
                 </p>
               ) : (
                 <LaneTree
+                  labels={labels}
                   lanes={list}
                   links={lanes.data?.links ?? []}
                   now={now}

@@ -64,7 +64,7 @@ user asks.
 On `dream.ready`, call `prepare` once:
 
 - `chapter`: a 2–3 word lowercase, dash-separated name drawn from what the dream learned (at most 40 characters);
-- `learned`: exactly three short lines in your own voice ("I learned…", "I keep…", "I'd like…");
+- `learned`: an array of exactly three short strings in your own voice ("I learned…", "I keep…", "I'd like…");
 - `handoff`: a fresh handover, written now: what is open and how far each got, what landed from the dream, the
   decisions and the user's corrections, and what to do next (Markdown, at most 12,000 characters).
 
@@ -105,9 +105,11 @@ Every pass starts from @ultimate's handoff in its brief, then reads with codemod
 `#conversation/entry`, a trace error, a commit or `path:line`. Conversation summaries and abstracts (in the root's
 tally, `ultimate.entries(<root>)`) are the cheap way in; open a conversation only where they point at something.
 
-- **memory** — distil the project memory: memories that are outdated, contradicted, duplicated or too vague; lessons
-  that later conversations taught but nobody remembered. Output add/update/delete ops, each with reason and evidence
-  (the memory review in extensions/lineage/README.md). Never drop or weaken the memory about the user.
+- **memory** — hold every memory to one test: would a branch starting next month act differently without it? Delete
+  what fails: what the code, docs or instructions now show, one-off or tabled decisions, finished investigations,
+  lessons a check now prevents. Merge overlaps, update what is outdated or contradicted, and add lessons later
+  conversations taught that nobody remembered and that pass the test. Output add/update/delete ops, each with reason
+  and evidence (the memory review in extensions/lineage/README.md). Never drop or weaken the memory about the user.
 - **failures** — what failed often: `watchdog.failure` cards, tool and action errors in the trace, retries, reactor
   failures, lander rejections, runs the user had to stop. Group by cause; for the top ones propose a fix.
 - **tools** — `stats` gives calls, failures, mean duration and enabled tools never called. Explain the numbers: why a

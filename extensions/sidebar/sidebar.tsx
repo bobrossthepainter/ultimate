@@ -34,15 +34,22 @@ import {
   useWorkspaceConversations as useConversations,
   useWorkspaceIndex,
 } from '../workspaces/ui.tsx'
-import { Row, ChildRow, EpicLine, StandingRow, SubagentLine } from './rows.tsx'
+import { Row, ChildRow, EpicLine, StandingRow, SubagentLine, WaitLines } from './rows.tsx'
+import { waitedOn } from '../../lib/waits.ts'
 import {
   MessagesDoc,
   conversationState,
+  conversationWait,
+  waitLabel,
+  useRemoteProgress,
+  useStarters,
+  useUnderway,
   emptyMessages,
   stateTone,
   stateWord,
 } from '../messages/ui.tsx'
 import { InFlight, inFlight, MemoryRow, stillOpen } from './root.tsx'
+import { useAutomations, timerWaits } from '../automations/ui.tsx'
 import { Project } from './project.tsx'
 import type { Flight } from './root.tsx'
 import { Landed, useLandings } from './landed.tsx'
@@ -157,6 +164,25 @@ function Tree({
   const topLevel = topLevelRows(conversations, new Set(unlisted.flatMap((set) => [...set])))
   const standingIds = useDocOf(ROOT, StandingDoc)
   const ultimateId = standingIds?.ultimate
+  const timers = timerWaits(useAutomations(5000).data, standingIds)
+  const starterOf = useStarters()
+  const underway = useUnderway()
+  const primaryWait =
+    ultimateId === undefined
+      ? undefined
+      : conversationWait(
+          {
+            id: ultimateId,
+            kind: 'primary',
+            runState: overview[ultimateId]?.runState,
+            busy: underway(ultimateId),
+          },
+          log,
+          timers,
+        )
+  const remote = useRemoteProgress(primaryWait?.on === 'remote' ? primaryWait.project : undefined)
+  const labelOf = (conversation: Parameters<typeof conversationWait>[0]) =>
+    waitLabel(conversationWait(conversation, log, timers), ultimateId, primaryWait, remote.data)
   const ultimate = topLevel.find((conversation) => conversation.id === ultimateId)
   const agents = topLevel
     .filter(
@@ -264,30 +290,44 @@ function Tree({
         : (Object.entries(standingIds ?? {}).find(([, id]) => id === conversation.id)?.[0] ??
           conversation.title?.replace(/^@/, '') ??
           `#${conversation.id}`)
-    const state = conversation
-      ? conversationState(
-          {
-            id: conversation.id,
-            kind: isUltimate ? 'primary' : 'other',
-            runState: overview[conversation.id]?.runState,
-            busy,
-            parked: parked.has(conversation.id),
-            primary: ultimateId,
-          },
-          log,
-        )
-      : waiting > 0
-        ? 'waits'
-        : 'idle'
+    const facts = conversation && {
+      id: conversation.id,
+      kind: isUltimate ? ('primary' as const) : ('other' as const),
+      runState: overview[conversation.id]?.runState,
+      busy: busy || underway(conversation.id),
+      parked: parked.has(conversation.id),
+    }
+    const state = facts ? conversationState(facts, log, timers) : waiting > 0 ? 'waits' : 'idle'
     const markKeepsPulsingWhileUserWaits =
       state === 'working' || landing || (busy && state === 'waits')
-    return (
+    const waits =
+      isUltimate &&
+      facts &&
+      state === 'awaiting' &&
+      conversationWait(facts, log, timers)?.on === 'agent'
+        ? waitedOn(facts.id, log.messages).map((id) => ({
+            id,
+            title: conversations.find((c) => c.id === id)?.title,
+            feature: overview[id]?.feature,
+          }))
+        : []
+    const label =
+      waits.length > 0
+        ? `waits on ${waits.length === 1 ? 'a branch' : `${waits.length} branches`}`
+        : facts && labelOf(facts)
+    const standing = (
       <StandingRow
         conversation={conversation}
         key={conversation?.id ?? 'ultimate'}
         name={name}
         presence={
-          markKeepsPulsingWhileUserWaits ? 'working' : state === 'waits' ? 'waiting' : 'idle'
+          markKeepsPulsingWhileUserWaits
+            ? 'working'
+            : state === 'waits'
+              ? 'waiting'
+              : state === 'awaiting'
+                ? 'awaiting'
+                : 'idle'
         }
         onOpen={() =>
           conversation && !isUltimate
@@ -303,7 +343,9 @@ function Tree({
             {state === 'working' && conversation ? (
               <StandingPhase id={conversation.id} />
             ) : (
-              <span className={cn('shrink-0', stateTone[state])}>{stateWord(state)}</span>
+              <span className={cn('min-w-0 truncate', stateTone[state])} title={label}>
+                {stateWord(state, 0, label)}
+              </span>
             )}
             {latest > 0 && (
               <span
@@ -317,6 +359,14 @@ function Tree({
         )}
       </StandingRow>
     )
+    return waits.length > 0 ? (
+      <div key={conversation?.id ?? 'ultimate'}>
+        {standing}
+        <WaitLines waits={waits} />
+      </div>
+    ) : (
+      standing
+    )
   }
   const row = (conversation: ConversationSummary, shown = conversation.id === shownTop?.id) => {
     if (neverConcludedStandingAgent(conversation)) return standingRow(conversation)
@@ -329,18 +379,17 @@ function Tree({
         />
       )
     const recorded = seen[conversation.id]
-    const derived = conversationState(
-      {
-        id: conversation.id,
-        kind: 'other',
-        runState: overview[conversation.id]?.runState,
-        busy: conversation.busy,
-        parked: parked.has(conversation.id),
-        primary: ultimateId,
-        concludedSince: concludedSince(conversation.id),
-      },
-      log,
-    )
+    const facts = {
+      id: conversation.id,
+      kind: 'other' as const,
+      runState: overview[conversation.id]?.runState,
+      busy: underway(conversation.id),
+      parked: parked.has(conversation.id),
+      starter: starterOf(conversation.id),
+      concludedSince: concludedSince(conversation.id),
+    }
+    const derived = conversationState(facts, log, timers)
+    const wait = labelOf(facts)
     const workingUnlessQuestionWaitsOnUser =
       derived === 'waits'
         ? undefined
@@ -349,6 +398,7 @@ function Tree({
       <Row
         activity={overview[conversation.id]?.activity}
         state={derived}
+        waitLabel={derived === 'awaiting' ? wait : undefined}
         concluded={hiddenIds.has(conversation.id)}
         conversation={conversation}
         draft={conversation.inputAt === undefined}
@@ -415,7 +465,6 @@ function Tree({
         {nested ? (
           <ChildRow
             parked={parked.has(conversation.id)}
-            primary={ultimateId}
             conversation={conversation}
             row={overview[conversation.id]}
             shown={shownId === conversation.id}
@@ -439,7 +488,6 @@ function Tree({
         depth={depth}
         key={child.id}
         parked={parked.has(child.id)}
-        primary={ultimateId}
         row={overview[child.id]}
         shown={shownId === child.id}
       />,

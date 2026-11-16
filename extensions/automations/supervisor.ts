@@ -1,4 +1,4 @@
-import type { ConversationId, Agent, Cursor, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, Agent, Cursor, Submission, Tx } from '@earendil-works/pi-durable'
 import { constants } from 'node:fs'
 import type { Dirent } from 'node:fs'
 import { access, appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
@@ -296,7 +296,7 @@ export function supervisor(
       `Mode: ${sub.script!.once ? 'one-shot' : 'recurring'}`,
       `Named secret environment variables: ${sub.script!.secrets?.join(', ') || 'none'}`,
       `Executable: ${runPath(sub)}`,
-      `Persistent memory: ${join(folder(sub.id), 'state')} ($AUTOMATION_STATE).`,
+      `Persistent memory: the folder ${join(folder(sub.id), 'state')} ($AUTOMATION_STATE); keep files inside it, such as $AUTOMATION_STATE/state.json.`,
       ...(sub.scope === 'project'
         ? [
             `This is a project automation: run and ${MANIFEST} are committed in ${projectDir(sub.id)}, and run starts in ${host.projectRoot}. After you change run, say that the change is uncommitted in the project checkout.`,
@@ -349,6 +349,7 @@ export function supervisor(
               `automations:${sub.id}:${event}:ultimate`,
               ctx,
             )
+        let servingRun: Submission | undefined
         for (const target of targets) {
           const id =
             typeof target === 'string'
@@ -361,7 +362,7 @@ export function supervisor(
           const requestId = `automations:${sub.id}:${event}:${target}`
           const conversation = await runtime.conversation(id, ctx)
           if (!conversation) throw new Error(`Automation ${sub.id}: conversation #${id} is missing`)
-          await conversation.submit(
+          const submitted = await conversation.submit(
             {
               type: 'input',
               content,
@@ -379,11 +380,35 @@ export function supervisor(
                         at: sub.lastFireAt ?? 0,
                       }
                     : {}),
+                  ...(kind === 'fired' && sub.branches?.by === id
+                    ? { branches: sub.branches.ids, at: sub.lastFireAt ?? 0 }
+                    : {}),
                 },
               },
             },
             ctx,
           )
+          if (kind === 'fired' && sub.serves?.by === id && sub.serves.from === 'remote')
+            servingRun = submitted
+        }
+        const servingRunEnd = await servingRun?.wait(ctx)
+        if (servingRunEnd?.status === 'unanswered') {
+          const { by, ...serves } = sub.serves!
+          await host
+            .harness()
+            .commit(
+              (tx) =>
+                host
+                  .need(MessagesApi)
+                  .dropped(
+                    tx,
+                    by,
+                    serves,
+                    `The run automation ${sub.id} "${sub.name}" woke for your message ${serves.message} ended without an answer (${servingRunEnd.reason}); no result will come from it.`,
+                    servingRunEnd.entry,
+                  ),
+              ctx,
+            )
         }
         await runtime.commit(() => terminal, ctx)
       },

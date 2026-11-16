@@ -81,7 +81,8 @@ so branches adding divergences in parallel do not edit the same lines.
   subagents, cloud, setup, onboarding, `extensions/info/` (Execution section), `shared/protocol.ts` and
   `server/system.ts` (`execution.kind` removed), `extensions/coding-tools/server.ts` (`prepareBash` takes the routed
   `git` for upstream's worktree-scoped hooks), `extensions/review/server.ts` (upstream's branch fallback in `target`
-  through `exec.git`)
+  through `exec.git`), `vite.config.ts` host-local allowlist (`extensions/sounds/command.ts`: upstream's narrator
+  command plays on the machine running Ultimate, 2026-11-16 merge)
 - Why: Core-tier service running project and worktree commands where their directory lives; `exec.protocol` point for
   remote targets (pod-local proof). The give-back set includes 21b7d4cc: each protocol's `describe` and exec's
   `target` action, so the Info panel shows where a conversation's commands run. Extension actions' `ctx.exec` runs
@@ -175,7 +176,9 @@ so branches adding divergences in parallel do not edit the same lines.
   code and dropped every `oxlint-disable`. The 2026-11 merge removed the fork's comments (the why of each now lives in
   this file and the commits), moved timers onto `lib/timers.ts`, named swallowed errors from `lib/errors.ts`, spread
   `readOnly`/`safeToRerun` on fork tools, and replaced two architect `exhaustive-deps` disables with `useEffectEvent`.
-  New fork code follows the same rules
+  The 2026-11-16 merge brought `no-unowned-work`: fork fire-and-forget work is named with `rebuiltOnOpen` (usage
+  history, Plannotator sweep, ssh-exec first checks) or `inProcess` (preview route and Plannotator decision after
+  their process exits, ssh-exec recheck). New fork code follows the same rules
 - Upstream: local-only
 
 ### branch-cache extension
@@ -229,7 +232,9 @@ so branches adding divergences in parallel do not edit the same lines.
 - Touches: `extensions/instance/` (`server.ts` start/stop/list publish through an optional `want(CaddyApi)`, `web.tsx`
   card, links and switcher, `refs.ts` `caddy`, README), `extensions/caddy/` (`publishRoute`/`unpublishRoute`,
   README), `server/main.ts` (an unsupervised server honours `ULTIMATE_PROXY_ORIGIN`),
-  `.ultimate/skills/preview-demo/`, `skills/ui-preview-round/SKILL.md`, `extensions/instance/test/e2e/instance.test.ts`
+  `.ultimate/skills/preview-demo/`, `skills/ui-preview-round/SKILL.md`, `extensions/instance/test/e2e/instance.test.ts`.
+  Since the 2026-11-16 merge, start writes upstream's crash pid file before publishing to Caddy, and stop unpublishes
+  after the pid-file-aware `stopGroup`
 - Why: Previews were reachable only on loopback, so their links were useless from other LAN devices. When the host
   project is served by Caddy, `instance start` and the preview demo publish the preview at
   `https://<domain>:9490–9499`, and that link is the one handed to the user; without Caddy nothing changes
