@@ -121,7 +121,6 @@ async function start() {
     server.unref()
     return server
   }
-  // Served by Caddy like `instance start` previews, from the top of their range down, owned by the demo's pid.
   const caddy = await import(resolve(checkout, 'extensions/caddy/server.ts'))
   const { CADDY_PREVIEW_PORTS } = await import(resolve(checkout, 'extensions/instance/server.ts'))
   let child: ReturnType<typeof spawn> | undefined
