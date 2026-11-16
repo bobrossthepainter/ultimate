@@ -461,10 +461,11 @@ function Cut({ at, name }: { at: number; name: string }) {
       role="separator"
     >
       <span className="h-px flex-1 border-t border-dashed border-border" />
-      <span className="flex shrink-0 items-center gap-1.5">
-        <GitForkIcon className="size-3 text-brand" />
-        forked from {name} at {formatTime(at)}
-        <span className="max-sm:hidden">· knows everything up to here</span>
+      <span className="flex max-w-[85%] min-w-0 items-center gap-1.5">
+        <GitForkIcon className="size-3 shrink-0 text-brand" />
+        <span className="truncate">forked from {name}</span>
+        <span className="shrink-0">at {formatTime(at)}</span>
+        <span className="shrink-0 max-sm:hidden">· knows everything up to here</span>
       </span>
       <span className="h-px flex-1 border-t border-dashed border-border" />
     </div>
