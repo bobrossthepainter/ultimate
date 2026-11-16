@@ -49,6 +49,8 @@ export type Report = {
     title?: string
     total: Bucket
     roles: Record<string, number>
+    rebuilds: number
+    rebuildCost: number
   }[]
   rebuilds: Rebuilds
   undated: { cost: number; tokens: number }

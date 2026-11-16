@@ -217,6 +217,10 @@ describe('usage report', () => {
       const later = await f.report()
       expect(later.total.calls).toBe(6)
       expect(later.rebuilds.count).toBe(2)
+      expect(later.branches.find((item) => item.id === ids.branch)).toMatchObject({
+        rebuilds: 1,
+        rebuildCost: 60_010 / 1e6,
+      })
       expect(f.notices).toEqual([])
     } finally {
       await f.cleanup()
@@ -313,6 +317,8 @@ describe('spokes', () => {
             tokens: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 },
           },
           roles: {},
+          rebuilds: 0,
+          rebuildCost: 0,
         },
       ],
       rebuilds: { count: 1, cost: cost / 2, byCause: { expired: { count: 1, cost: cost / 2 } } },

@@ -230,7 +230,7 @@ export function summarize(
   const daily = new Map<string, { cost: Kinds; calls: number }>()
   const byRole: Report['byRole'] = {}
   const byModel: Report['byModel'] = {}
-  const branches = new Map<ConversationId, { total: Bucket; roles: Record<string, number> }>()
+  const branches = new Map<ConversationId, Report['branches'][number]>()
   const rebuilds: Report['rebuilds'] = { count: 0, cost: 0, byCause: {} }
   for (const call of calls) {
     if (options.since !== undefined && call.at < options.since) continue
@@ -255,7 +255,13 @@ export function summarize(
       subscription: options.subscription(call.model.split('/')[0]),
     })
     addBucket(modelBucket, one)
-    const branch = branches.get(top) ?? { total: emptyBucket(), roles: {} }
+    const branch = branches.get(top) ?? {
+      id: top,
+      total: emptyBucket(),
+      roles: {},
+      rebuilds: 0,
+      rebuildCost: 0,
+    }
     addBucket(branch.total, one)
     branch.roles[role] = (branch.roles[role] ?? 0) + cost
     branches.set(top, branch)
@@ -270,6 +276,8 @@ export function summarize(
       cause.cost += call.rebuild.cost
       roleBucket.rebuilds++
       roleBucket.rebuildCost += call.rebuild.cost
+      branch.rebuilds++
+      branch.rebuildCost += call.rebuild.cost
     }
   }
   return {
@@ -281,11 +289,11 @@ export function summarize(
       .map(([key, value]) => ({ day: key, ...value })),
     byRole,
     byModel,
-    branches: [...branches]
-      .toSorted(([, a], [, b]) => sum(b.total.cost) - sum(a.total.cost))
-      .map(([id, branch]) => {
-        const title = options.title(id)
-        return { id, ...(title !== undefined && { title }), ...branch }
+    branches: [...branches.values()]
+      .toSorted((a, b) => sum(b.total.cost) - sum(a.total.cost))
+      .map((branch) => {
+        const title = options.title(branch.id)
+        return { ...branch, ...(title !== undefined && { title }) }
       }),
     rebuilds,
   }

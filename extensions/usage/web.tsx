@@ -48,6 +48,8 @@ const percent = (part: number, whole: number) =>
 const amount = (bucket: Bucket, unit: Unit) =>
   unit === '$' ? total(bucket.cost) : total(bucket.tokens)
 const show = (value: number, unit: Unit) => (unit === '$' ? dollars(value) : formatTokens(value))
+const rebuildShare = (count: number, cost: number, of: Kinds) =>
+  count ? `${count} · ${percent(cost, total(of))} of cost` : '–'
 const cacheHit = (tokens: Kinds) =>
   percent(tokens.cacheRead, tokens.cacheRead + tokens.cacheWrite + tokens.input)
 const perCall = (value: number, calls: number, format: (value: number) => string) =>
@@ -352,11 +354,7 @@ function Roles({ report, unit }: { report: Report; unit: Unit }) {
             <Share value={amount(bucket, unit)} whole={whole} />
           </Cell>
           <Cell>{perCall(amount(bucket, unit), bucket.calls, (value) => show(value, unit))}</Cell>
-          <Cell>
-            {bucket.rebuilds
-              ? `${bucket.rebuilds} · ${percent(bucket.rebuildCost, total(bucket.cost))} of cost`
-              : '–'}
-          </Cell>
+          <Cell>{rebuildShare(bucket.rebuilds, bucket.rebuildCost, bucket.cost)}</Cell>
         </Row>
       ))}
     </Table>
@@ -415,8 +413,8 @@ function Branches({ report, unit, local }: { report: Report; unit: Unit; local: 
   if (!report.branches.length) return <Empty>no calls in this range</Empty>
   return (
     <Table
-      head={['branch', unit === '$' ? 'cost' : 'tokens', 'calls', 'cache hit', 'roles']}
-      textColumns={[0, 4]}
+      head={['branch', unit === '$' ? 'cost' : 'tokens', 'calls', 'cache hit', 'rebuilds', 'roles']}
+      textColumns={[0, 5]}
     >
       {report.branches.map((branch) => {
         const cost = total(branch.total.cost)
@@ -443,6 +441,7 @@ function Branches({ report, unit, local }: { report: Report; unit: Unit; local: 
             <Cell>{show(amount(branch.total, unit), unit)}</Cell>
             <Cell>{branch.total.calls.toLocaleString()}</Cell>
             <Cell>{cacheHit(branch.total.tokens)}</Cell>
+            <Cell>{rebuildShare(branch.rebuilds, branch.rebuildCost, branch.total.cost)}</Cell>
             <Cell className="text-left text-muted-foreground" left>
               {roles}
             </Cell>
