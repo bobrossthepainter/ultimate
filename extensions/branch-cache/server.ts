@@ -259,7 +259,11 @@ async function nextRequestMessages(host: ExtensionHost, id: ConversationId) {
   return { messages, agent: await conversation.agent(context) }
 }
 
-async function sendOneShotPingWithoutSession(host: ExtensionHost, branch: Branch) {
+async function sendOneShotPingWithoutSession(
+  host: ExtensionHost,
+  branch: Branch,
+  signal: AbortSignal,
+) {
   const paused = () => host.want(PauseApi)?.paused()
   const { id, provider } = branch
   const lastRequest = branch.situation.lastRequest!
@@ -287,7 +291,7 @@ async function sendOneShotPingWithoutSession(host: ExtensionHost, branch: Branch
         { messages },
         {
           ...(agent.thinkingLevel === 'off' ? {} : { reasoning: agent.thinkingLevel }),
-          signal: AbortSignal.timeout(PING_TIMEOUT_MS),
+          signal: AbortSignal.any([AbortSignal.timeout(PING_TIMEOUT_MS), signal]),
         },
       )
       .result()
@@ -325,14 +329,14 @@ async function startCompaction(host: ExtensionHost, branch: Branch) {
   })
 }
 
-async function tick(host: ExtensionHost) {
+async function tick(host: ExtensionHost, signal: AbortSignal) {
   if (host.want(PauseApi)?.paused()) return
   const now = Date.now()
   const { found } = await branches(host, now)
   for (const branch of found) {
-    if (host.want(PauseApi)?.paused()) return
+    if (host.want(PauseApi)?.paused() || signal.aborted) return
     const step = nextStep(branch.situation)
-    if (step === 'ping') await sendOneShotPingWithoutSession(host, branch)
+    if (step === 'ping') await sendOneShotPingWithoutSession(host, branch, signal)
     if (step === 'compact') await startCompaction(host, branch)
   }
 }
@@ -441,15 +445,24 @@ async function state(host: ExtensionHost, id: ConversationId): Promise<BranchCac
 export default function branchCache(host: ExtensionHost) {
   host.need(ConversationsApi)
   host.want(PauseApi)
-  const shared = host.resource('branch-cache.timer', () => ({
+  const shared = host.resource('branch-cache.ping', () => ({
     running: undefined as Promise<void> | undefined,
+    released: new AbortController(),
   }))
   const stopPolling = every(CACHE_CHECK_INTERVAL_MS, () => {
-    shared.running ??= tick(host)
+    if (shared.released.signal.aborted) return
+    shared.running ??= tick(host, shared.released.signal)
       .catch((error: unknown) => host.notice(`Branch cache: ${String(error)}`))
       .finally(() => {
         shared.running = undefined
       })
+  })
+  host.onRelease(async () => {
+    shared.released.abort()
+    await shared.running
+  })
+  host.onOpen(async () => {
+    if (shared.released.signal.aborted) shared.released = new AbortController()
   })
   host.onClose(async () => {
     stopPolling()

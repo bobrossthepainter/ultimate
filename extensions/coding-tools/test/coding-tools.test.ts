@@ -13,13 +13,20 @@ import { apis } from '../../../test/helpers.ts'
 
 afterEach(() => vi.unstubAllEnvs())
 
+const inertHost = {
+  ...apis(),
+  notice: () => {},
+  onOpen: () => {},
+  react: () => {},
+}
+
 it('uses a 600-second default tripwire and leaves explicit timeouts unchanged', async () => {
   vi.stubEnv('ULTIMATE_BASH_TIMEOUT', undefined)
   const execute = vi
     .fn<ReturnType<typeof createBashTool>['execute']>()
     .mockRejectedValue(new Error('Command timed out after 600 seconds'))
   const wrapper = codingTools({
-    ...apis(),
+    ...inertHost,
     home: tmpdir(),
     emit: vi.fn<ExtensionHost['emit']>() as ExtensionHost['emit'],
   }).wraps!.find((wrap) => 'tool' in wrap && wrap.tool === 'bash')!
@@ -70,7 +77,7 @@ it('reads an image past the 2000 px limit shrunk to fit, keeping its aspect rati
   try {
     await writeFile(join(dir, 'wide.png'), png(3000, 30))
     const read = codingTools({
-      ...apis(),
+      ...inertHost,
       home: dir,
       emit: vi.fn<ExtensionHost['emit']>() as ExtensionHost['emit'],
     }).tools!.find((tool) => tool.name === 'read')!

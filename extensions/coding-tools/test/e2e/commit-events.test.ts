@@ -39,6 +39,9 @@ async function bash(command: string, dir = cwd) {
   const extension = codingTools({
     ...apis(),
     home,
+    notice: () => {},
+    onOpen: () => {},
+    react: () => {},
     emit: async (_tx, event, data) => {
       expect(event).toBe(Committed)
       emitted.push(data as Event)
