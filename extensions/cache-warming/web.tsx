@@ -75,12 +75,13 @@ function Tag({ source }: { source: Source }) {
   return (
     <span
       className={cn(
-        'w-14 shrink-0 text-right text-[10px] text-muted-foreground/60',
-        source === 'override' && 'text-orange-500/80',
+        'w-14 shrink-0 text-right text-[10px] text-orange-500/80',
+        source !== 'override' && 'invisible',
       )}
       data-source={source}
+      title="Set for this chat only; reset goes back to the default"
     >
-      {source}
+      this chat
     </span>
   )
 }
@@ -243,7 +244,7 @@ function Popup({
             onClick={() => events.emit('subagents:open-definition', { name: state.agent })}
             type="button"
           >
-            Agents › {state.agent}
+            Defaults from Agents › {state.agent}
           </button>
         )}
       </div>
