@@ -129,6 +129,10 @@ it("takes the cache lifetime and refresh delay from the model's promptCache meta
   expect(
     cacheTiming({ ...opus, provider: 'claude-code', api: 'claude-code', promptCache: undefined }),
   ).toEqual({ ttl: minutes(60), delayBeforeRefresh: minutes(54) })
+  expect(cacheTiming({ ...opus, provider: 'claude-code', api: 'claude-code' })).toEqual({
+    ttl: minutes(60),
+    delayBeforeRefresh: minutes(54),
+  })
 })
 
 it('caps a replayed Anthropic request at one output token, and refuses bodies it cannot cap', () => {

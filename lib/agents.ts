@@ -250,8 +250,8 @@ export function parseCache(cache: unknown): CachePolicy {
   if (!cache || typeof cache !== 'object' || Array.isArray(cache))
     throw new Error(`cache must be a mapping of ${Object.keys(cacheKeys).join(', ')}`)
   for (const [key, value] of Object.entries(cache)) {
-    const kind = cacheKeys[key as keyof CachePolicy] as 'boolean' | 'number' | undefined
-    if (!kind) throw new Error(`Unknown cache field: ${key}`)
+    if (!Object.hasOwn(cacheKeys, key)) throw new Error(`Unknown cache field: ${key}`)
+    const kind = cacheKeys[key as keyof CachePolicy]
     const valid =
       kind === 'boolean'
         ? typeof value === 'boolean'

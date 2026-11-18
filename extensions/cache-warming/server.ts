@@ -9,7 +9,7 @@ import {
   LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, JsonObject, TaskId } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, JsonObject, TaskId } from '@earendil-works/pi-durable'
 import {
   CACHE_WARMING_MAX_AGE_MS,
   getCacheWarmingDelayMs,
@@ -24,7 +24,7 @@ import { UserInputEvent } from '../../shared/events.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { admitCompaction, compacting } from '../../lib/compaction.ts'
-import { inProcess } from '../../lib/errors.ts'
+import { inProcess, rebuiltOnOpen } from '../../lib/errors.ts'
 import { parseConversationId } from '../../lib/ids.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { deadline } from '../../lib/timers.ts'
@@ -102,8 +102,7 @@ export function oneTokenPayload(api: Api, payload: unknown) {
 
 export function cacheTiming(model: Model<Api>) {
   const ttl =
-    getPromptCacheTtlMs(model, undefined) ??
-    (model.provider === 'claude-code' ? CLAUDE_CODE_TTL_MS : undefined)
+    model.provider === 'claude-code' ? CLAUDE_CODE_TTL_MS : getPromptCacheTtlMs(model, undefined)
   const delayBeforeRefresh = ttl === undefined ? undefined : getCacheWarmingDelayMs(ttl)
   return ttl === undefined || delayBeforeRefresh === undefined
     ? undefined
@@ -130,22 +129,22 @@ async function maxWarmBranches(host: ExtensionHost) {
   return [of(project), of(user)].find(isCount) ?? DEFAULT_MAX_WARM
 }
 
-async function definitionOf(host: ExtensionHost, id: ConversationId, kind: Kind | undefined) {
+type Definitions = Awaited<ReturnType<typeof discoverAgents>>['definitions']
+
+const discover = async (host: ExtensionHost) =>
+  (await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime))
+    .definitions
+
+async function policyFor(
+  host: ExtensionHost,
+  id: ConversationId,
+  ttl: number | undefined,
+  definitions: Definitions,
+) {
+  const kind = warmedKind(host, id)
   const profile = await host.harness().snapshot(Profile, id, context)
   const name = profile?.definition ?? (kind === 'coordinator' ? 'coordinator' : undefined)
-  if (!name) return undefined
-  const { definitions } = await discoverAgents(
-    host.ultimateRoot,
-    host.projectRoot,
-    host.userHome,
-    host.modelRuntime,
-  )
-  return definitions.find((definition) => definition.name === name)
-}
-
-async function policyFor(host: ExtensionHost, id: ConversationId, ttl: number | undefined) {
-  const kind = warmedKind(host, id)
-  const agent = await definitionOf(host, id, kind)
+  const agent = name === undefined ? undefined : definitions.find((item) => item.name === name)
   const doc = await readDoc(host, id)
   const resolved = resolvePolicy(agent?.cache, doc, ttl)
   return { kind, agent, doc, resolved, effective: policyOf(resolved) }
@@ -156,14 +155,24 @@ async function agentOf(host: ExtensionHost, id: ConversationId) {
   return conversation && (await conversation.agent(context))
 }
 
-async function situationOf(host: ExtensionHost, runs: Runs, run: Run, now: number) {
-  const { kind, doc, effective } = await policyFor(host, run.id, run.ttl)
+async function situationOf(
+  host: ExtensionHost,
+  runs: Runs,
+  run: Run,
+  now: number,
+  definitions: Definitions,
+) {
+  const { kind, doc, effective } = await policyFor(host, run.id, run.ttl, definitions)
   let withinMaxWarm = true
   if (kind === 'coordinator') {
+    const concluded = await host.need(ConversationsApi).concluded(context)
     const warming: Run[] = []
     for (const other of runs.active.values()) {
-      if (warmedKind(host, other.id) !== 'coordinator') continue
-      if (other.id === run.id || (await policyFor(host, other.id, other.ttl)).effective.warm)
+      if (warmedKind(host, other.id) !== 'coordinator' || concluded.has(other.id)) continue
+      if (
+        other.id === run.id ||
+        (await policyFor(host, other.id, other.ttl, definitions)).effective.warm
+      )
         warming.push(other)
     }
     withinMaxWarm = warming
@@ -288,6 +297,7 @@ async function sendPing(host: ExtensionHost, runs: Runs, run: Run) {
     answer,
   )
   if (runs.active.get(run.id) !== run) return
+  if (cacheRead + cacheWrite === 0) return stop(runs, run, 'Ping found no cache')
   run.lastCacheRequestAt = at
   schedule(host, runs, run)
 }
@@ -314,7 +324,7 @@ async function refresh(host: ExtensionHost, runs: Runs, run: Run) {
   const model = (await agentOf(host, run.id))?.model
   if (model?.provider !== run.model.provider || model.modelId !== run.model.id)
     return stop(runs, run, 'Model changed')
-  const { situation, policy } = await situationOf(host, runs, run, Date.now())
+  const { situation, policy } = await situationOf(host, runs, run, Date.now(), await discover(host))
   if (runs.active.get(run.id) !== run) return
   const step = decide(situation, policy)
   if (step === 'ping') return sendPing(host, runs, run)
@@ -360,6 +370,10 @@ async function start(
     runs.stopped.set(id, 'Waiting for the next request')
     return
   }
+  if (answer.usage.cacheRead + answer.usage.cacheWrite === 0) {
+    runs.stopped.set(id, 'The last request used no cache')
+    return
+  }
   const timing = cacheTiming(model)
   if (!timing) {
     runs.stopped.set(id, 'Model has no known cache lifetime')
@@ -390,6 +404,68 @@ async function start(
   }
   runs.active.set(id, run)
   schedule(host, runs, run)
+}
+
+async function lastCacheRenewalAt(
+  host: ExtensionHost,
+  id: ConversationId,
+  model: Model<Api>,
+  ttl: number,
+) {
+  const now = Date.now()
+  const doc = await readDoc(host, id)
+  const ping =
+    doc.last &&
+    !doc.last.error &&
+    doc.last.provider === model.provider &&
+    doc.last.model === model.id
+      ? doc.last.at
+      : 0
+  const conversation = (await host.harness().conversation(id, context))!
+  let cursor: Cursor | undefined
+  do {
+    const page = await conversation.entries({}, 100, cursor, context)
+    for (const entry of page.items) {
+      const message = entry.model?.[0]
+      if (message?.role !== 'assistant') continue
+      if (now - Math.max(message.timestamp, ping) >= ttl) return ping || undefined
+      const renewed =
+        message.provider === model.provider &&
+        message.model === model.id &&
+        message.stopReason !== 'error' &&
+        message.stopReason !== 'aborted' &&
+        message.usage.cacheRead + message.usage.cacheWrite > 0
+      if (renewed) return Math.max(message.timestamp, ping)
+    }
+    cursor = page.next
+  } while (cursor)
+  return ping || undefined
+}
+
+async function resume(host: ExtensionHost, runs: Runs, facet: { closed: boolean }) {
+  const concluded = await host.need(ConversationsApi).concluded(context)
+  for (const summary of host.conversations()) {
+    if (!kindOf(summary) || concluded.has(summary.id) || runs.active.has(summary.id)) continue
+    const ref = (await agentOf(host, summary.id))?.model
+    if (ref?.provider !== 'claude-code') continue
+    const model = host.modelRuntime.getModel(ref.provider, ref.modelId)
+    const timing = model && cacheTiming(model)
+    if (!model || !timing) continue
+    const at = await lastCacheRenewalAt(host, summary.id, model, timing.ttl)
+    if (at === undefined || Date.now() - at >= timing.ttl || facet.closed) continue
+    if (runs.active.has(summary.id)) continue
+    const run: Run = {
+      id: summary.id,
+      model,
+      ...timing,
+      realRequestAt: at,
+      lastCacheRequestAt: at,
+      nextAt: at + timing.delayBeforeRefresh,
+      controller: new AbortController(),
+    }
+    runs.active.set(summary.id, run)
+    schedule(host, runs, run)
+  }
 }
 
 const text = (message: AssistantMessage) =>
@@ -483,10 +559,17 @@ async function state(
   const model =
     agent?.model && host.modelRuntime.getModel(agent.model.provider, agent.model.modelId)
   const timing = model && cacheTiming(model)
-  const { kind, agent: definition, doc, resolved } = await policyFor(host, id, timing?.ttl)
+  const definitions = await discover(host)
+  const {
+    kind,
+    agent: definition,
+    doc,
+    resolved,
+  } = await policyFor(host, id, timing?.ttl, definitions)
   const run = runs.active.get(id)
+  const open = kind && !(await host.need(ConversationsApi).concluded(context)).has(id)
   const base = {
-    ...(kind ? { kind } : {}),
+    ...(open ? { kind } : {}),
     ...(definition ? { agent: definition.name } : {}),
     warm: resolved.warm,
     compact: resolved.compact,
@@ -498,7 +581,7 @@ async function state(
     ...(doc.last ? { last: doc.last } : {}),
     ...(doc.compaction ? { compaction: doc.compaction } : {}),
   }
-  if (!kind) return { ...base, idle: 'Not a standing agent or an open branch' }
+  if (!open) return { ...base, idle: 'Not a standing agent or an open branch' }
   if (!model) return { ...base, idle: 'No model' }
   const reasoning = agent.thinkingLevel === 'off' ? undefined : agent.thinkingLevel
   const described: CacheWarmingState = {
@@ -509,7 +592,13 @@ async function state(
     replayable: isCacheWarmingReplayable(model, { reasoning }),
   }
   if (!run) return { ...described, idle: runs.stopped.get(id) ?? 'Waiting for the next request' }
-  const { situation, policy: effective } = await situationOf(host, runs, run, run.nextAt)
+  const { situation, policy: effective } = await situationOf(
+    host,
+    runs,
+    run,
+    run.nextAt,
+    definitions,
+  )
   const step = decide(situation, effective)
   const live = {
     ...described,
@@ -540,6 +629,14 @@ export default function cacheWarming(host: ExtensionHost) {
     },
     { from: 'now' },
   )
+  host.onOpen(async () => {
+    rebuiltOnOpen(
+      'warming runs are rebuilt from the stored answers and pings each time the extension opens',
+      resume(host, runs, facet).catch((error: unknown) =>
+        host.notice(`Cache warming: ${String(error)}`),
+      ),
+    )
+  })
   host.onRelease(async () => stopAll('Ultimate restarted'))
   host.onClose(async () => {
     facet.closed = true
@@ -621,7 +718,8 @@ export const actions = {
       compact: override(values.compact, isBoolean, 'compact must be a boolean or null'),
       minutes: override(values.minutes, isCount, 'minutes must be a number of at least 0, or null'),
     }
-    if (!warmedKind(host, id)) throw new Error(`#${id} is not a standing agent or an open branch`)
+    if (!warmedKind(host, id) || (await host.need(ConversationsApi).concluded(context)).has(id))
+      throw new Error(`#${id} is not a standing agent or an open branch`)
     await host.harness().commit(async (tx) => {
       const doc = await tx.doc(State, id)
       for (const key of ['warm', 'compact', 'minutes'] as const) {
