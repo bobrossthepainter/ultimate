@@ -184,6 +184,12 @@ function Popup({
         setting={state.compact}
       />
       <MinutesRow onSave={(minutes) => void set({ minutes })} setting={state.minutes} />
+      {state.warmCost && (
+        <div className="px-2 pb-1 text-[11px] text-muted-foreground" data-warm-cost>
+          ≈ {dollars(state.warmCost.cost)} for {state.warmCost.pings} ping
+          {state.warmCost.pings === 1 ? '' : 's'} at {tokens(state.tokens)} context
+        </div>
+      )}
       <div className="space-y-1 border-t border-border/70 px-2 pt-1.5 pb-1.5 text-[11px] text-muted-foreground">
         <div className="text-foreground/80">{cacheLine(state, now)}</div>
         <div>{nextLine(state, now)}</div>

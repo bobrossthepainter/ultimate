@@ -62,6 +62,8 @@ export type CacheWarmingState = {
   replayable?: boolean
   /** What writing the current context to the cache again would cost, in dollars (a one-hour write is twice the input price). */
   rewriteCost?: number
+  /** What keeping the current context warm for `minutes` would cost: one cache read of it per ping, in dollars. */
+  warmCost?: { pings: number; cost: number }
   /** What the pings since the last real request cost, in dollars, while that warming run is live. */
   kept?: { cost: number; pings: number }
   inputAt?: number

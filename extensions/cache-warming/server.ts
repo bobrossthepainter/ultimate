@@ -104,6 +104,16 @@ export function oneTokenPayload(api: Api, payload: unknown) {
 export const rewriteCost = (model: Model<Api>, ttl: number, tokens: number) =>
   (tokens * (ttl >= CLAUDE_CODE_TTL_MS ? model.cost.input * 2 : model.cost.cacheWrite)) / 1_000_000
 
+export function warmCost(
+  model: Model<Api>,
+  delayBeforeRefresh: number,
+  minutes: number,
+  tokens: number,
+) {
+  const pings = Math.floor((minutes * 60_000) / delayBeforeRefresh)
+  return { pings, cost: (pings * tokens * model.cost.cacheRead) / 1_000_000 }
+}
+
 export function cacheTiming(model: Model<Api>) {
   const ttl =
     model.provider === 'claude-code' ? CLAUDE_CODE_TTL_MS : getPromptCacheTtlMs(model, undefined)
@@ -640,7 +650,17 @@ async function state(
     model: model.id,
     ...(timing ? { ttl: timing.ttl, pingAfter: timing.delayBeforeRefresh } : {}),
     replayable: isCacheWarmingReplayable(model, { reasoning }),
-    ...(timing ? { rewriteCost: rewriteCost(model, timing.ttl, usage?.tokens ?? 0) } : {}),
+    ...(timing
+      ? {
+          rewriteCost: rewriteCost(model, timing.ttl, usage?.tokens ?? 0),
+          warmCost: warmCost(
+            model,
+            timing.delayBeforeRefresh,
+            resolved.minutes.value,
+            usage?.tokens ?? 0,
+          ),
+        }
+      : {}),
   }
   if (!run) return { ...described, idle: runs.stopped.get(id) ?? 'Waiting for the next request' }
   if (doc.streak?.since === run.realRequestAt)
