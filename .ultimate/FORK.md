@@ -259,3 +259,11 @@ so branches adding divergences in parallel do not edit the same lines.
 - Why: ask a running branch questions without disturbing it; a branch is usually mid-run, so the fork point moved
   from the last answered input to the newest finished tool round, for @ultimate too
 - Upstream: candidate
+
+### Upstream diagrams off
+
+- Touches: `.ultimate/settings.json` (`extensions.disable: ["diagrams"]`)
+- Why: upstream's `diagrams` (Unicode box-art via `lovely-mermaid`) claims the same `mermaid` code blocks as the
+  fork's SVG `extensions/mermaid`, which the user approved; one renderer per job. `lovely-mermaid` stays installed
+  but unused. Re-check on each merge whether upstream changed either renderer
+- Upstream: local-only

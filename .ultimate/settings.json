@@ -1,6 +1,7 @@
 {
   "extensions": {
-    "enable": ["voice-live"]
+    "enable": ["voice-live"],
+    "disable": ["diagrams"]
   },
   "modelFamilies": {
     "families": {
