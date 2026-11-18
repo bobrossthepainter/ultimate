@@ -49,6 +49,12 @@ it('keeps a branch with a run warm for an hour after its request, and never comp
   ).toEqual({
     stop: 'Run longer than 60 min',
   })
+  expect(
+    decide(fiveMinutes({ runActive: true, realRequestAt: now - minutes(63) }), {
+      ...policy,
+      warmMs: minutes(480),
+    }),
+  ).toEqual({ stop: 'Run longer than 60 min' })
 })
 
 it('skips a refresh that fires after half the margin before expiry', () => {
@@ -95,10 +101,12 @@ it("takes the cache lifetime and refresh delay from the model's promptCache meta
   ).toEqual({ ttl: minutes(60), delayBeforeRefresh: minutes(54) })
 })
 
-it('caps the replayed request at one output token and changes nothing else', () => {
+it('caps a replayed Anthropic request at one output token, and refuses bodies it cannot cap', () => {
   const body = { model: 'x', max_tokens: 64_000, messages: [{ role: 'user', content: 'hi' }] }
-  expect(oneTokenPayload(body)).toEqual({ ...body, max_tokens: 1 })
+  expect(oneTokenPayload('anthropic-messages', body)).toEqual({ ...body, max_tokens: 1 })
   expect(body.max_tokens).toBe(64_000)
+  expect(oneTokenPayload('pi-messages', { options: { maxTokens: 8192 } })).toBe(undefined)
+  expect(oneTokenPayload('anthropic-messages', { messages: [] })).toBe(undefined)
 })
 
 it('resolves a model policy from defaults, provider and exact keys, the project over the user', () => {

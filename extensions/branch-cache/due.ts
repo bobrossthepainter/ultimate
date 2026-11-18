@@ -34,9 +34,7 @@ export const lateRefreshCutoff = (
 export const warmWindowEnd = (
   situation: Pick<Situation, 'realRequestAt' | 'runActive'>,
   policy: Policy,
-) =>
-  situation.realRequestAt +
-  (situation.runActive ? Math.max(CACHE_WARMING_MAX_AGE_MS, policy.warmMs) : policy.warmMs)
+) => situation.realRequestAt + (situation.runActive ? CACHE_WARMING_MAX_AGE_MS : policy.warmMs)
 
 const minutes = (ms: number) => Math.round(ms / 60_000)
 
@@ -48,7 +46,7 @@ export function decide(situation: Situation, policy: Policy): Decision {
   if (situation.runActive)
     return {
       stop: policy.warm
-        ? `Run longer than ${minutes(Math.max(CACHE_WARMING_MAX_AGE_MS, policy.warmMs))} min`
+        ? `Run longer than ${minutes(CACHE_WARMING_MAX_AGE_MS)} min`
         : 'Off for this branch',
     }
   if (windowOpen) return { stop: 'Off for this branch' }

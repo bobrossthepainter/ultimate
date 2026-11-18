@@ -10,6 +10,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ConversationId, JsonObject, TaskId } from '@earendil-works/pi-durable'
 import {
+  CACHE_WARMING_MAX_AGE_MS,
   getCacheWarmingDelayMs,
   getCacheWarmingRequestOptions,
   getPromptCacheTtlMs,
@@ -50,7 +51,7 @@ const PING_TIMEOUT_MS = 180_000
 const SUMMARY_TIMEOUT_MS = 300_000
 const SUMMARY_REQUEST =
   'Context compaction from Ultimate, not from the user: do not continue the work and call no tools. Write the summary this branch continues from, in Markdown. Keep its intent and progress toward it: decisions and who made them, open questions and what it waits for, changed files, verification, what remains. Preserve exact file paths, names and errors; cite entries as #<conversation>/<entry>. The most recent turns stay verbatim after the summary. Output only the summary.'
-const MAX_TOKEN_FIELDS = ['max_tokens', 'max_output_tokens', 'max_completion_tokens']
+const OUTPUT_CAP_FIELD: Partial<Record<Api, string>> = { 'anthropic-messages': 'max_tokens' }
 const CLAUDE_CODE_TTL_MS = 3_600_000
 const PING_QUESTION = 'Cache keep-warm check from Ultimate, not from the user. Reply with just: ok'
 
@@ -81,10 +82,10 @@ const isOpenCoordinator = (host: ExtensionHost, id: ConversationId) => {
   return summary !== undefined && isCoordinator(summary)
 }
 
-export function oneTokenPayload(payload: unknown) {
-  const body = { ...(payload as JsonObject) }
-  for (const field of MAX_TOKEN_FIELDS) if (field in body) body[field] = 1
-  return body
+export function oneTokenPayload(api: Api, payload: unknown) {
+  const field = OUTPUT_CAP_FIELD[api]
+  if (!field || !payload || typeof payload !== 'object' || !(field in payload)) return undefined
+  return { ...(payload as JsonObject), [field]: 1 }
 }
 
 export function cacheTiming(model: Model<Api>) {
@@ -191,7 +192,7 @@ async function pingRequest(host: ExtensionHost, run: Run) {
         { messages: [] },
         {
           ...getCacheWarmingRequestOptions({}, signal),
-          onPayload: () => oneTokenPayload(replayed),
+          onPayload: () => replayed,
         },
       )
       .result()
@@ -322,11 +323,16 @@ async function start(
     runs.stopped.set(id, 'Requests cannot be re-sent unchanged (budget-based thinking)')
     return
   }
+  const replay = sent && oneTokenPayload(model.api, sent.payload)
+  if (sent && !replay) {
+    runs.stopped.set(id, `Cannot cap a re-sent ${model.api} request at one token`)
+    return
+  }
   const at = sent?.at ?? answer.timestamp
   const run: Run = {
     id,
     model,
-    ...(sent ? { payload: sent.payload } : {}),
+    ...(replay ? { payload: replay } : {}),
     ...timing,
     realRequestAt: at,
     lastCacheRequestAt: at,
@@ -474,17 +480,20 @@ export default function branchCache(host: ExtensionHost) {
   host.need(ConversationsApi)
   host.want(PauseApi)
   const runs = runsOf(host)
-  for (const run of runs.active.values()) schedule(host, runs, run)
   host.onClose(async () => {
-    for (const run of runs.active.values()) run.cancel?.()
+    for (const run of runs.active.values()) stop(runs, run, 'Branch cache reloaded')
+    runs.sent.clear()
   })
   return defineExtension({
     name: 'branch-cache',
     hooks: [
       hook(GenerationTask, {
         beforeProviderRequest: ({ model, payload }, api) => {
+          const now = Date.now()
+          for (const [id, sent] of runs.sent)
+            if (now - sent.at > CACHE_WARMING_MAX_AGE_MS) runs.sent.delete(id)
           if (isOpenCoordinator(host, api.conversationId))
-            runs.sent.set(api.conversationId, { model, payload, at: Date.now() })
+            runs.sent.set(api.conversationId, { model, payload, at: now })
           return undefined
         },
         afterResponse: async (message, api) => {
@@ -498,6 +507,7 @@ export default function branchCache(host: ExtensionHost) {
       }),
       hook(CompactionTask, {
         beforeCompact: async (_compaction, api, ctx) => {
+          runs.sent.delete(api.conversationId)
           const run = runs.active.get(api.conversationId)
           if (run) stop(runs, run, 'Compacted')
           const doc = await api.snapshot(State, api.conversationId, ctx)
