@@ -304,20 +304,29 @@ async function start(
   runs: Runs,
   id: ConversationId,
   answer: AssistantMessage,
+  facet: { closed: boolean },
 ) {
   const sent = runs.sent.get(id)
   runs.sent.delete(id)
   const previous = runs.active.get(id)
   if (previous) stop(runs, previous, 'Context changed')
   runs.stopped.delete(id)
-  const model = sent?.model ?? host.modelRuntime.getModel(answer.provider, answer.model)
-  if (!model) return
+  const model = sent
+    ? sent.model
+    : answer.provider === 'claude-code'
+      ? host.modelRuntime.getModel(answer.provider, answer.model)
+      : undefined
+  if (!model) {
+    runs.stopped.set(id, 'Waiting for the next request')
+    return
+  }
   const timing = cacheTiming(model)
   if (!timing) {
     runs.stopped.set(id, 'Model has no known cache lifetime')
     return
   }
   const thinking = (await agentOf(host, id))?.thinkingLevel
+  if (facet.closed) return
   const reasoning = thinking === undefined || thinking === 'off' ? undefined : thinking
   if (sent && !isCacheWarmingReplayable(model, { reasoning })) {
     runs.stopped.set(id, 'Requests cannot be re-sent unchanged (budget-based thinking)')
@@ -480,7 +489,9 @@ export default function branchCache(host: ExtensionHost) {
   host.need(ConversationsApi)
   host.want(PauseApi)
   const runs = runsOf(host)
+  const facet = { closed: false }
   host.onClose(async () => {
+    facet.closed = true
     for (const run of runs.active.values()) stop(runs, run, 'Branch cache reloaded')
     runs.sent.clear()
   })
@@ -502,7 +513,7 @@ export default function branchCache(host: ExtensionHost) {
             return
           }
           if (isOpenCoordinator(host, api.conversationId))
-            await start(host, runs, api.conversationId, message)
+            await start(host, runs, api.conversationId, message, facet)
         },
       }),
       hook(CompactionTask, {
