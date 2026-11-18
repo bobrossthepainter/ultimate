@@ -239,6 +239,7 @@ it("counts a recovered run's pings only toward that run, never toward an older a
   const older = { since: now - minutes(120), cost: 0.3, pings: 2 }
   const recovered = now - minutes(30)
   expect(keptBy(older, recovered)).toBe(undefined)
+  expect(keptBy({ since: recovered, cost: 0, pings: 0 }, recovered)).toBe(undefined)
   const first = streakAfterPing(older, recovered, 0.01)
   expect(first).toEqual({ since: recovered, cost: 0.01, pings: 1 })
   expect(keptBy(streakAfterPing(first, recovered, 0.01), recovered)).toEqual({

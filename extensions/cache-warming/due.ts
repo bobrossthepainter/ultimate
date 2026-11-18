@@ -115,4 +115,6 @@ export const streakAfterPing = (
 }
 
 export const keptBy = (streak: Streak | undefined, realRequestAt: number) =>
-  streak?.since === realRequestAt ? { cost: streak.cost, pings: streak.pings } : undefined
+  streak?.since === realRequestAt && streak.pings > 0
+    ? { cost: streak.cost, pings: streak.pings }
+    : undefined
