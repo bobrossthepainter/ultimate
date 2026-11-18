@@ -102,3 +102,17 @@ export function decide(situation: Situation, policy: Policy): Decision {
   if (situation.compactedSinceRequest) return { stop: 'Compacted' }
   return 'compact'
 }
+
+type Streak = NonNullable<CacheWarmingDocState['streak']>
+
+export const streakAfterPing = (
+  streak: Streak | undefined,
+  realRequestAt: number,
+  cost: number,
+): Streak => {
+  const own = streak?.since === realRequestAt ? streak : { since: realRequestAt, cost: 0, pings: 0 }
+  return { ...own, cost: own.cost + cost, pings: own.pings + 1 }
+}
+
+export const keptBy = (streak: Streak | undefined, realRequestAt: number) =>
+  streak?.since === realRequestAt ? { cost: streak.cost, pings: streak.pings } : undefined

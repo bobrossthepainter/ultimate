@@ -1,6 +1,6 @@
 import type { Api, AssistantMessage, Model } from '@earendil-works/pi-ai'
 import { expect, it } from 'vitest'
-import { decide, lateRefreshCutoff, resolvePolicy } from '../due.ts'
+import { decide, keptBy, lateRefreshCutoff, resolvePolicy, streakAfterPing } from '../due.ts'
 import type { Policy, Situation } from '../due.ts'
 import { cacheTiming, oneTokenPayload, recoverRun, rewriteCost, warmCost } from '../server.ts'
 
@@ -232,5 +232,17 @@ it('prices a rewrite and the warm window with the tier the context falls in', ()
   expect(warmCost(haiku, minutes(4.5), 90, 200_000)).toEqual({
     pings: 20,
     cost: expect.closeTo(0.2),
+  })
+})
+
+it("counts a recovered run's pings only toward that run, never toward an older answer's total", () => {
+  const older = { since: now - minutes(120), cost: 0.3, pings: 2 }
+  const recovered = now - minutes(30)
+  expect(keptBy(older, recovered)).toBe(undefined)
+  const first = streakAfterPing(older, recovered, 0.01)
+  expect(first).toEqual({ since: recovered, cost: 0.01, pings: 1 })
+  expect(keptBy(streakAfterPing(first, recovered, 0.01), recovered)).toEqual({
+    cost: 0.02,
+    pings: 2,
   })
 })

@@ -251,10 +251,11 @@ function Popup({
 
 function Chip({ id, name, label }: { id: ConversationId; name: string; label: string }) {
   const doc = useDocOf(id, CacheWarmingDoc)
+  const answerAt = useConversationSummary(id)?.answerAt
   const { data: state, refetch } = useAction(
     StateAction,
     { id },
-    { onError: keepLast, on: doc, every: 30_000 },
+    { onError: keepLast, on: [doc, answerAt], every: 30_000 },
   )
   const now = useNow(30_000)
   if (!state?.kind) return null

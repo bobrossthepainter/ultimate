@@ -33,7 +33,15 @@ import { ContextUsageDoc, ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import { PauseApi } from '../pause/api.ts'
 import { Profile, Standing } from '../subagents/api.ts'
-import { decide, lateRefreshCutoff, policyOf, resolvePolicy, warmWindowEnd } from './due.ts'
+import {
+  decide,
+  keptBy,
+  lateRefreshCutoff,
+  policyOf,
+  resolvePolicy,
+  streakAfterPing,
+  warmWindowEnd,
+} from './due.ts'
 import type { Situation } from './due.ts'
 import { CacheWarmingDoc, SetAction, StateAction } from './refs.ts'
 import type { CacheWarmingDocState, CacheWarmingState, Compaction, Ping } from './refs.ts'
@@ -258,11 +266,7 @@ async function commitPing(
     if (!answer) return
     await host.need(ConversationsApi).accountResponse(tx, run.id, receipt(answer))
     if (ping.error !== undefined) return
-    const streak =
-      doc.streak?.since === run.realRequestAt
-        ? doc.streak
-        : { since: run.realRequestAt, cost: 0, pings: 0 }
-    doc.streak = { ...streak, cost: streak.cost + answer.usage.cost.total, pings: streak.pings + 1 }
+    doc.streak = streakAfterPing(doc.streak, run.realRequestAt, answer.usage.cost.total)
   }, context)
 }
 
@@ -678,8 +682,8 @@ async function state(
       : {}),
   }
   if (!run) return { ...described, idle: runs.stopped.get(id) ?? 'Waiting for the next request' }
-  if (doc.streak?.since === run.realRequestAt)
-    Object.assign(described, { kept: { cost: doc.streak.cost, pings: doc.streak.pings } })
+  const kept = keptBy(doc.streak, run.realRequestAt)
+  if (kept) Object.assign(described, { kept })
   const { situation, policy: effective } = await situationOf(
     host,
     runs,
