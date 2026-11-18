@@ -101,6 +101,9 @@ export function oneTokenPayload(api: Api, payload: unknown) {
   return { ...(payload as JsonObject), [field]: 1 }
 }
 
+export const rewriteCost = (model: Model<Api>, ttl: number, tokens: number) =>
+  (tokens * (ttl >= CLAUDE_CODE_TTL_MS ? model.cost.input * 2 : model.cost.cacheWrite)) / 1_000_000
+
 export function cacheTiming(model: Model<Api>) {
   const ttl =
     model.provider === 'claude-code' ? CLAUDE_CODE_TTL_MS : getPromptCacheTtlMs(model, undefined)
@@ -297,6 +300,14 @@ async function sendPing(host: ExtensionHost, runs: Runs, run: Run) {
     { at, provider: attempt.provider, model: attempt.model, read: cacheRead, write: cacheWrite },
     answer,
   )
+  await host.harness().commit(async (tx) => {
+    const doc = await tx.doc(State, run.id)
+    const streak =
+      doc.streak?.since === run.realRequestAt
+        ? doc.streak
+        : { since: run.realRequestAt, cost: 0, pings: 0 }
+    doc.streak = { ...streak, cost: streak.cost + answer.usage.cost.total, pings: streak.pings + 1 }
+  }, context)
   if (runs.active.get(run.id) !== run) return
   if (cacheRead + cacheWrite === 0) return stop(runs, run, 'Ping found no cache')
   run.lastCacheRequestAt = at
@@ -629,8 +640,11 @@ async function state(
     model: model.id,
     ...(timing ? { ttl: timing.ttl, pingAfter: timing.delayBeforeRefresh } : {}),
     replayable: isCacheWarmingReplayable(model, { reasoning }),
+    ...(timing ? { rewriteCost: rewriteCost(model, timing.ttl, usage?.tokens ?? 0) } : {}),
   }
   if (!run) return { ...described, idle: runs.stopped.get(id) ?? 'Waiting for the next request' }
+  if (doc.streak?.since === run.realRequestAt)
+    Object.assign(described, { kept: { cost: doc.streak.cost, pings: doc.streak.pings } })
   const { situation, policy: effective } = await situationOf(
     host,
     runs,

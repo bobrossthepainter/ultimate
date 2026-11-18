@@ -51,6 +51,17 @@ function nextLine(state: CacheWarmingState, now: number) {
   return state.idle ?? 'Nothing due'
 }
 
+const dollars = (amount: number) => `$${amount < 1 ? amount.toFixed(3) : amount.toFixed(2)}`
+
+function costLine(state: CacheWarmingState, now: number) {
+  const kept =
+    state.kept &&
+    `Kept warm for ${dollars(state.kept.cost)} (${state.kept.pings} ping${state.kept.pings === 1 ? '' : 's'})`
+  if (state.rewriteCost === undefined) return kept
+  const rewrite = `${isWarm(state, now) ? 'a rewrite would cost' : 'next turn rewrites for'} ≈ ${dollars(state.rewriteCost)}`
+  return kept ? `${kept} · ${rewrite}` : rewrite.charAt(0).toUpperCase() + rewrite.slice(1)
+}
+
 function Tag({ source }: { source: Source }) {
   return (
     <span
@@ -160,7 +171,6 @@ function Popup({
       .action(SetAction, { id, ...change })
       .then(refresh)
       .catch((error: unknown) => console.warn('Cache warming', error))
-  const from = state.kind === 'standing' ? 'your last input' : 'its last request'
   return (
     <PopoverContent align="end" className="w-80 p-1 font-mono" side="top">
       <SwitchRow
@@ -197,14 +207,12 @@ function Popup({
         )}
       </div>
       <div className="space-y-1 border-t border-border/70 px-2 pt-1.5 pb-1.5 text-[11px] text-muted-foreground">
-        <div className="truncate" title={`${state.provider}/${state.model}`}>
-          {state.provider ? `${state.provider}/${state.model}` : 'No model'}
-          {' · '}
+        <div title={state.provider ? `${state.provider}/${state.model}` : undefined}>
           {state.ttl === undefined
-            ? 'cache lifetime unknown'
-            : `cache ${duration(state.ttl)}, ping at ${duration(state.pingAfter ?? 0)}`}
+            ? 'Cache lifetime unknown'
+            : `Cache ${duration(state.ttl)}, ping at ${duration(state.pingAfter ?? 0)}`}
         </div>
-        <div className="text-muted-foreground/70">Warm window counts from {from}.</div>
+        {costLine(state, now) && <div>{costLine(state, now)}</div>}
         {state.agent && (
           <button
             className="text-foreground/80 underline-offset-2 hover:underline"
