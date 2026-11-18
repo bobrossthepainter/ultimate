@@ -30,5 +30,8 @@ describe('usage frame', () => {
     })
     expect(new Date(since!).getFullYear()).toBe(99)
     expect(until! - since!).toBeGreaterThan(0)
+    const across = windowOf('custom', '2026-11-18', { from: '10000-01-01', to: '9999-12-31' })
+    expect(new Date(across.since!).getFullYear()).toBe(9999)
+    expect(new Date(across.until!).getFullYear()).toBe(10000)
   })
 })

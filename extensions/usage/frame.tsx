@@ -8,9 +8,10 @@ export const localDay = (date: Date) =>
   `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 
 const midnight = (day: string, plusDays = 0) => {
-  const date = new Date(`${day}T00:00`)
-  date.setDate(date.getDate() + plusDays)
-  return date.getTime()
+  const [year, month, date] = day.split('-').map(Number)
+  const start = new Date(0)
+  start.setFullYear(year, month - 1, date + plusDays)
+  return start.setHours(0, 0, 0, 0)
 }
 export const shiftDay = (day: string, days: number) => localDay(new Date(midnight(day, days)))
 
@@ -21,7 +22,7 @@ export function windowOf(
 ): { since?: number; until?: number } {
   if (frame === 'all') return {}
   if (frame === 'custom') {
-    const [from, to] = [custom.from, custom.to].toSorted()
+    const [from, to] = [custom.from, custom.to].toSorted((a, b) => midnight(a) - midnight(b))
     return { since: midnight(from), until: midnight(to, 1) }
   }
   return { since: midnight(today, { today: 0, '7d': -6, '30d': -29 }[frame]) }
