@@ -209,11 +209,13 @@ function Popup({
           {warmCost}
         </div>
       )}
-      <SwitchRow
-        label="Compact before cold"
-        onChange={(compact) => void set({ compact })}
-        setting={state.compact}
-      />
+      {state.kind === 'coordinator' && (
+        <SwitchRow
+          label="Compact before cold"
+          onChange={(compact) => void set({ compact })}
+          setting={state.compact}
+        />
+      )}
       <div className="space-y-1 border-t border-border/70 px-2 pt-1.5 pb-1.5 text-[11px] text-muted-foreground">
         <div className="text-foreground/80">
           {status.length ? status.map((line) => <div key={line}>{line}</div>) : 'Off'}

@@ -479,7 +479,11 @@ function Form({
           </Field>
           <StandingField value={draft.resident} onChange={(resident) => set({ resident })} />
           <SummariesField value={draft.summaries} onChange={(summaries) => set({ summaries })} />
-          <CacheField value={draft.cache} onChange={(cache) => set({ cache })} />
+          <CacheField
+            onChange={(cache) => set({ cache })}
+            standing={draft.resident}
+            value={draft.cache}
+          />
           <Field
             hint={
               draft.isolate === 'worktree'

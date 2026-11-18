@@ -17,11 +17,11 @@ cache: { warm: true, minutes: 480, shortMinutes: 90, compact: false, compactToke
 - `warm`: keep it warm while idle (default off).
 - `minutes`: how long after its window starts (default 30). A standing agent's window starts at the user's last input to it, a coordinator's at its last request.
 - `shortMinutes`: `minutes` on a model whose cache lives under an hour (default `minutes`).
-- `compact`, `compactTokens`: compact before cold once the context has at least that many tokens (default off, 150000).
+- `compact`, `compactTokens`: compact before cold once the context has at least that many tokens (default off, 150000). Branch coordinators only: a standing agent's dreams compact it, so `compact` is ignored there and its chip and Agents form leave it out.
 
 Built-in: `ultimate` warms 480 min (90 on a five-minute cache), `coordinator` 30 min. Only standing agents and open branch coordinators (top-level, label `coordinator`) are warmed; subagents are short-lived. `cacheWarming.maxWarm` in settings (default 5) limits how many branches are kept warm at once, the most recent first; standing agents do not count.
 
-A conversation's own overrides of `warm`, `compact` and `minutes` (the chip's popover) win over its definition; the popover tags each value `override`, `agent` or `default`.
+A conversation's own overrides of `warm`, `compact` and `minutes` (the chip's popover) win over its definition; the popover marks an override `this chat`, with a reset back to the definition; unmarked values are the definition's or the default.
 
 ## How
 

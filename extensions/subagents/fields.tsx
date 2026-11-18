@@ -118,9 +118,11 @@ function CacheNumber({
 
 export function CacheField({
   value,
+  standing,
   onChange,
 }: {
   value: CachePolicy
+  standing: boolean
   onChange: (value: CachePolicy) => void
 }) {
   const set = <K extends keyof CachePolicy>(key: K, next: CachePolicy[K]) => {
@@ -130,7 +132,11 @@ export function CacheField({
   return (
     <Field
       label="Prompt cache"
-      hint="Standing agents and branch coordinators only. Standing agents count from your last input, coordinators from their last request; the cache lifetime comes from the model."
+      hint={
+        standing
+          ? 'Counts from your last input; the cache lifetime comes from the model. Its dreams compact it, so it is not compacted before cold.'
+          : 'Branch coordinators count from their last request; the cache lifetime comes from the model. Subagents are not warmed.'
+      }
     >
       <div className="flex flex-col gap-1.5 rounded-md border border-border/80 bg-background px-2 py-1.5">
         <label className="flex items-center justify-between text-[13px]">
@@ -153,20 +159,24 @@ export function CacheField({
           placeholder="same"
           value={value.shortMinutes}
         />
-        <label className="flex items-center justify-between text-[13px]">
-          Compact before it goes cold
-          <Switch
-            aria-label="Compact before cold"
-            checked={value.compact ?? false}
-            onCheckedChange={(compact) => set('compact', compact)}
+        {!standing && (
+          <label className="flex items-center justify-between text-[13px]">
+            Compact before it goes cold
+            <Switch
+              aria-label="Compact before cold"
+              checked={value.compact ?? false}
+              onCheckedChange={(compact) => set('compact', compact)}
+            />
+          </label>
+        )}
+        {!standing && value.compact && (
+          <CacheNumber
+            label="Compact from (tokens)"
+            onChange={(tokens) => set('compactTokens', tokens)}
+            placeholder="150000"
+            value={value.compactTokens}
           />
-        </label>
-        <CacheNumber
-          label="Compact from (tokens)"
-          onChange={(tokens) => set('compactTokens', tokens)}
-          placeholder="150000"
-          value={value.compactTokens}
-        />
+        )}
       </div>
     </Field>
   )

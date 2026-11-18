@@ -176,6 +176,7 @@ async function policyFor(
   const agent = name === undefined ? undefined : definitions.find((item) => item.name === name)
   const doc = await readDoc(host, id)
   const resolved = resolvePolicy(agent?.cache, doc, ttl)
+  if (kind === 'standing') resolved.compact = { value: false, source: 'default' }
   return { kind, agent, doc, resolved, effective: policyOf(resolved) }
 }
 
@@ -816,11 +817,11 @@ export const actions = {
       compact: override(values.compact, isBoolean, 'compact must be a boolean or null'),
       minutes: override(values.minutes, isCount, 'minutes must be a number of at least 0, or null'),
     }
-    if (
-      !(await warmedKind(host, id)) ||
-      (await host.need(ConversationsApi).concluded(context)).has(id)
-    )
+    const kind = await warmedKind(host, id)
+    if (!kind || (await host.need(ConversationsApi).concluded(context)).has(id))
       throw new Error(`#${id} is not a standing agent or an open branch`)
+    if (kind === 'standing' && change.compact)
+      throw new Error('Standing agents are not compacted before cold: their dreams handle it')
     await host.harness().commit(async (tx) => {
       const doc = await tx.doc(State, id)
       for (const key of ['warm', 'compact', 'minutes'] as const) {
