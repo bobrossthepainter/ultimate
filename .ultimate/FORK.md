@@ -250,3 +250,14 @@ so branches adding divergences in parallel do not edit the same lines.
 - Why: ask a running branch questions without disturbing it; a branch is usually mid-run, so the fork point moved
   from the last answered input to the newest finished tool round, for @ultimate too
 - Upstream: candidate
+
+### Generic branch-cache
+
+- Touches: `extensions/branch-cache/` (server, `due.ts`, `settings.ts`, `refs.ts`, chip popover, README, tests),
+  `tsconfig.web.json` (`due.ts` is no longer browser code)
+- Why: the built-in only warmed one-hour caches (Claude Code), so Claude on GitHub Copilot, which keeps a
+  five-minute cache, went cold between turns. It now follows pi's own cache warmer: lifetime from the model's
+  `promptCache`, a timer at 90 % of it, the last request replayed with a one-token cap, warming during runs for an
+  hour, a late-refresh cutoff; per-model `branchCache.models` policy, warming on by default, edited in the chip
+  popover
+- Upstream: candidate
