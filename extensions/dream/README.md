@@ -26,7 +26,7 @@ A dream is ordinary work; code keeps only which branch is the dream, so its end 
 
 Dream ships two ordinary context automations that subscribe @ultimate (`built-ins.ts`): **Dream before compaction**
 (`condition {metric: 'context', of: '@ultimate', above: 70}`) and **Dream after a pause** (`above: 50, idleFor:
-8 h`; at 8 hours keep-warm has just renewed the prompt cache, so the handoff reads it instead of rewriting it). Each
+8 h`; at 8 hours cache warming has just renewed the prompt cache, so the handoff reads it instead of rewriting it). Each
 is made once per chapter when the harness opens or @ultimate first starts; their ids are kept in
 `dream.after-compaction` and `dream.after-pause` on conversation 1. They show in the Automations panel like any other:
 thresholds are edited there, pausing one stops its dreams, deleting one is remembered (dream does not make it again),

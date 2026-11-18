@@ -185,19 +185,22 @@ so branches adding divergences in parallel do not edit the same lines.
   their process exits, ssh-exec recheck). New fork code follows the same rules
 - Upstream: local-only
 
-### Generic branch-cache
+### Cache warming per agent
 
-- Touches: `extensions/branch-cache/` (new: server, `due.ts`, `settings.ts`, `refs.ts`, chip popover, README, tests),
-  `tsconfig.web.json` (`due.ts` is no longer browser code)
-- Why: Branch coordinators rebuilt their prompt cache after long waits on the user, subagents or the lander (#27553:
-  41 % of coordinator cost), and Claude on GitHub Copilot keeps only a five-minute cache. It follows pi's own cache
-  warmer: lifetime from the model's `promptCache` (Claude Code: one hour), a timer at 90 % of it, the last request
-  replayed with a one-token cap (Claude Code: an `ok` ping on the next context, identity after the leading system
-  message as `keep-warm` does), warming during runs for an hour and idle for `warmMinutes` (30), a late-refresh
-  cutoff; per-model `branchCache.models` policy, warming on by default, edited in the chip popover. Compaction
-  before cold stays, off by default; its `beforeCompact` hook (before lineage) asks for the summary on the branch's
-  own cached context. Pings abort on release
-- Upstream: candidate
+- Touches: `extensions/cache-warming/` (new, grown from the fork's branch-cache: server, `due.ts`, `refs.ts`, the
+  `@ultimate` and `branch` chips, README, tests), `lib/agents.ts` (`cache:` definition field: parse, serialize,
+  overlay diff and merge), `extensions/subagents/` (`refs.ts` type, `server.ts` save, `fields.tsx` Prompt cache
+  field, `definitions.tsx`, test), `agents/ultimate.md` and `agents/coordinator.md` (`cache:` defaults),
+  `shared/extension-api.ts` (`keep-warm` in `defaultOff`)
+- Why: one warmer for @ultimate and branch coordinators, configured per agent in the Agents panel and overridden per
+  conversation from its chip (#40606, Robert's answers on card 527). Upstream's `keep-warm` warmed only hour-long
+  caches (Claude Code), so @ultimate on Copilot Claude was never warmed. Lifetime from the model's `promptCache`
+  (Claude Code: one hour), a timer at 90 % of it, the last request replayed with a one-token cap (Claude Code: an
+  `ok` ping on the next context, identity after the leading system message); @ultimate's window counts from the
+  user's last input (480 min, 90 on caches under an hour), a coordinator's from its last request (30 min).
+  Compaction before cold stays, off by default. `branchCache.models` is gone. `keep-warm`'s folder stays untouched
+  so merges stay cheap; re-check on each merge whether upstream changed it or the definition fields
+- Upstream: candidate (replaces keep-warm; send with the cache findings in memory upstream-cache-feedback)
 
 ### Projects rail over Caddy
 

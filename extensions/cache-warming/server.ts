@@ -7,6 +7,7 @@ import {
   GenerationTask,
   hook,
   LiveDoc,
+  ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, JsonObject, TaskId } from '@earendil-works/pi-durable'
 import {
@@ -19,24 +20,26 @@ import {
 import type { Api, AssistantMessage, Message, Model } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationSummary } from '../../shared/protocol.ts'
+import { UserInputEvent } from '../../shared/events.ts'
+import { discoverAgents } from '../../lib/agents.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { admitCompaction, compacting } from '../../lib/compaction.ts'
 import { inProcess } from '../../lib/errors.ts'
 import { parseConversationId } from '../../lib/ids.ts'
-import { readSettings, updateSettings, userSettingsPath } from '../../lib/settings.ts'
+import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { deadline } from '../../lib/timers.ts'
 import type { Cancel } from '../../lib/timers.ts'
 import { ContextUsageDoc, ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import { PauseApi } from '../pause/api.ts'
-import { decide } from './due.ts'
-import type { Policy, Situation } from './due.ts'
-import { BranchCacheDoc, SetAction, SetModelAction, StateAction } from './refs.ts'
-import type { BranchCacheDocState, BranchCacheState, Compaction, Ping, Setting } from './refs.ts'
-import { DEFAULTS, readPolicy, writeModelPolicy } from './settings.ts'
+import { Profile, Standing } from '../subagents/api.ts'
+import { decide, policyOf, resolvePolicy } from './due.ts'
+import type { Situation } from './due.ts'
+import { CacheWarmingDoc, SetAction, StateAction } from './refs.ts'
+import type { CacheWarmingDocState, CacheWarmingState, Compaction, Ping } from './refs.ts'
 
-const State = defineDoc<BranchCacheDocState>({
-  kind: BranchCacheDoc.kind,
+const State = defineDoc<CacheWarmingDocState>({
+  kind: CacheWarmingDoc.kind,
   checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
@@ -53,6 +56,7 @@ const SUMMARY_REQUEST =
   'Context compaction from Ultimate, not from the user: do not continue the work and call no tools. Write the summary this branch continues from, in Markdown. Keep its intent and progress toward it: decisions and who made them, open questions and what it waits for, changed files, verification, what remains. Preserve exact file paths, names and errors; cite entries as #<conversation>/<entry>. The most recent turns stay verbatim after the summary. Output only the summary.'
 const OUTPUT_CAP_FIELD: Partial<Record<Api, string>> = { 'anthropic-messages': 'max_tokens' }
 const CLAUDE_CODE_TTL_MS = 3_600_000
+const DEFAULT_MAX_WARM = 5
 const PING_QUESTION = 'Cache keep-warm check from Ultimate, not from the user. Reply with just: ok'
 
 type Run = {
@@ -74,12 +78,20 @@ type Runs = {
   stopped: Map<ConversationId, string>
 }
 
-export const isCoordinator = (summary: ConversationSummary) =>
-  summary.label === 'coordinator' && summary.ownerTaskId === undefined
+type Kind = 'standing' | 'coordinator'
 
-const isOpenCoordinator = (host: ExtensionHost, id: ConversationId) => {
+export const kindOf = (summary: ConversationSummary): Kind | undefined =>
+  summary.ownerTaskId !== undefined
+    ? undefined
+    : summary.label === 'coordinator'
+      ? 'coordinator'
+      : summary.label === 'agent'
+        ? 'standing'
+        : undefined
+
+const warmedKind = (host: ExtensionHost, id: ConversationId) => {
   const summary = host.conversations().find((candidate) => candidate.id === id)
-  return summary !== undefined && isCoordinator(summary)
+  return summary && kindOf(summary)
 }
 
 export function oneTokenPayload(api: Api, payload: unknown) {
@@ -101,24 +113,42 @@ export function cacheTiming(model: Model<Api>) {
 const readDoc = async (host: ExtensionHost, id: ConversationId) =>
   (await host.harness().snapshot(State, id, context)) ?? {}
 
-async function settingsLayers(host: ExtensionHost) {
+async function maxWarmBranches(host: ExtensionHost) {
   const user = await readSettings(userSettingsPath(host.userHome)).catch((error: unknown) => {
-    host.notice(`Branch cache: ${String(error)}`)
+    host.notice(`Cache warming: ${String(error)}`)
     return {}
   })
-  return { user, project: await host.projectSettings() }
+  const project = await host.projectSettings()
+  const of = (settings: JsonObject) => {
+    const section = settings.cacheWarming
+    return section && typeof section === 'object' && !Array.isArray(section)
+      ? section.maxWarm
+      : undefined
+  }
+  const isCount = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+  return [of(project), of(user)].find(isCount) ?? DEFAULT_MAX_WARM
 }
 
-async function branchPolicy(host: ExtensionHost, id: ConversationId, model: Model<Api>) {
-  const { maxWarm, policy } = readPolicy(await settingsLayers(host), model.provider, model.id)
+async function definitionOf(host: ExtensionHost, id: ConversationId, kind: Kind | undefined) {
+  const profile = await host.harness().snapshot(Profile, id, context)
+  const name = profile?.definition ?? (kind === 'coordinator' ? 'coordinator' : undefined)
+  if (!name) return undefined
+  const { definitions } = await discoverAgents(
+    host.ultimateRoot,
+    host.projectRoot,
+    host.userHome,
+    host.modelRuntime,
+  )
+  return definitions.find((definition) => definition.name === name)
+}
+
+async function policyFor(host: ExtensionHost, id: ConversationId, ttl: number | undefined) {
+  const kind = warmedKind(host, id)
+  const agent = await definitionOf(host, id, kind)
   const doc = await readDoc(host, id)
-  const effective: Policy = {
-    warm: doc.warm ?? policy.warm.value,
-    compact: doc.compact ?? policy.compact.value,
-    warmMs: policy.warmMinutes.value * 60_000,
-    minCompactTokens: policy.minCompactTokens.value,
-  }
-  return { maxWarm, policy, effective, doc }
+  const resolved = resolvePolicy(agent?.cache, doc, ttl)
+  return { kind, agent, doc, resolved, effective: policyOf(resolved) }
 }
 
 async function agentOf(host: ExtensionHost, id: ConversationId) {
@@ -127,22 +157,30 @@ async function agentOf(host: ExtensionHost, id: ConversationId) {
 }
 
 async function situationOf(host: ExtensionHost, runs: Runs, run: Run, now: number) {
-  const { maxWarm, effective, doc } = await branchPolicy(host, run.id, run.model)
-  const warming: Run[] = []
-  for (const other of runs.active.values())
-    if (other.id === run.id || (await branchPolicy(host, other.id, other.model)).effective.warm)
-      warming.push(other)
-  const withinMaxWarm = warming
-    .toSorted((a, b) => b.realRequestAt - a.realRequestAt)
-    .slice(0, maxWarm)
-    .includes(run)
+  const { kind, doc, effective } = await policyFor(host, run.id, run.ttl)
+  let withinMaxWarm = true
+  if (kind === 'coordinator') {
+    const warming: Run[] = []
+    for (const other of runs.active.values()) {
+      if (warmedKind(host, other.id) !== 'coordinator') continue
+      if (other.id === run.id || (await policyFor(host, other.id, other.ttl)).effective.warm)
+        warming.push(other)
+    }
+    withinMaxWarm = warming
+      .toSorted((a, b) => b.realRequestAt - a.realRequestAt)
+      .slice(0, await maxWarmBranches(host))
+      .includes(run)
+  }
   const usage = await host.harness().snapshot(ContextUsageDoc, run.id, context)
+  const fromInput = kind === 'standing'
   const situation: Situation = {
     now,
     ttl: run.ttl,
     delayBeforeRefresh: run.delayBeforeRefresh,
     realRequestAt: run.realRequestAt,
     lastCacheRequestAt: run.lastCacheRequestAt,
+    from: fromInput ? 'input' : 'request',
+    windowStart: fromInput ? doc.inputAt : run.realRequestAt,
     runActive: Boolean((await host.harness().snapshot(LiveDoc, run.id, context))?.run),
     withinMaxWarm,
     tokens: usage?.tokens ?? 0,
@@ -269,10 +307,10 @@ async function refresh(host: ExtensionHost, runs: Runs, run: Run) {
   if (runs.active.get(run.id) !== run) return
   if (host.want(PauseApi)?.paused()) return stop(runs, run, 'Ultimate is paused')
   if (
-    !isOpenCoordinator(host, run.id) ||
+    !warmedKind(host, run.id) ||
     (await host.need(ConversationsApi).concluded(context)).has(run.id)
   )
-    return stop(runs, run, 'Not an open branch')
+    return stop(runs, run, 'Not a standing agent or an open branch')
   const model = (await agentOf(host, run.id))?.model
   if (model?.provider !== run.model.provider || model.modelId !== run.model.id)
     return stop(runs, run, 'Model changed')
@@ -291,10 +329,10 @@ function schedule(host: ExtensionHost, runs: Runs, run: Run) {
     run.nextAt - Date.now(),
     () =>
       inProcess(
-        "a branch's warming lives with the process; its next request starts it again",
+        "a conversation's warming lives with the process; its next request starts it again",
         refresh(host, runs, run).catch((error: unknown) => {
           stop(runs, run, String(error))
-          host.notice(`Branch cache: ${String(error)}`)
+          host.notice(`Cache warming: ${String(error)}`)
         }),
       ),
     { unref: true },
@@ -439,40 +477,36 @@ async function state(
   host: ExtensionHost,
   runs: Runs,
   id: ConversationId,
-): Promise<BranchCacheState> {
-  const doc = await readDoc(host, id)
+): Promise<CacheWarmingState> {
   const usage = await host.harness().snapshot(ContextUsageDoc, id, context)
   const agent = await agentOf(host, id)
   const model =
     agent?.model && host.modelRuntime.getModel(agent.model.provider, agent.model.modelId)
+  const timing = model && cacheTiming(model)
+  const { kind, agent: definition, doc, resolved } = await policyFor(host, id, timing?.ttl)
   const run = runs.active.get(id)
   const base = {
+    ...(kind ? { kind } : {}),
+    ...(definition ? { agent: definition.name } : {}),
+    warm: resolved.warm,
+    compact: resolved.compact,
+    minutes: resolved.minutes,
+    compactTokens: resolved.compactTokens,
     tokens: usage?.tokens ?? 0,
     pings: doc.pings ?? 0,
+    ...(doc.inputAt === undefined ? {} : { inputAt: doc.inputAt }),
     ...(doc.last ? { last: doc.last } : {}),
     ...(doc.compaction ? { compaction: doc.compaction } : {}),
   }
-  const branchSwitch = (value: boolean | undefined, policyValue: Setting<boolean>) =>
-    value === undefined ? policyValue : { value, source: 'branch' as const }
-  if (!model)
-    return {
-      ...base,
-      warm: branchSwitch(doc.warm, { value: DEFAULTS.warm, source: 'default' }),
-      compact: branchSwitch(doc.compact, { value: DEFAULTS.compact, source: 'default' }),
-      idle: 'No model',
-    }
-  const { policy } = await branchPolicy(host, id, model)
-  const timing = cacheTiming(model)
+  if (!kind) return { ...base, idle: 'Not a standing agent or an open branch' }
+  if (!model) return { ...base, idle: 'No model' }
   const reasoning = agent.thinkingLevel === 'off' ? undefined : agent.thinkingLevel
-  const described: BranchCacheState = {
+  const described: CacheWarmingState = {
     ...base,
-    warm: branchSwitch(doc.warm, policy.warm),
-    compact: branchSwitch(doc.compact, policy.compact),
     provider: model.provider,
     model: model.id,
     ...(timing ? { ttl: timing.ttl, pingAfter: timing.delayBeforeRefresh } : {}),
     replayable: isCacheWarmingReplayable(model, { reasoning }),
-    policy,
   }
   if (!run) return { ...described, idle: runs.stopped.get(id) ?? 'Waiting for the next request' }
   const { situation, policy: effective } = await situationOf(host, runs, run, run.nextAt)
@@ -487,7 +521,7 @@ async function state(
     : { ...live, idle: step.stop }
 }
 
-export default function branchCache(host: ExtensionHost) {
+export default function cacheWarming(host: ExtensionHost) {
   host.need(ConversationsApi)
   host.want(PauseApi)
   const runs = runsOf(host)
@@ -496,20 +530,30 @@ export default function branchCache(host: ExtensionHost) {
     for (const run of runs.active.values()) stop(runs, run, reason)
     runs.sent.clear()
   }
+  host.react(
+    'user-input',
+    [UserInputEvent],
+    async (tx, { data, at }) => {
+      const standing = Object.values(await tx.doc(Standing, ROOT_CONVERSATION_ID))
+      if (!standing.includes(data.conversation)) return
+      ;(await tx.doc(State, data.conversation)).inputAt = Date.parse(at)
+    },
+    { from: 'now' },
+  )
   host.onRelease(async () => stopAll('Ultimate restarted'))
   host.onClose(async () => {
     facet.closed = true
-    stopAll('Branch cache reloaded')
+    stopAll('Cache warming reloaded')
   })
   return defineExtension({
-    name: 'branch-cache',
+    name: 'cache-warming',
     hooks: [
       hook(GenerationTask, {
         beforeProviderRequest: ({ model, payload }, api) => {
           const now = Date.now()
           for (const [id, sent] of runs.sent)
             if (now - sent.at > CACHE_WARMING_MAX_AGE_MS) runs.sent.delete(id)
-          if (isOpenCoordinator(host, api.conversationId))
+          if (warmedKind(host, api.conversationId))
             runs.sent.set(api.conversationId, { model, payload, at: now })
           return undefined
         },
@@ -518,7 +562,7 @@ export default function branchCache(host: ExtensionHost) {
             runs.sent.delete(api.conversationId)
             return
           }
-          if (isOpenCoordinator(host, api.conversationId))
+          if (warmedKind(host, api.conversationId))
             await start(host, runs, api.conversationId, message, facet)
         },
       }),
@@ -529,11 +573,11 @@ export default function branchCache(host: ExtensionHost) {
           if (run) stop(runs, run, 'Compacted')
           const doc = await api.snapshot(State, api.conversationId, ctx)
           if (doc?.compaction?.task !== api.taskId) return undefined
-          const kept = await api.memo<string>('branch-cache.summary', ctx)
+          const kept = await api.memo<string>('cache-warming.summary', ctx)
           if (kept !== undefined) return { summary: kept }
           if ((await api.snapshot(LiveDoc, api.conversationId, ctx))?.run) return undefined
           const summary = await summaryFromCache(host, api.conversationId, api.taskId, (fresh) =>
-            api.memo('branch-cache.summary', fresh, ctx),
+            api.memo('cache-warming.summary', fresh, ctx),
           )
           return summary === undefined ? undefined : { summary }
         },
@@ -543,7 +587,7 @@ export default function branchCache(host: ExtensionHost) {
 }
 
 const runsOf = (host: ExtensionHost) =>
-  host.resource<Runs>('branch-cache.runs', () => ({
+  host.resource<Runs>('cache-warming.runs', () => ({
     sent: new Map(),
     active: new Map(),
     stopped: new Map(),
@@ -556,12 +600,14 @@ function conversationArg(args: unknown) {
   return parseConversationId(id)
 }
 
-const countOrNull = (value: unknown, name: string) => {
-  if (value === undefined || value === null) return value
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0)
-    throw new Error(`${name} must be a number of at least 0, or null`)
-  return value
+function override<T>(value: unknown, valid: (value: unknown) => value is T, message: string) {
+  if (value === undefined || value === null || valid(value)) return value as T | null | undefined
+  throw new Error(message)
 }
+
+const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean'
+const isCount = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0
 
 export const actions = {
   state: implementAction(StateAction, (args, { host }) =>
@@ -569,36 +615,22 @@ export const actions = {
   ),
   set: implementAction(SetAction, async (args, { host }) => {
     const id = conversationArg(args)
-    const { warm, compact } = args as { warm?: unknown; compact?: unknown }
-    if (warm !== undefined && typeof warm !== 'boolean') throw new Error('warm must be a boolean')
-    if (compact !== undefined && typeof compact !== 'boolean')
-      throw new Error('compact must be a boolean')
-    if (!isOpenCoordinator(host, id)) throw new Error(`#${id} is not a branch coordinator`)
+    const values = args as { warm?: unknown; compact?: unknown; minutes?: unknown }
+    const change = {
+      warm: override(values.warm, isBoolean, 'warm must be a boolean or null'),
+      compact: override(values.compact, isBoolean, 'compact must be a boolean or null'),
+      minutes: override(values.minutes, isCount, 'minutes must be a number of at least 0, or null'),
+    }
+    if (!warmedKind(host, id)) throw new Error(`#${id} is not a standing agent or an open branch`)
     await host.harness().commit(async (tx) => {
       const doc = await tx.doc(State, id)
-      if (warm !== undefined) doc.warm = warm
-      if (compact !== undefined) doc.compact = compact
+      for (const key of ['warm', 'compact', 'minutes'] as const) {
+        const value = change[key]
+        if (value === null) delete doc[key]
+        else if (value !== undefined) Object.assign(doc, { [key]: value })
+      }
     }, context)
     return state(host, runsOf(host), id)
   }),
-  'set-model': implementAction(SetModelAction, async (args, { host }) => {
-    const { provider, model, ...values } = (args ?? {}) as {
-      provider?: unknown
-      model?: unknown
-      warmMinutes?: unknown
-      minCompactTokens?: unknown
-    }
-    if (typeof provider !== 'string' || typeof model !== 'string' || !provider || !model)
-      throw new Error('Expected { provider, model, warmMinutes?, minCompactTokens? }')
-    const warmMinutes = countOrNull(values.warmMinutes, 'warmMinutes')
-    const minCompactTokens = countOrNull(values.minCompactTokens, 'minCompactTokens')
-    await updateSettings(userSettingsPath(host.userHome), (settings) =>
-      writeModelPolicy(settings, `${provider}/${model}`, {
-        ...(warmMinutes === undefined ? {} : { warmMinutes }),
-        ...(minCompactTokens === undefined ? {} : { minCompactTokens }),
-      }),
-    )
-    return null
-  }),
 }
-export const userActions = ['set', 'set-model']
+export const userActions = ['set']

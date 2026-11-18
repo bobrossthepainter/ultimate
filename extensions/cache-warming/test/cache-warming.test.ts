@@ -1,10 +1,8 @@
-import type { JsonObject } from '@earendil-works/pi-durable'
 import type { Api, Model } from '@earendil-works/pi-ai'
 import { expect, it } from 'vitest'
-import { decide, lateRefreshCutoff } from '../due.ts'
+import { decide, lateRefreshCutoff, resolvePolicy } from '../due.ts'
 import type { Policy, Situation } from '../due.ts'
 import { cacheTiming, oneTokenPayload } from '../server.ts'
-import { readPolicy, writeModelPolicy } from '../settings.ts'
 
 const now = Date.parse('2026-11-16T12:00:00Z')
 const minutes = (count: number) => count * 60_000
@@ -15,6 +13,8 @@ const fiveMinutes = (change: Partial<Situation>): Situation => ({
   delayBeforeRefresh: minutes(4.5),
   realRequestAt: now - minutes(13.5),
   lastCacheRequestAt: now - minutes(4.5),
+  from: 'request',
+  windowStart: now - minutes(13.5),
   runActive: false,
   withinMaxWarm: true,
   tokens: 200_000,
@@ -27,34 +27,64 @@ const hour = (change: Partial<Situation>) =>
     delayBeforeRefresh: minutes(54),
     realRequestAt: now - minutes(54),
     lastCacheRequestAt: now - minutes(54),
+    windowStart: now - minutes(54),
     ...change,
   })
 
 it('pings a five-minute cache at 4.5 minutes for 30 minutes after the request, then compacts', () => {
   expect(decide(fiveMinutes({}), policy)).toBe('ping')
-  expect(decide(fiveMinutes({ realRequestAt: now - minutes(31.5) }), policy)).toBe('compact')
   expect(
-    decide(fiveMinutes({ realRequestAt: now - minutes(31.5) }), { ...policy, compact: false }),
+    decide(
+      fiveMinutes({ realRequestAt: now - minutes(31.5), windowStart: now - minutes(31.5) }),
+      policy,
+    ),
+  ).toBe('compact')
+  expect(
+    decide(fiveMinutes({ realRequestAt: now - minutes(31.5), windowStart: now - minutes(31.5) }), {
+      ...policy,
+      compact: false,
+    }),
   ).toEqual({
     stop: 'No request for 30 min',
   })
 })
 
 it('keeps a branch with a run warm for an hour after its request, and never compacts it', () => {
-  expect(decide(fiveMinutes({ runActive: true, realRequestAt: now - minutes(58.5) }), policy)).toBe(
-    'ping',
-  )
   expect(
-    decide(fiveMinutes({ runActive: true, realRequestAt: now - minutes(63) }), policy),
+    decide(
+      fiveMinutes({
+        runActive: true,
+        realRequestAt: now - minutes(58.5),
+        windowStart: now - minutes(58.5),
+      }),
+      policy,
+    ),
+  ).toBe('ping')
+  expect(
+    decide(
+      fiveMinutes({
+        runActive: true,
+        realRequestAt: now - minutes(63),
+        windowStart: now - minutes(63),
+      }),
+      policy,
+    ),
   ).toEqual({
-    stop: 'Run longer than 60 min',
+    stop: 'Run longer than 1 h',
   })
   expect(
-    decide(fiveMinutes({ runActive: true, realRequestAt: now - minutes(63) }), {
-      ...policy,
-      warmMs: minutes(480),
-    }),
-  ).toEqual({ stop: 'Run longer than 60 min' })
+    decide(
+      fiveMinutes({
+        runActive: true,
+        realRequestAt: now - minutes(63),
+        windowStart: now - minutes(63),
+      }),
+      {
+        ...policy,
+        warmMs: minutes(480),
+      },
+    ),
+  ).toBe('ping')
 })
 
 it('skips a refresh that fires after half the margin before expiry', () => {
@@ -68,7 +98,7 @@ it('skips a refresh that fires after half the margin before expiry', () => {
 
 it('does not compact a five-minute cache inside its window, nor warm it when off', () => {
   expect(decide(fiveMinutes({}), { ...policy, warm: false })).toEqual({
-    stop: 'Off for this branch',
+    stop: 'Off for this conversation',
   })
   expect(decide(fiveMinutes({ withinMaxWarm: false }), policy)).toEqual({
     stop: 'Over the limit of warm branches',
@@ -109,46 +139,42 @@ it('caps a replayed Anthropic request at one output token, and refuses bodies it
   expect(oneTokenPayload('anthropic-messages', { messages: [] })).toBe(undefined)
 })
 
-it('resolves a model policy from defaults, provider and exact keys, the project over the user', () => {
-  expect(readPolicy({ user: {}, project: {} }, 'github-copilot', 'claude-opus-5.5')).toEqual({
-    maxWarm: 5,
-    policy: {
-      warm: { value: true, source: 'default' },
-      compact: { value: false, source: 'default' },
-      warmMinutes: { value: 30, source: 'default' },
-      minCompactTokens: { value: 150_000, source: 'default' },
-    },
+it("warms @ultimate for 8 h after the user's last input on an hour-long cache, 90 min on a five-minute one", () => {
+  const ultimate = { warm: true, minutes: 480, shortMinutes: 90 }
+  const long = resolvePolicy(ultimate, {}, minutes(60))
+  expect(long.minutes).toEqual({ value: 480, source: 'agent' })
+  const short = resolvePolicy(ultimate, {}, minutes(5))
+  expect(short.minutes).toEqual({ value: 90, source: 'agent' })
+  const fromInput = (inputAgo: number) =>
+    hour({ from: 'input', windowStart: now - minutes(inputAgo), realRequestAt: now - minutes(54) })
+  expect(decide(fromInput(470), { ...policy, warmMs: minutes(480) })).toBe('ping')
+  expect(decide(fromInput(481), { ...policy, warmMs: minutes(480), compact: false })).toEqual({
+    stop: 'No input from you for 8 h',
   })
-  const user = {
-    branchCache: {
-      maxWarm: 3,
-      models: {
-        'github-copilot/*': { warmMinutes: 20, compact: true },
-        'github-copilot/claude-opus-5.5': { warmMinutes: 45 },
-      },
-    },
-  }
-  const project = {
-    branchCache: { models: { 'github-copilot/*': { minCompactTokens: 'x', warm: false } } },
-  }
-  expect(readPolicy({ user, project }, 'github-copilot', 'claude-opus-5.5')).toEqual({
-    maxWarm: 3,
-    policy: {
-      warm: { value: false, source: 'project' },
-      compact: { value: true, source: 'yours' },
-      warmMinutes: { value: 45, source: 'yours' },
-      minCompactTokens: { value: 150_000, source: 'default' },
-    },
-  })
+  expect(
+    decide(fiveMinutes({ from: 'input', windowStart: now - minutes(91) }), {
+      ...policy,
+      warmMs: minutes(90),
+      compact: false,
+    }),
+  ).toEqual({ stop: 'No input from you for 90 min' })
+  expect(
+    decide(fiveMinutes({ from: 'input', windowStart: undefined }), { ...policy, compact: false }),
+  ).toEqual({ stop: 'No input from you yet' })
 })
 
-it("writes a model's values into user settings and removes them again", () => {
-  const settings: JsonObject = { theme: 'dark' }
-  writeModelPolicy(settings, 'github-copilot/claude-opus-5.5', { warmMinutes: 45 })
-  expect(settings).toEqual({
-    theme: 'dark',
-    branchCache: { models: { 'github-copilot/claude-opus-5.5': { warmMinutes: 45 } } },
+it("takes a conversation's override over its agent definition, and the default without either", () => {
+  expect(resolvePolicy(undefined, {}, minutes(5))).toEqual({
+    warm: { value: false, source: 'default' },
+    compact: { value: false, source: 'default' },
+    minutes: { value: 30, source: 'default' },
+    compactTokens: { value: 150_000, source: 'default' },
   })
-  writeModelPolicy(settings, 'github-copilot/claude-opus-5.5', { warmMinutes: null })
-  expect(settings).toEqual({ theme: 'dark' })
+  const coordinator = { warm: true, minutes: 30, compact: true, compactTokens: 100_000 }
+  expect(resolvePolicy(coordinator, { warm: false, minutes: 120 }, minutes(5))).toEqual({
+    warm: { value: false, source: 'override' },
+    compact: { value: true, source: 'agent' },
+    minutes: { value: 120, source: 'override' },
+    compactTokens: { value: 100_000, source: 'agent' },
+  })
 })
