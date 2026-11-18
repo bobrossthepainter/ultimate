@@ -142,7 +142,7 @@ function MinutesRow({
   }
   return (
     <div className="flex h-7 items-center gap-2 px-2 text-[11.5px]">
-      <span className="flex-1 text-muted-foreground">{label}</span>
+      <span className="text-muted-foreground">{label}</span>
       <input
         aria-label={label}
         className="h-5 w-14 rounded-sm border border-border bg-transparent px-1 text-right tabular-nums text-foreground"
@@ -153,7 +153,7 @@ function MinutesRow({
         type="number"
         value={draft}
       />
-      <span className="w-6 text-muted-foreground/70">min</span>
+      <span className="flex-1 text-muted-foreground/70">min</span>
       <Tag source={setting.source} />
       <Reset label={label} onReset={() => onSave(null)} shown={setting.source === 'override'} />
     </div>
