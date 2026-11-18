@@ -263,7 +263,8 @@ so branches adding divergences in parallel do not edit the same lines.
 
 ### Upstream diagrams off
 
-- Touches: `.ultimate/settings.json` (`extensions.disable: ["diagrams"]`)
+- Touches: `shared/extension-api.ts` (`diagrams` in `defaultOff`, so every Ultimate on this code base starts with it
+  off; `extensions.enable` turns it back on)
 - Why: upstream's `diagrams` (Unicode box-art via `lovely-mermaid`) claims the same `mermaid` code blocks as the
   fork's SVG `extensions/mermaid`, which the user approved; one renderer per job. `lovely-mermaid` stays installed
   but unused. Re-check on each merge whether upstream changed either renderer

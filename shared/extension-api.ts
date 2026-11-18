@@ -51,6 +51,7 @@ export const defaultOff: readonly string[] = [
   'voice-chatgpt',
   'push',
   'wire',
+  'diagrams',
 ]
 
 type SortedCycleNames = string[]
