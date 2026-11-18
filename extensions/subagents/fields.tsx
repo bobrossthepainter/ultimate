@@ -102,7 +102,7 @@ function CacheNumber({
       <span className="flex-1">{label}</span>
       <input
         aria-label={label}
-        className={cn(inputClass, 'w-24 py-1 text-right tabular-nums')}
+        className={cn(inputClass, 'w-28 py-1 text-right tabular-nums')}
         min={0}
         onChange={(event) => {
           const next = event.target.valueAsNumber

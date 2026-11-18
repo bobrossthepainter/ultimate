@@ -27,7 +27,7 @@ const clock = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
 const duration = (ms: number) => {
-  const minutes = Math.round(ms / 60_000)
+  const minutes = Math.round(ms / 30_000) / 2
   return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`
 }
 
@@ -66,7 +66,7 @@ function statusLines(state: CacheWarmingState, now: number) {
       `${state.next.step === 'ping' ? 'Next ping' : 'Compacts'} ${clock(Math.max(now, state.next.at))}${state.running ? ' (in a run)' : ''}`,
     )
   else if (state.warm.value || state.compact.value) lines.push(state.idle ?? 'Nothing due')
-  if (state.warmUntil !== undefined && state.warmUntil > now)
+  if (state.next?.step === 'ping' && state.warmUntil !== undefined && state.warmUntil > now)
     lines.push(`Warm until ${clock(state.warmUntil)}`)
   return lines
 }
@@ -182,6 +182,7 @@ function Popup({
       .then(refresh)
       .catch((error: unknown) => console.warn('Cache warming', error))
   const status = statusLines(state, now)
+  const warmCost = warmCostLine(state)
   const kept =
     state.kept &&
     `Kept warm so far: ${dollars(state.kept.cost)} (${state.kept.pings} ping${state.kept.pings === 1 ? '' : 's'})`
@@ -200,15 +201,13 @@ function Popup({
         onChange={(warm) => void set({ warm })}
         setting={state.warm}
       />
-      {state.warm.value && (
-        <>
-          <MinutesRow onSave={(minutes) => void set({ minutes })} setting={state.minutes} />
-          {warmCostLine(state) && (
-            <div className="px-2 pb-1 text-[11px] text-muted-foreground" data-warm-cost>
-              {warmCostLine(state)}
-            </div>
-          )}
-        </>
+      {(state.warm.value || state.compact.value) && (
+        <MinutesRow onSave={(minutes) => void set({ minutes })} setting={state.minutes} />
+      )}
+      {state.warm.value && warmCost && (
+        <div className="px-2 pb-1 text-[11px] text-muted-foreground" data-warm-cost>
+          {warmCost}
+        </div>
       )}
       <SwitchRow
         label="Compact before cold"

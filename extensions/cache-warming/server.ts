@@ -12,12 +12,13 @@ import {
 import type { ConversationId, Cursor, JsonObject, TaskId } from '@earendil-works/pi-durable'
 import {
   CACHE_WARMING_MAX_AGE_MS,
+  calculateCost,
   getCacheWarmingDelayMs,
   getCacheWarmingRequestOptions,
   getPromptCacheTtlMs,
   isCacheWarmingReplayable,
 } from '@earendil-works/pi-ai'
-import type { Api, AssistantMessage, Message, Model } from '@earendil-works/pi-ai'
+import type { Api, AssistantMessage, Message, Model, Usage } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import { discoverAgents } from '../../lib/agents.ts'
@@ -101,8 +102,22 @@ export function oneTokenPayload(api: Api, payload: unknown) {
   return { ...(payload as JsonObject), [field]: 1 }
 }
 
+const costOf = (model: Model<Api>, usage: Partial<Usage>) =>
+  calculateCost(model, {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    ...usage,
+  }).total
+
 export const rewriteCost = (model: Model<Api>, ttl: number, tokens: number) =>
-  (tokens * (ttl >= CLAUDE_CODE_TTL_MS ? model.cost.input * 2 : model.cost.cacheWrite)) / 1_000_000
+  costOf(model, {
+    cacheWrite: tokens,
+    ...(ttl >= CLAUDE_CODE_TTL_MS ? { cacheWrite1h: tokens } : {}),
+  })
 
 export function warmCost(
   model: Model<Api>,
@@ -111,7 +126,7 @@ export function warmCost(
   tokens: number,
 ) {
   const pings = Math.floor((minutes * 60_000) / delayBeforeRefresh)
-  return { pings, cost: (pings * tokens * model.cost.cacheRead) / 1_000_000 }
+  return { pings, cost: pings * costOf(model, { cacheRead: tokens }) }
 }
 
 export function cacheTiming(model: Model<Api>) {
@@ -239,7 +254,14 @@ async function commitPing(
   await host.harness().commit(async (tx) => {
     const doc = await tx.doc(State, id)
     doc.last = ping
-    if (answer) await host.need(ConversationsApi).accountResponse(tx, id, receipt(answer))
+    if (!answer) return
+    await host.need(ConversationsApi).accountResponse(tx, id, receipt(answer))
+    if (ping.error === undefined && doc.streak)
+      doc.streak = {
+        ...doc.streak,
+        cost: doc.streak.cost + answer.usage.cost.total,
+        pings: doc.streak.pings + 1,
+      }
   }, context)
 }
 
@@ -310,14 +332,6 @@ async function sendPing(host: ExtensionHost, runs: Runs, run: Run) {
     { at, provider: attempt.provider, model: attempt.model, read: cacheRead, write: cacheWrite },
     answer,
   )
-  await host.harness().commit(async (tx) => {
-    const doc = await tx.doc(State, run.id)
-    const streak =
-      doc.streak?.since === run.realRequestAt
-        ? doc.streak
-        : { since: run.realRequestAt, cost: 0, pings: 0 }
-    doc.streak = { ...streak, cost: streak.cost + answer.usage.cost.total, pings: streak.pings + 1 }
-  }, context)
   if (runs.active.get(run.id) !== run) return
   if (cacheRead + cacheWrite === 0) return stop(runs, run, 'Ping found no cache')
   run.lastCacheRequestAt = at
@@ -663,7 +677,7 @@ async function state(
       : {}),
   }
   if (!run) return { ...described, idle: runs.stopped.get(id) ?? 'Waiting for the next request' }
-  if (doc.streak?.since === run.realRequestAt)
+  if (doc.streak?.pings)
     Object.assign(described, { kept: { cost: doc.streak.cost, pings: doc.streak.pings } })
   const { situation, policy: effective } = await situationOf(
     host,
@@ -677,7 +691,9 @@ async function state(
     ...described,
     lastAt: run.lastCacheRequestAt,
     running: situation.runActive,
-    ...(effective.warm ? { warmUntil: warmWindowEnd(situation, effective) } : {}),
+    ...(effective.warm && Number.isFinite(warmWindowEnd(situation, effective))
+      ? { warmUntil: warmWindowEnd(situation, effective) }
+      : {}),
   }
   return typeof step === 'string'
     ? { ...live, next: { at: run.nextAt, step } }
@@ -728,12 +744,20 @@ export default function cacheWarming(host: ExtensionHost) {
           return undefined
         },
         afterResponse: async (message, api) => {
+          const warmed = await warmedKind(host, api.conversationId)
+          if (warmed)
+            await host.harness().commit(async (tx) => {
+              ;(await tx.doc(State, api.conversationId)).streak = {
+                since: message.timestamp,
+                cost: 0,
+                pings: 0,
+              }
+            }, context)
           if (message.stopReason === 'error' || message.stopReason === 'aborted') {
             runs.sent.delete(api.conversationId)
             return
           }
-          if (await warmedKind(host, api.conversationId))
-            await start(host, runs, api.conversationId, message, facet)
+          if (warmed) await start(host, runs, api.conversationId, message, facet)
           else runs.sent.delete(api.conversationId)
         },
       }),

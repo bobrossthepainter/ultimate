@@ -2,7 +2,7 @@ import type { Api, AssistantMessage, Model } from '@earendil-works/pi-ai'
 import { expect, it } from 'vitest'
 import { decide, lateRefreshCutoff, resolvePolicy } from '../due.ts'
 import type { Policy, Situation } from '../due.ts'
-import { cacheTiming, oneTokenPayload, recoverRun } from '../server.ts'
+import { cacheTiming, oneTokenPayload, recoverRun, rewriteCost, warmCost } from '../server.ts'
 
 const now = Date.parse('2026-11-16T12:00:00Z')
 const minutes = (count: number) => count * 60_000
@@ -210,4 +210,27 @@ it('resumes after a restart only from the newest outcome, keeping the real reque
   expect(recoverRun(answer(now - minutes(59), 9), { ...ping, read: 0 }, model)).toBe(undefined)
   expect(recoverRun(answer(now - minutes(2), 0), undefined, model)).toBe(undefined)
   expect(recoverRun({ kind: 'context-reset' }, undefined, model)).toBe(undefined)
+})
+
+it('prices a rewrite and the warm window with the tier the context falls in', () => {
+  const haiku = {
+    provider: 'claude-code',
+    id: 'claude-haiku-5-5',
+    api: 'claude-code',
+    cost: {
+      input: 0.2,
+      output: 1,
+      cacheRead: 0.01,
+      cacheWrite: 0.125,
+      tiers: [
+        { inputTokensAbove: 128_000, input: 1, output: 5, cacheRead: 0.05, cacheWrite: 0.625 },
+      ],
+    },
+  } as unknown as Model<Api>
+  expect(rewriteCost(haiku, minutes(60), 200_000)).toBeCloseTo(0.4)
+  expect(rewriteCost(haiku, minutes(5), 200_000)).toBeCloseTo(0.125)
+  expect(warmCost(haiku, minutes(4.5), 90, 200_000)).toEqual({
+    pings: 20,
+    cost: expect.closeTo(0.2),
+  })
 })
