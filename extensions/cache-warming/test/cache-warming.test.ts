@@ -1,8 +1,8 @@
-import type { Api, Model } from '@earendil-works/pi-ai'
+import type { Api, AssistantMessage, Model } from '@earendil-works/pi-ai'
 import { expect, it } from 'vitest'
 import { decide, lateRefreshCutoff, resolvePolicy } from '../due.ts'
 import type { Policy, Situation } from '../due.ts'
-import { cacheTiming, oneTokenPayload } from '../server.ts'
+import { cacheTiming, oneTokenPayload, recoverRun } from '../server.ts'
 
 const now = Date.parse('2026-11-16T12:00:00Z')
 const minutes = (count: number) => count * 60_000
@@ -181,4 +181,35 @@ it("takes a conversation's override over its agent definition, and the default w
     minutes: { value: 120, source: 'override' },
     compactTokens: { value: 100_000, source: 'agent' },
   })
+})
+
+it('resumes after a restart only from the newest outcome, keeping the real request apart from a ping', () => {
+  const model = { provider: 'claude-code', id: 'claude-opus-5-5' }
+  const answer = (at: number, cacheRead: number) => ({
+    kind: 'pi.assistant',
+    message: {
+      role: 'assistant',
+      provider: 'claude-code',
+      model: 'claude-opus-5-5',
+      stopReason: 'stop',
+      timestamp: at,
+      usage: { cacheRead, cacheWrite: 0 },
+    } as AssistantMessage,
+  })
+  const ping = {
+    at: now - minutes(5),
+    provider: 'claude-code',
+    model: 'claude-opus-5-5',
+    read: 9,
+    write: 0,
+  }
+  expect(recoverRun([answer(now - minutes(59), 9)], ping, model)).toEqual({
+    realRequestAt: now - minutes(59),
+    lastCacheRequestAt: now - minutes(5),
+  })
+  expect(recoverRun([answer(now - minutes(59), 9)], { ...ping, read: 0 }, model)).toBe(undefined)
+  expect(recoverRun([answer(now - minutes(2), 0)], undefined, model)).toBe(undefined)
+  expect(
+    recoverRun([{ kind: 'pi.compaction' }, answer(now - minutes(9), 9)], undefined, model),
+  ).toBe(undefined)
 })

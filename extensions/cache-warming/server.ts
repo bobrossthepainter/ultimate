@@ -33,7 +33,7 @@ import { ContextUsageDoc, ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import { PauseApi } from '../pause/api.ts'
 import { Profile, Standing } from '../subagents/api.ts'
-import { decide, policyOf, resolvePolicy } from './due.ts'
+import { decide, lateRefreshCutoff, policyOf, resolvePolicy } from './due.ts'
 import type { Situation } from './due.ts'
 import { CacheWarmingDoc, SetAction, StateAction } from './refs.ts'
 import type { CacheWarmingDocState, CacheWarmingState, Compaction, Ping } from './refs.ts'
@@ -406,64 +406,105 @@ async function start(
   schedule(host, runs, run)
 }
 
-async function lastCacheRenewalAt(
-  host: ExtensionHost,
-  id: ConversationId,
-  model: Model<Api>,
-  ttl: number,
+export function recoverRun(
+  newestFirst: { kind: string; message?: AssistantMessage }[],
+  last: Ping | undefined,
+  model: Pick<Model<Api>, 'provider' | 'id'>,
 ) {
-  const now = Date.now()
-  const doc = await readDoc(host, id)
-  const ping =
-    doc.last &&
-    !doc.last.error &&
-    doc.last.provider === model.provider &&
-    doc.last.model === model.id
-      ? doc.last.at
-      : 0
+  const latest = newestFirst.find(
+    (entry) =>
+      entry.kind === 'pi.compaction' ||
+      entry.kind === 'pi.reset' ||
+      entry.message?.role === 'assistant',
+  )
+  const answer = latest?.message
+  const renewed =
+    answer?.provider === model.provider &&
+    answer.model === model.id &&
+    answer.stopReason !== 'error' &&
+    answer.stopReason !== 'aborted' &&
+    answer.usage.cacheRead + answer.usage.cacheWrite > 0
+  if (!answer || !renewed) return undefined
+  if (!last || last.at < answer.timestamp)
+    return { realRequestAt: answer.timestamp, lastCacheRequestAt: answer.timestamp }
+  const pinged =
+    last.error === undefined &&
+    last.provider === model.provider &&
+    last.model === model.id &&
+    (last.read ?? 0) + (last.write ?? 0) > 0
+  return pinged ? { realRequestAt: answer.timestamp, lastCacheRequestAt: last.at } : undefined
+}
+
+async function newestEntries(host: ExtensionHost, id: ConversationId, ttl: number) {
   const conversation = (await host.harness().conversation(id, context))!
+  const found: { kind: string; message?: AssistantMessage }[] = []
   let cursor: Cursor | undefined
   do {
     const page = await conversation.entries({}, 100, cursor, context)
     for (const entry of page.items) {
       const message = entry.model?.[0]
-      if (message?.role !== 'assistant') continue
-      if (now - Math.max(message.timestamp, ping) >= ttl) return ping || undefined
-      const renewed =
-        message.provider === model.provider &&
-        message.model === model.id &&
-        message.stopReason !== 'error' &&
-        message.stopReason !== 'aborted' &&
-        message.usage.cacheRead + message.usage.cacheWrite > 0
-      if (renewed) return Math.max(message.timestamp, ping)
+      found.push({
+        kind: entry.kind,
+        ...(message?.role === 'assistant' ? { message } : {}),
+      })
+      if (entry.kind === 'pi.compaction' || entry.kind === 'pi.reset') return found
+      if (message?.role === 'assistant') return found
+      if (message && Date.now() - message.timestamp > ttl) return found
     }
     cursor = page.next
   } while (cursor)
-  return ping || undefined
+  return found
+}
+
+async function warmedConversations(host: ExtensionHost) {
+  const records = await host.harness().commit(async (tx) => {
+    const scanned = []
+    let cursor: Cursor | undefined
+    do {
+      const page = await tx.scanConversations({}, 256, cursor)
+      scanned.push(...page.items)
+      cursor = page.next
+    } while (cursor !== undefined)
+    return scanned
+  }, context)
+  const ids: ConversationId[] = []
+  for (const record of records) {
+    if (record.owner) continue
+    const label = (await host.harness().snapshot(host.metadata, record.id, context))?.label
+    if (label === 'coordinator' || label === 'agent') ids.push(record.id)
+  }
+  return ids
 }
 
 async function resume(host: ExtensionHost, runs: Runs, facet: { closed: boolean }) {
   const concluded = await host.need(ConversationsApi).concluded(context)
-  for (const summary of host.conversations()) {
-    if (!kindOf(summary) || concluded.has(summary.id) || runs.active.has(summary.id)) continue
-    const ref = (await agentOf(host, summary.id))?.model
+  for (const id of await warmedConversations(host)) {
+    if (concluded.has(id) || runs.active.has(id)) continue
+    const ref = (await agentOf(host, id))?.model
     if (ref?.provider !== 'claude-code') continue
     const model = host.modelRuntime.getModel(ref.provider, ref.modelId)
     const timing = model && cacheTiming(model)
     if (!model || !timing) continue
-    const at = await lastCacheRenewalAt(host, summary.id, model, timing.ttl)
-    if (at === undefined || Date.now() - at >= timing.ttl || facet.closed) continue
-    if (runs.active.has(summary.id)) continue
+    const recovered = recoverRun(
+      await newestEntries(host, id, timing.ttl),
+      (await readDoc(host, id)).last,
+      model,
+    )
+    if (!recovered || facet.closed || runs.active.has(id)) continue
+    const cutoff = lateRefreshCutoff({
+      ...timing,
+      lastCacheRequestAt: recovered.lastCacheRequestAt,
+    })
+    if (Date.now() > cutoff) continue
     const run: Run = {
-      id: summary.id,
+      id,
       model,
       ...timing,
-      realRequestAt: at,
-      lastCacheRequestAt: at,
-      nextAt: at + timing.delayBeforeRefresh,
+      ...recovered,
+      nextAt: recovered.lastCacheRequestAt + timing.delayBeforeRefresh,
       controller: new AbortController(),
     }
-    runs.active.set(summary.id, run)
+    runs.active.set(id, run)
     schedule(host, runs, run)
   }
 }
