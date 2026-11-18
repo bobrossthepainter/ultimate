@@ -169,7 +169,7 @@ function Popup({
         setting={state.warm}
       />
       <SwitchRow
-        label="Compact before it goes cold"
+        label="Compact before cold"
         onChange={(compact) => void set({ compact })}
         setting={state.compact}
       />
