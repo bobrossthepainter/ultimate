@@ -39,6 +39,7 @@ import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { createBuild } from './build.ts'
 import { execFile, spawn } from '../lib/spawn.ts'
+import { delegatedCore, isolateWork, workMemoryMax, workSpawn } from '../lib/cgroup.ts'
 import { applyHttpProxySettings, configureHttpDispatcher } from './http.ts'
 import type { Notice } from '../shared/protocol.ts'
 
@@ -140,7 +141,7 @@ export async function prepareHarness(options: HostOptions) {
   const extensionSources = new Map<string, Source>()
   const envs = new Map<string, ExecutionEnv>()
   let runner: Execution = {
-    env: (cwd) => new NodeExecutionEnv({ cwd, spawn }),
+    env: (cwd) => new NodeExecutionEnv({ cwd, spawn: workSpawn(spawn) }),
     run: (cwd, file, args, how) => execFile(file, args, { ...how, cwd }),
   }
   const processHelperExecutionEnv = ({ cwd = projectRoot }: EnvTarget) => {
@@ -219,6 +220,8 @@ export async function prepareHarness(options: HostOptions) {
     extensionSources,
     faux,
     async open(resume = true) {
+      const core = delegatedCore()
+      if (core) await isolateWork(core, () => workMemoryMax(projectRoot, userHome))
       const coreStartForStaleOwnerCheck = identify(process.pid)
       if (!coreStartForStaleOwnerCheck)
         throw new Error(`Cannot identify Ultimate core pid ${process.pid}`)

@@ -294,7 +294,7 @@ function createReporter() {
         const action = Object.values(state.actions).find(
           (candidate) => candidate.reporter === task.id,
         )!
-        action.status = 'unanswered'
+        action.status ??= 'unanswered'
         return { status: 'terminal', outcome: { status: 'aborted' } }
       }, context),
   })
@@ -1110,7 +1110,7 @@ export default function subagents(
                 const { model: ran } = await tx.doc(AgentDoc, child.id)
                 runs[String(child.id)] = {
                   ...(ran ? { model: ran.modelId } : {}),
-                  ...(args.agent ? {} : { adhoc: true as const }),
+                  ...(args.agent ? { agent: definition.name } : { adhoc: true as const }),
                 }
                 state.agents[String(child.id)] = {
                   conversationId,

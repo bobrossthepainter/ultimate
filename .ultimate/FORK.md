@@ -85,7 +85,8 @@ so branches adding divergences in parallel do not edit the same lines.
   through `exec.git`), `vite.config.ts` host-local allowlist (`extensions/sounds/command.ts`: upstream's narrator
   command plays on the machine running Ultimate, 2026-11-16 merge), `extensions/coding-tools/background.ts` (upstream's
   `bash` `background: true` starts through `exec.start`, so it runs where the working directory lives, 2026-11-17
-  merge)
+  merge), `server/harness.ts` default runner and `extensions/exec/exec.ts` local `env` (upstream's work cgroup:
+  local agent tool processes spawn through `workSpawn` so they land in the capped `work` cgroup, 2026-11-18 merge)
 - Why: Core-tier service running project and worktree commands where their directory lives; `exec.protocol` point for
   remote targets (pod-local proof). The give-back set includes 21b7d4cc: each protocol's `describe` and exec's
   `target` action, so the Info panel shows where a conversation's commands run. Extension actions' `ctx.exec` runs
@@ -251,7 +252,10 @@ so branches adding divergences in parallel do not edit the same lines.
   labels naming main), `extensions/lineage/server.ts` (`branchOf` and catch-up skip side chats), `lib/acting-as.ts`
   (`isSideChat`), `lib/side-chat-guard.ts` and `extensions/codemode/server.ts` (codemode's nested tools and globals
   get the side-chat guard), `extensions/sidebar/` (`sidebar.under-branch` point), `agents/coordinator.md` (one
-  paragraph)
+  paragraph). Since the 2026-11-18 merge it sits beside upstream's question side chats (`open {message}`, read-only
+  by `question`): branch copies keep `readOnly` and the full `lib/side-chat-guard.ts`, question copies keep upstream's
+  `readOnlyCall` list; `Stage`, `Cut` and the header name the main (`@ultimate`, `#id · title`, or the asker);
+  `isSideChat` in `lib/acting-as.ts` is now upstream's
 - Why: ask a running branch questions without disturbing it; a branch is usually mid-run, so the fork point moved
   from the last answered input to the newest finished tool round, for @ultimate too
 - Upstream: candidate

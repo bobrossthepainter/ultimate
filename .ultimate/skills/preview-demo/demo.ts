@@ -16,17 +16,20 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
+import { groupAlive, identify, stopGroup } from '../../../lib/process-group.ts'
+import { pace } from '../../../lib/timers.ts'
 
 const { values, positionals } = parseArgs({
   options: {
     port: { type: 'string', default: '4797' },
-    model: { type: 'string', default: 'openai-codex/gpt-6.1-sol' },
+    model: { type: 'string', default: 'openai-codex/gpt-6.2-sol' },
   },
   allowPositionals: true,
 })
 const fixture = join(import.meta.dirname, 'fixture')
 const port = Number(values.port)
 const state = join(tmpdir(), `ultimate-demo-${port}`)
+const pidFile = join(state, 'pid')
 
 /** Copies the fixture into `to` as a git repository with one commit. */
 function project(to: string) {
@@ -47,28 +50,16 @@ function project(to: string) {
   return to
 }
 
-const alive = (pid: number) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false // ESRCH: gone; EPERM cannot happen for our own children
-  }
-}
-
 /** Stops the demo server on this port by its recorded process group, never by pattern, and removes its files. */
 async function stop() {
-  const file = join(state, 'pid')
-  if (existsSync(file)) {
-    const pid = Number(readFileSync(file, 'utf8'))
+  if (existsSync(pidFile)) {
+    const pid = Number(readFileSync(pidFile, 'utf8'))
     const caddy = join(state, 'caddy-port')
     if (existsSync(caddy)) {
       const { unpublishRoute } = await import(resolve(process.cwd(), 'extensions/caddy/server.ts'))
       await unpublishRoute(process.env.HOME, pid, Number(readFileSync(caddy, 'utf8')))
     }
-    if (alive(pid)) process.kill(-pid, 'SIGTERM')
-    for (let i = 0; i < 40 && alive(pid); i++) await new Promise((done) => setTimeout(done, 250))
-    if (alive(pid)) process.kill(-pid, 'SIGKILL')
+    await stopGroup(pid, { pidFile, grace: 10_000 })
   }
   rmSync(state, { recursive: true, force: true })
 }
@@ -117,7 +108,8 @@ async function start() {
         ...(origin && { ULTIMATE_PROXY_ORIGIN: origin }),
       },
     })
-    writeFileSync(join(state, 'pid'), String(server.pid))
+    writeFileSync(`${pidFile}.start`, `${identify(server.pid!)}\n`)
+    writeFileSync(pidFile, `${server.pid}\n`)
     server.unref()
     return server
   }
@@ -145,10 +137,7 @@ async function start() {
       break
     } catch (error) {
       if (String(error).includes(' is served for ')) {
-        const pid = child.pid!
-        process.kill(-pid, 'SIGKILL')
-        for (let i = 0; i < 40 && alive(pid); i++)
-          await new Promise((done) => setTimeout(done, 250))
+        await stopGroup(child.pid!, { pidFile, grace: 0 })
         child = undefined
         continue
       }
@@ -158,7 +147,7 @@ async function start() {
   }
   child ??= launch()
   for (let i = 0; i < 240; i++) {
-    if (!alive(child.pid!)) break
+    if (!groupAlive(child.pid)) break
     const ok = await fetch(`http://127.0.0.1:${port}/api/models`).then(
       (r) => r.ok,
       () => false,
@@ -169,7 +158,7 @@ async function start() {
       )
       return
     }
-    await new Promise((done) => setTimeout(done, 250))
+    await pace(250)
   }
   throw new Error(`Demo did not become ready; see ${join(state, 'server.log')}`)
 }

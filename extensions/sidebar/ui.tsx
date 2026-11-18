@@ -20,4 +20,7 @@ export const UnderBranch = definePoint<ConversationId, ReactNode>('sidebar.under
 export const Unlisted = definePoint<ConversationId | undefined, ReadonlySet<number>>(
   'sidebar.unlisted',
 )
+/** Whether a preview started by this conversation is running, provided by `instance`. */
+export const PreviewUp = definePoint<ConversationId | undefined, boolean>('sidebar.preview-up')
+
 export { colourOf, GithubMark, ProjectSwatch, RepoLabel, stemOf } from './tile.tsx'

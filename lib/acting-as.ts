@@ -11,7 +11,10 @@ export async function actingAs(
   const sidechatByKind = host.doc('sidechat')
   if (!sidechatByKind) return id
   const side = await host.harness().snapshot(sidechatByKind, id, context)
-  return typeof side?.of === 'number' ? parseConversationId(side.of) : id
+  const readOnlyQuestionSideChatBorrowsNoIdentity = side?.question !== undefined
+  return typeof side?.of === 'number' && !readOnlyQuestionSideChatBorrowsNoIdentity
+    ? parseConversationId(side.of)
+    : id
 }
 
 export async function isSideChat(host: Pick<ExtensionHost, 'doc'>, tx: Tx, id: ConversationId) {

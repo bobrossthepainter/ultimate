@@ -6,9 +6,9 @@ import type { ConversationId, EntryId } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord/context'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
-import { RootsDoc } from './refs.ts'
+import { RootsDoc, TallyDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
-import type { BranchInput, leaveNote, rootOf, startBranch } from './server.ts'
+import type { BranchInput, leaveNote, rootOf, startBranch, TallyState } from './server.ts'
 
 /** The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. */
 export const Roots = defineDoc<{ roots: ConversationId[] }>({
@@ -19,6 +19,17 @@ export const Roots = defineDoc<{ roots: ConversationId[] }>({
   history: 'latest',
   fork: 'initial',
   initial: () => ({ roots: [ROOT_CONVERSATION_ID] }),
+})
+
+/** A root's tally bookkeeping (see `TallyDoc`); `since` is set once the root became a tally. */
+export const Tally = defineDoc<TallyState>({
+  kind: TallyDoc.kind,
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ abstracts: {}, tokens: 0 }),
 })
 
 /** `brief`: the branch's context starts at its project's memory brief instead of the full tally. */
@@ -70,6 +81,17 @@ export type LineageService = {
   ) => Promise<{ root: ConversationId; memories: Record<string, MemoryItem> } | undefined>
 }
 export { Branched, Rooted } from './refs.ts'
+
+export type MemorySearchService = {
+  /** The slugs of `memories` that `query` is about, best first, at most five; throws when no search is possible. */
+  search(
+    query: string,
+    memories: Record<string, MemoryItem>,
+    signal: AbortSignal,
+  ): Promise<string[]>
+}
+/** The extension point the `memory` tool's `query` searches through; recall provides it with classify. */
+export const MemorySearch = defineApi<MemorySearchService>()('lineage.memory-search')
 
 /** Trees, branches and notes; core, so `need` it. */
 export const LineageApi = defineApi<LineageService>()('lineage')

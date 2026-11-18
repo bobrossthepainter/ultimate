@@ -32,6 +32,7 @@ import { LineageApi, Roots } from '../../../lineage/api.ts'
 import {
   actions as conversationActions,
   concludeIn,
+  concludedIn,
   subject,
 } from '../../../conversations/server.ts'
 import { ConversationsApi } from '../../../conversations/api.ts'
@@ -41,10 +42,10 @@ import { setStanding } from '../../../conversations/server.ts'
 import self from '../../../self/server.ts'
 import messagesExtension from '../../../messages/server.ts'
 import { Messages, MessagesApi } from '../../../messages/api.ts'
-import { Started } from '../../../messages/addresses.ts'
+import { Serving, Started } from '../../../messages/addresses.ts'
 import promptExtension, { order as promptOrder } from '../../../prompt/server.ts'
 import subagents from '../../../subagents/server.ts'
-import { Subagents } from '../../../subagents/api.ts'
+import { Standing, Subagents } from '../../../subagents/api.ts'
 import { localExec, seedTally, temp, until } from '../../../../test/helpers.ts'
 
 /** The part of the conversations service a test stands in for; standing a lander turns its summaries off and marks it standing. */
@@ -785,6 +786,11 @@ it.concurrent('emits one landed event and notes the root once, across a replayed
     starter: async () => undefined,
     working: async () => false,
     conclude: async () => {},
+    reserveLanding: async () => {},
+    retireLanding: async () => {},
+    submitLanding: async (tx, to, input) => {
+      await to.submit(tx, input)
+    },
     release: async () => [],
   })
   const report = task.definition.phases.report
@@ -1049,7 +1055,8 @@ async function concluding() {
     conversations({
       concluded: async () => new Set<ConversationId>(),
       subject: async () => ({}),
-      concludeIn: (tx, ids) => concludeIn(f.host, tx, ids),
+      concludeIn: (tx, ids, by) => concludeIn(f.host, tx, ids, by),
+      concludedIn,
     }),
   )
   f.prepared.registry.install(lineage(f.host))
@@ -1064,6 +1071,24 @@ async function concluding() {
 
 it.concurrent('notes a clean landing without a branch run, concludes and releases it, and wakes its starter once across replay', async () => {
   const { f, id } = await concluding()
+  const asker = await f.opened.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  const request = await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ROOT_CONVERSATION_ID
+    const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
+    const { owners } = await tx.doc(Serving, ROOT_CONVERSATION_ID)
+    const message = log.next++
+    const assignedBy = (await tx.appendEntry(ROOT_CONVERSATION_ID, { kind: 'test.request' })).id
+    owners[message] = {
+      request: { message, from: asker.id },
+      owner: { kind: 'branch', id },
+      assignedBy,
+      pending: [],
+    }
+    return message
+  }, context)
   const workspace = (await f.service.get(id, context))!
   const task = f.service.Lander
   const report = task.definition.phases.report
@@ -1121,7 +1146,11 @@ it.concurrent('notes a clean landing without a branch run, concludes and release
       context,
     )
     expect(requests.branch).toMatchObject({ type: 'write' })
-    expect(requests.starter).toMatchObject({ type: 'input' })
+    expect(requests.starter).toMatchObject({
+      type: 'input',
+      status: 'done',
+      answer: expect.any(Number),
+    })
     const branch = (await f.opened.harness.conversation(id, context))!
     const entries = (await branch.context(context)).entries
     expect(entries.filter((entry) => entry.kind === 'pi.assistant')).toHaveLength(0)
@@ -1130,11 +1159,26 @@ it.concurrent('notes a clean landing without a branch run, concludes and release
       (entry) => entry.kind === 'workspaces.lander-report',
     )
     expect(reports).toHaveLength(1)
-    expect(JSON.stringify(reports[0].model)).toContain(`#${id} is concluded.`)
+    const sha = (reports[0].data as { outcome: { sha: string } }).outcome.sha.slice(0, 7)
+    expect(reports[0].model?.[0]?.content).toMatch(
+      new RegExp(`^#${id} .*landed as ${sha} on main\nDiverged: None\n#${id} is concluded[.]$`),
+    )
+    expect(
+      JSON.stringify(entries.find((e) => e.kind === 'workspaces.lander-report')!.model),
+    ).toContain('Commits:')
   }
   await checkReports()
+  const results = async () =>
+    (await messageLog(f)).filter((m) => m.to === asker.id && m.re === request)
+  await until(async () => (await results()).length === 1)
+  expect(await results()).toEqual([
+    expect.objectContaining({
+      text: expect.stringContaining(`Result of #${id}, which worked on your message ${request}`),
+    }),
+  ])
   await f.reopen()
   await checkReports()
+  expect(await results()).toHaveLength(1)
 })
 it.concurrent('keeps a landed branch and its checkout while a reply is under way and tells its starter', async () => {
   const { f, id } = await concluding()
@@ -1284,7 +1328,7 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
   expect(metadata).toEqual({ title: '@lander', label: 'lander' })
   // The lander the submission created is standing at once: concluding it is refused.
   await expect(
-    f.opened.harness.commit((tx) => concludeIn(f.host, tx, [id]), context),
+    f.opened.harness.commit((tx) => concludeIn(f.host, tx, [id], 'user'), context),
   ).rejects.toThrow(`#${id} is a standing agent`)
   expect(cwd).toMatch(/\/lander\/[0-9a-f]{12}$/)
   expect(kinds.every((kind) => kind === 'ultimate.lander')).toBe(true)
@@ -1645,7 +1689,7 @@ it.concurrent('reports a local landing whose push retry conflicts as landed loca
   const [report] = await submitted(f, id)
   const landed = await git(f.projectRoot, 'rev-parse', 'main')
   expect(report).toContain(`landed locally as ${landed.slice(0, 7)} on main.`)
-  expect(report).toContain('Push failed: origin/main conflicts with local main in:')
+  expect(report).toContain('Push failed: origin/main conflicts with local main:')
   expect(report).not.toContain('was not landed')
   expect(
     await git(f.projectRoot, 'merge-base', '--is-ancestor', tip, landed).then(() => true),

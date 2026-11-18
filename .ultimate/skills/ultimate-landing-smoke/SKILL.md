@@ -1,19 +1,20 @@
 ---
 name: ultimate-landing-smoke
-description: 'Check the running Ultimate host after a landing card arrives, before reporting the landing as live: the clone is on the landed sha and clean, a restart happens only when the landing needs one and after warning preview owners, the host is healthy afterwards, and one read proves the landed behaviour. Use after every landing on this repository, by @ultimate or any agent reporting one.'
+description: 'Check the running Ultimate host after a landing card arrives, before reporting the landing as live: the clone is on the landed sha and clean, the host restarted when the card says `needs restart` and is healthy afterwards, and one read proves the landed behaviour. Use after every landing on this repository, by @ultimate or any agent reporting one.'
 ---
 
 # Smoke-check a landing
 
-The landing card says what was merged; it does not prove the host runs it. Read it back, then report only what you
+The landing card is one line, `#<id> <title> landed as <sha> on main · pushed · needs restart`, then its divergence. It
+says what was merged; it does not prove the host runs it. Read it back, then report only what you
 read back: the sha, the errors, the models, the proof.
 
 ## Steps
 
 1. **Clone:** the host clone is on the card's sha and clean (`git log --oneline -1`, `git status --short`).
-2. **Restart only when needed:** the landing changed `server/`, `shared/`, `patches/` or `pnpm-lock.yaml`
-   (`git diff --stat <before>..<sha> -- server shared patches pnpm-lock.yaml`). `web/`, `extensions/`, `agents/`,
-   skills and docs reload on their own. Before restarting, list running previews and busy branches: a restart stops
+2. **Restart:** only a card with `needs restart` needs one, and @ultimate calls the `restart` tool for it as its
+   prompt says; everything else reloads on its own. Another agent reports a missing restart rather than restarting.
+   Before restarting, list running previews and busy branches: a restart stops
    every preview. Tell each preview's owner (`note` its `conversationId`) before calling `restart`.
 3. **Backup, when Pi Durable or Chord changed version** (`git diff <before>..<sha> -- package.json | rg
    'pi-durable|chord'`): before the restart migrates storage, copy the project's database and check the copy. Read

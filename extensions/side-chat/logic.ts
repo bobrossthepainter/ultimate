@@ -1,4 +1,4 @@
-import type { SideChat, SideChatIndex } from './refs.ts'
+import type { QuestionSide, SideChat, SideChatIndex } from './refs.ts'
 
 export interface TabKey {
   key: string
@@ -27,6 +27,12 @@ export const openSides = (index: SideChatIndex | undefined) =>
 
 export const frontSide = (front: number | null, index: SideChatIndex | undefined) =>
   openSides(index).find((side) => side.id === front)
+
+export const openQuestionSide = (sides: readonly QuestionSide[] | undefined, message: number) =>
+  sides?.find((side) => side.question === message && side.ended === undefined)
+
+export const contextSize = (tokens: number) =>
+  tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens)
 
 export type Ending = { ending?: 'discard' | 'inject'; error?: string }
 

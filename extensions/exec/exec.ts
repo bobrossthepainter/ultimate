@@ -1,5 +1,6 @@
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
+import { workSpawn } from '../../lib/cgroup.ts'
 import { gitWith } from '../../lib/git.ts'
 import { spawnGroup } from '../../lib/process-group.ts'
 import { execFile, spawn } from '../../lib/spawn.ts'
@@ -19,7 +20,7 @@ const under = (cwd: string, root: string) =>
 export const localProtocol: ExecProtocol = {
   run: (_target, cwd, file, args, options) => execFile(file, args, { ...options, cwd }),
   start: (_target, cwd, file, args, options = {}) => spawnGroup(file, args, { ...options, cwd }),
-  env: (_target, cwd): ExecutionEnv => new NodeExecutionEnv({ cwd, spawn }),
+  env: (_target, cwd): ExecutionEnv => new NodeExecutionEnv({ cwd, spawn: workSpawn(spawn) }),
   describe: () => 'local Node',
 }
 

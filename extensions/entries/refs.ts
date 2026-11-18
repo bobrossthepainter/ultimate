@@ -31,6 +31,7 @@ export type NoteData =
       at?: number
       divergence?: string
       sha: string
+      submission?: string
       base?: string
       target: string
       title?: string
@@ -92,10 +93,8 @@ export type AutomationInput = {
   id: string
   name: string
   text: string
-  serves?: Serves
   /** Branches whose reply or report the run that created the automation read: its first fire's answer goes to them. */
   branches?: ConversationId[]
-  at?: number
 }
 
 /** Fired trigger delivered to a subscriber. */
