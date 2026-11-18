@@ -69,6 +69,8 @@ export type CacheWarmingState = {
   inputAt?: number
   /** The latest request on the cache, real or a ping (ms); the cache is warm for `ttl` after it. */
   lastAt?: number
+  /** When its warm window ends (ms): no ping is sent after it. */
+  warmUntil?: number
   /** It has a run: it is kept warm at least an hour after its request. */
   running?: boolean
   /** Context size now, in tokens. */

@@ -32,7 +32,7 @@ import { ContextUsageDoc, ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import { PauseApi } from '../pause/api.ts'
 import { Profile, Standing } from '../subagents/api.ts'
-import { decide, lateRefreshCutoff, policyOf, resolvePolicy } from './due.ts'
+import { decide, lateRefreshCutoff, policyOf, resolvePolicy, warmWindowEnd } from './due.ts'
 import type { Situation } from './due.ts'
 import { CacheWarmingDoc, SetAction, StateAction } from './refs.ts'
 import type { CacheWarmingDocState, CacheWarmingState, Compaction, Ping } from './refs.ts'
@@ -677,6 +677,7 @@ async function state(
     ...described,
     lastAt: run.lastCacheRequestAt,
     running: situation.runActive,
+    ...(effective.warm ? { warmUntil: warmWindowEnd(situation, effective) } : {}),
   }
   return typeof step === 'string'
     ? { ...live, next: { at: run.nextAt, step } }

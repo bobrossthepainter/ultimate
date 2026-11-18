@@ -37,29 +37,38 @@ const failed = (state: CacheWarmingState) =>
 const isWarm = (state: CacheWarmingState, now: number) =>
   state.lastAt !== undefined && state.ttl !== undefined && state.lastAt + state.ttl > now
 
-function cacheLine(state: CacheWarmingState, now: number) {
-  if (state.lastAt === undefined || state.ttl === undefined)
-    return `No warm cache · ${tokens(state.tokens)} context`
-  const until = state.lastAt + state.ttl
-  return `${until > now ? `Warm until ${clock(until)}` : `Cold since ${clock(until)}`} · ${tokens(state.tokens)} context`
-}
-
-function nextLine(state: CacheWarmingState, now: number) {
-  if (!state.warm.value && !state.compact.value) return 'Off'
-  if (state.next)
-    return `${state.next.step === 'ping' ? 'Next ping' : 'Compacts at'} ${clock(Math.max(now, state.next.at))}${state.running ? ' · in a run' : ''}`
-  return state.idle ?? 'Nothing due'
-}
-
 const dollars = (amount: number) => `$${amount < 1 ? amount.toFixed(3) : amount.toFixed(2)}`
 
-function costLine(state: CacheWarmingState, now: number) {
-  const kept =
-    state.kept &&
-    `Kept warm for ${dollars(state.kept.cost)} (${state.kept.pings} ping${state.kept.pings === 1 ? '' : 's'})`
-  if (state.rewriteCost === undefined) return kept
-  const rewrite = `${isWarm(state, now) ? 'a rewrite would cost' : 'next turn rewrites for'} ≈ ${dollars(state.rewriteCost)}`
-  return kept ? `${kept} · ${rewrite}` : rewrite.charAt(0).toUpperCase() + rewrite.slice(1)
+function lifetimeLines(state: CacheWarmingState) {
+  if (state.ttl === undefined) return ['Cache lifetime unknown: not warmed']
+  return [
+    `Cache lasts ${duration(state.ttl)} · ${tokens(state.tokens)} context`,
+    ...(state.rewriteCost === undefined
+      ? []
+      : [`Writing it again costs ≈ ${dollars(state.rewriteCost)}`]),
+  ]
+}
+
+function warmCostLine(state: CacheWarmingState) {
+  if (!state.warmCost) return undefined
+  const { pings, cost } = state.warmCost
+  return `≈ ${dollars(cost)} for ${pings} ping${pings === 1 ? '' : 's'}, one every ${duration(state.pingAfter ?? 0)}`
+}
+
+function statusLines(state: CacheWarmingState, now: number) {
+  const lines: string[] = []
+  if (state.lastAt !== undefined && state.ttl !== undefined) {
+    const expires = state.lastAt + state.ttl
+    lines.push(expires > now ? `Runs out ${clock(expires)}` : `Cold since ${clock(expires)}`)
+  }
+  if (state.next)
+    lines.push(
+      `${state.next.step === 'ping' ? 'Next ping' : 'Compacts'} ${clock(Math.max(now, state.next.at))}${state.running ? ' (in a run)' : ''}`,
+    )
+  else if (state.warm.value || state.compact.value) lines.push(state.idle ?? 'Nothing due')
+  if (state.warmUntil !== undefined && state.warmUntil > now)
+    lines.push(`Warm until ${clock(state.warmUntil)}`)
+  return lines
 }
 
 function Tag({ source }: { source: Source }) {
@@ -171,28 +180,45 @@ function Popup({
       .action(SetAction, { id, ...change })
       .then(refresh)
       .catch((error: unknown) => console.warn('Cache warming', error))
+  const status = statusLines(state, now)
+  const kept =
+    state.kept &&
+    `Kept warm so far: ${dollars(state.kept.cost)} (${state.kept.pings} ping${state.kept.pings === 1 ? '' : 's'})`
   return (
     <PopoverContent align="end" className="w-80 p-1 font-mono" side="top">
+      <div
+        className="px-2 pt-1.5 pb-1 text-[11px] text-muted-foreground"
+        title={state.provider ? `${state.provider}/${state.model}` : undefined}
+      >
+        {lifetimeLines(state).map((line) => (
+          <div key={line}>{line}</div>
+        ))}
+      </div>
       <SwitchRow
         label={`Keep ${name} warm`}
         onChange={(warm) => void set({ warm })}
         setting={state.warm}
       />
+      {state.warm.value && (
+        <>
+          <MinutesRow onSave={(minutes) => void set({ minutes })} setting={state.minutes} />
+          {warmCostLine(state) && (
+            <div className="px-2 pb-1 text-[11px] text-muted-foreground" data-warm-cost>
+              {warmCostLine(state)}
+            </div>
+          )}
+        </>
+      )}
       <SwitchRow
         label="Compact before cold"
         onChange={(compact) => void set({ compact })}
         setting={state.compact}
       />
-      <MinutesRow onSave={(minutes) => void set({ minutes })} setting={state.minutes} />
-      {state.warmCost && (
-        <div className="px-2 pb-1 text-[11px] text-muted-foreground" data-warm-cost>
-          ≈ {dollars(state.warmCost.cost)} for {state.warmCost.pings} ping
-          {state.warmCost.pings === 1 ? '' : 's'} at {tokens(state.tokens)} context
-        </div>
-      )}
       <div className="space-y-1 border-t border-border/70 px-2 pt-1.5 pb-1.5 text-[11px] text-muted-foreground">
-        <div className="text-foreground/80">{cacheLine(state, now)}</div>
-        <div>{nextLine(state, now)}</div>
+        <div className="text-foreground/80">
+          {status.length ? status.map((line) => <div key={line}>{line}</div>) : 'Off'}
+        </div>
+        {kept && <div>{kept}</div>}
         {state.last && (
           <div className={cn(failed(state) && 'text-red-500')}>
             Last ping {formatAgo(state.last.at)}
@@ -211,14 +237,6 @@ function Popup({
                 : ''}
           </div>
         )}
-      </div>
-      <div className="space-y-1 border-t border-border/70 px-2 pt-1.5 pb-1.5 text-[11px] text-muted-foreground">
-        <div title={state.provider ? `${state.provider}/${state.model}` : undefined}>
-          {state.ttl === undefined
-            ? 'Cache lifetime unknown'
-            : `Cache ${duration(state.ttl)}, ping at ${duration(state.pingAfter ?? 0)}`}
-        </div>
-        {costLine(state, now) && <div>{costLine(state, now)}</div>}
         {state.agent && (
           <button
             className="text-foreground/80 underline-offset-2 hover:underline"
