@@ -240,7 +240,7 @@ function Chip({ id, name, label }: { id: ConversationId; name: string; label: st
   const warm = isWarm(state, now)
   const red = failed(state) || state.compaction?.error !== undefined
   return (
-    <Popover>
+    <Popover onOpenChange={(open) => open && void refetch()}>
       <PopoverTrigger asChild>
         <button
           aria-label={`${name}'s prompt cache`}
