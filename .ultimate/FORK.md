@@ -23,7 +23,8 @@ so branches adding divergences in parallel do not edit the same lines.
 ### voice-chatgpt extension
 
 - Touches: `extensions/voice-chatgpt/`, `extensions/voice/` (transcriber extension point), `shared/extension-api.ts`,
-  voice tests
+  voice tests. Since the 2026-11-17 merge, `extensions/voice/server.ts` reads the key with upstream's shared
+  `openaiSecretOrNonOAuthKey` from `lib/openai.ts`; the fork keeps only its `VoiceHost` type with `want`
 - Why: Dictation through the ChatGPT (openai-codex) subscription
 - Upstream: candidate
 
@@ -82,7 +83,9 @@ so branches adding divergences in parallel do not edit the same lines.
   `server/system.ts` (`execution.kind` removed), `extensions/coding-tools/server.ts` (`prepareBash` takes the routed
   `git` for upstream's worktree-scoped hooks), `extensions/review/server.ts` (upstream's branch fallback in `target`
   through `exec.git`), `vite.config.ts` host-local allowlist (`extensions/sounds/command.ts`: upstream's narrator
-  command plays on the machine running Ultimate, 2026-11-16 merge)
+  command plays on the machine running Ultimate, 2026-11-16 merge), `extensions/coding-tools/background.ts` (upstream's
+  `bash` `background: true` starts through `exec.start`, so it runs where the working directory lives, 2026-11-17
+  merge)
 - Why: Core-tier service running project and worktree commands where their directory lives; `exec.protocol` point for
   remote targets (pod-local proof). The give-back set includes 21b7d4cc: each protocol's `describe` and exec's
   `target` action, so the Info panel shows where a conversation's commands run. Extension actions' `ctx.exec` runs
@@ -189,7 +192,8 @@ so branches adding divergences in parallel do not edit the same lines.
   8 h after the branch's last input of any kind) and compaction before the cache runs cold, also during waits on
   subagents; with both on it compacts when the warm window ends (#27794). `due.ts` and the ping are adapted copies of
   `extensions/keep-warm/` (2a6726f), since lint lets server code reach another extension only through its `api.ts`:
-  re-sync them when upstream changes keep-warm's ping. Its `beforeCompact` hook (`order = -1`, before lineage) asks
+  re-sync them when upstream changes keep-warm's ping (last synced in the 2026-11-17 merge: the ping aborts on release
+  under the `branch-cache.ping` resource key). Its `beforeCompact` hook (`order = -1`, before lineage) asks
   for the summary on the branch's own cached context instead of lineage's uncached source text
 - Upstream: candidate
 
@@ -231,7 +235,8 @@ so branches adding divergences in parallel do not edit the same lines.
 
 - Touches: `extensions/instance/` (`server.ts` start/stop/list publish through an optional `want(CaddyApi)`, `web.tsx`
   card, links and switcher, `refs.ts` `caddy`, README), `extensions/caddy/` (`publishRoute`/`unpublishRoute`,
-  README), `server/main.ts` (an unsupervised server honours `ULTIMATE_PROXY_ORIGIN`),
+  README), `server/main.ts` (an unsupervised server honours `ULTIMATE_PROXY_ORIGIN`, beside upstream's SIGINT/SIGTERM
+  handlers, which moved into that branch in the 2026-11-17 merge),
   `.ultimate/skills/preview-demo/`, `skills/ui-preview-round/SKILL.md`, `extensions/instance/test/e2e/instance.test.ts`.
   Since the 2026-11-16 merge, start writes upstream's crash pid file before publishing to Caddy, and stop unpublishes
   after the pid-file-aware `stopGroup`

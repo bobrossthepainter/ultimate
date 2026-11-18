@@ -1,13 +1,15 @@
 import { defineExtension } from '@earendil-works/pi-durable'
-import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { openaiError } from '../../lib/openai.ts'
-import { readSecret } from '../../lib/secrets.ts'
+import type { ExtensionHost } from '../../server/extensions.ts'
+import {
+  OPENAI_SECRET as SECRET,
+  openaiSecretOrNonOAuthKey,
+  openaiError,
+} from '../../lib/openai.ts'
 import { Transcriber } from './api.ts'
 import type { TranscriberService } from './api.ts'
 import { StatusAction, TranscribeAction } from './refs.ts'
 
-const SECRET = 'OPENAI_API_KEY'
 const NO_KEY = `Voice needs an OpenAI API key: add ${SECRET} in ⌘K → Secrets`
 const TIMEOUT_MS = 65_000
 
@@ -24,18 +26,6 @@ export const secrets = [
 ]
 
 type VoiceHost = Pick<ExtensionHost, 'userHome' | 'modelRuntime' | 'want'>
-
-async function openaiSecretOrNonOAuthKey(
-  host: VoiceHost,
-  signal?: AbortSignal,
-): Promise<string | undefined> {
-  const secret = await readSecret(host.userHome, SECRET)
-  if (secret) return secret
-  const runtime = host.modelRuntime
-  if (!runtime.getProviderAuthStatus('openai').configured || runtime.isUsingOAuth('openai'))
-    return undefined
-  return (await runtime.getAuth('openai', { signal }))?.auth.apiKey
-}
 
 export async function openaiTranscribe(
   key: string,

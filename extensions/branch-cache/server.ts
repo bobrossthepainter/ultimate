@@ -229,11 +229,13 @@ async function sendPing(host: ExtensionHost, runs: Runs, run: Run) {
   try {
     answer = await pingRequest(host, run)
   } catch (error) {
+    if (run.controller.signal.aborted) return
     const message = error instanceof Error ? error.message : String(error)
     await commitPing(host, run.id, { ...attempt, error: message })
     stop(runs, run, `Ping failed: ${message}`)
     return
   }
+  if (run.controller.signal.aborted) return
   if (answer.stopReason === 'error' || answer.stopReason === 'aborted') {
     const message = answer.errorMessage ?? answer.stopReason
     await commitPing(host, run.id, { ...attempt, error: message }, answer)
@@ -490,10 +492,14 @@ export default function branchCache(host: ExtensionHost) {
   host.want(PauseApi)
   const runs = runsOf(host)
   const facet = { closed: false }
+  const stopAll = (reason: string) => {
+    for (const run of runs.active.values()) stop(runs, run, reason)
+    runs.sent.clear()
+  }
+  host.onRelease(async () => stopAll('Ultimate restarted'))
   host.onClose(async () => {
     facet.closed = true
-    for (const run of runs.active.values()) stop(runs, run, 'Branch cache reloaded')
-    runs.sent.clear()
+    stopAll('Branch cache reloaded')
   })
   return defineExtension({
     name: 'branch-cache',

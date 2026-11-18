@@ -287,7 +287,10 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       const stopped = new Promise<void>((resolve, reject) =>
         http.close((error) => (error ? reject(error) : resolve())),
       )
+      if (opened) await extensions.released()
       await api?.close()
+      await opened?.close()
+      opened = undefined
       await extensions.close()
       await web?.close()
       await system?.close()
@@ -295,7 +298,6 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       reportCore({ type: 'web', state: 'stopped' })
       http.closeAllConnections()
       await stopped
-      await opened?.close()
     },
   }
 }
@@ -332,9 +334,16 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
       ),
     )
   }
-  process.on('SIGINT', shutdown)
-  process.on('SIGTERM', shutdown)
   if (process.env.ULTIMATE_SUPERVISED === '1' && process.send) {
+    const refuse = (signal: NodeJS.Signals) =>
+      reportCore({
+        type: 'log',
+        level: 'warn',
+        source: 'core',
+        text: `Ignored ${signal} sent to core pid ${process.pid}: the supervisor stops its core itself. Either Ultimate is stopping through its service (the signal went to the whole group), or a process outside it killed by port or name`,
+      })
+    process.on('SIGINT', refuse)
+    process.on('SIGTERM', refuse)
     try {
       server = await prepareServer({
         port: 0,
@@ -374,6 +383,8 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
       process.exit(1)
     }
   } else {
+    process.on('SIGINT', shutdown)
+    process.on('SIGTERM', shutdown)
     server = await prepareServer({ proxyOrigin: process.env.ULTIMATE_PROXY_ORIGIN })
     await server.go()
     console.log(`Ultimate: ${server.url}`)
