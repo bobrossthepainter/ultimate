@@ -32,7 +32,7 @@ export type CacheWarmingDocState = {
   /** The latest ping attempt, failed or not. */
   last?: Ping
   pings?: number
-  /** Pings since the real answer at `since` (ms), and what they cost in dollars; every real answer starts it again. */
+  /** Pings that warmed the real request at `since` (ms), and what they cost in dollars; a new warming run starts it again. */
   streak?: { since: number; cost: number; pings: number }
   compaction?: Compaction
 }
@@ -64,12 +64,12 @@ export type CacheWarmingState = {
   rewriteCost?: number
   /** What keeping the current context warm for `minutes` would cost: one cache read of it per ping, in dollars. */
   warmCost?: { pings: number; cost: number }
-  /** What the pings since the last real answer cost, in dollars, while a warming run is live. */
+  /** What the live warming run's pings have cost so far, in dollars. */
   kept?: { cost: number; pings: number }
   inputAt?: number
   /** The latest request on the cache, real or a ping (ms); the cache is warm for `ttl` after it. */
   lastAt?: number
-  /** When its warm window ends (ms): no ping is sent after it. */
+  /** When its warm window ends (ms), while the next step is a ping: no ping is sent after it. */
   warmUntil?: number
   /** It has a run: it is kept warm at least an hour after its request. */
   running?: boolean

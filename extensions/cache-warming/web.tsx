@@ -18,6 +18,7 @@ import {
   useNow,
 } from '@/sdk'
 import { StandingDoc } from '../subagents/ui.tsx'
+import { duration } from './duration.ts'
 import { CacheWarmingDoc, SetAction, StateAction } from './refs.ts'
 import type { CacheWarmingState, Setting, Source } from './refs.ts'
 
@@ -25,11 +26,6 @@ const tokens = (count = 0) => (count >= 1000 ? `${Math.round(count / 1000)}k` : 
 
 const clock = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-
-const duration = (ms: number) => {
-  const minutes = Math.round(ms / 30_000) / 2
-  return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`
-}
 
 const failed = (state: CacheWarmingState) =>
   state.last?.error !== undefined && (state.lastAt === undefined || state.last.at >= state.lastAt)
@@ -66,7 +62,7 @@ function statusLines(state: CacheWarmingState, now: number) {
       `${state.next.step === 'ping' ? 'Next ping' : 'Compacts'} ${clock(Math.max(now, state.next.at))}${state.running ? ' (in a run)' : ''}`,
     )
   else if (state.warm.value || state.compact.value) lines.push(state.idle ?? 'Nothing due')
-  if (state.next?.step === 'ping' && state.warmUntil !== undefined && state.warmUntil > now)
+  if (state.warmUntil !== undefined && state.warmUntil > now)
     lines.push(`Warm until ${clock(state.warmUntil)}`)
   return lines
 }

@@ -1,5 +1,6 @@
 import { CACHE_WARMING_MAX_AGE_MS } from '@earendil-works/pi-ai'
 import type { CachePolicy } from '../subagents/refs.ts'
+import { duration } from './duration.ts'
 import type { CacheWarmingDocState, Setting } from './refs.ts'
 
 export type Step = 'ping' | 'compact'
@@ -73,11 +74,6 @@ export const warmWindowEnd = (
   return situation.runActive
     ? Math.max(idle, situation.realRequestAt + CACHE_WARMING_MAX_AGE_MS)
     : idle
-}
-
-export const duration = (ms: number) => {
-  const minutes = Math.round(ms / 60_000)
-  return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`
 }
 
 export function decide(situation: Situation, policy: Policy): Decision {

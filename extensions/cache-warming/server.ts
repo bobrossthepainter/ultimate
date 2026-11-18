@@ -248,21 +248,21 @@ function receipt(answer: AssistantMessage): ResponseReceipt {
 
 async function commitPing(
   host: ExtensionHost,
-  id: ConversationId,
+  run: Pick<Run, 'id' | 'realRequestAt'>,
   ping: Ping,
   answer?: AssistantMessage,
 ) {
   await host.harness().commit(async (tx) => {
-    const doc = await tx.doc(State, id)
+    const doc = await tx.doc(State, run.id)
     doc.last = ping
     if (!answer) return
-    await host.need(ConversationsApi).accountResponse(tx, id, receipt(answer))
-    if (ping.error === undefined && doc.streak)
-      doc.streak = {
-        ...doc.streak,
-        cost: doc.streak.cost + answer.usage.cost.total,
-        pings: doc.streak.pings + 1,
-      }
+    await host.need(ConversationsApi).accountResponse(tx, run.id, receipt(answer))
+    if (ping.error !== undefined) return
+    const streak =
+      doc.streak?.since === run.realRequestAt
+        ? doc.streak
+        : { since: run.realRequestAt, cost: 0, pings: 0 }
+    doc.streak = { ...streak, cost: streak.cost + answer.usage.cost.total, pings: streak.pings + 1 }
   }, context)
 }
 
@@ -315,21 +315,21 @@ async function sendPing(host: ExtensionHost, runs: Runs, run: Run) {
   } catch (error) {
     if (run.controller.signal.aborted) return
     const message = error instanceof Error ? error.message : String(error)
-    await commitPing(host, run.id, { ...attempt, error: message })
+    await commitPing(host, run, { ...attempt, error: message })
     stop(runs, run, `Ping failed: ${message}`)
     return
   }
   if (run.controller.signal.aborted) return
   if (answer.stopReason === 'error' || answer.stopReason === 'aborted') {
     const message = answer.errorMessage ?? answer.stopReason
-    await commitPing(host, run.id, { ...attempt, error: message }, answer)
+    await commitPing(host, run, { ...attempt, error: message }, answer)
     stop(runs, run, `Ping failed: ${message}`)
     return
   }
   const { cacheRead, cacheWrite } = answer.usage
   await commitPing(
     host,
-    run.id,
+    run,
     { at, provider: attempt.provider, model: attempt.model, read: cacheRead, write: cacheWrite },
     answer,
   )
@@ -678,7 +678,7 @@ async function state(
       : {}),
   }
   if (!run) return { ...described, idle: runs.stopped.get(id) ?? 'Waiting for the next request' }
-  if (doc.streak?.pings)
+  if (doc.streak?.since === run.realRequestAt)
     Object.assign(described, { kept: { cost: doc.streak.cost, pings: doc.streak.pings } })
   const { situation, policy: effective } = await situationOf(
     host,
@@ -688,13 +688,12 @@ async function state(
     definitions,
   )
   const step = decide(situation, effective)
+  const warmUntil = warmWindowEnd(situation, effective)
   const live = {
     ...described,
     lastAt: run.lastCacheRequestAt,
     running: situation.runActive,
-    ...(effective.warm && Number.isFinite(warmWindowEnd(situation, effective))
-      ? { warmUntil: warmWindowEnd(situation, effective) }
-      : {}),
+    ...(step === 'ping' && Number.isFinite(warmUntil) ? { warmUntil } : {}),
   }
   return typeof step === 'string'
     ? { ...live, next: { at: run.nextAt, step } }
@@ -746,14 +745,6 @@ export default function cacheWarming(host: ExtensionHost) {
         },
         afterResponse: async (message, api) => {
           const warmed = await warmedKind(host, api.conversationId)
-          if (warmed)
-            await host.harness().commit(async (tx) => {
-              ;(await tx.doc(State, api.conversationId)).streak = {
-                since: message.timestamp,
-                cost: 0,
-                pings: 0,
-              }
-            }, context)
           if (message.stopReason === 'error' || message.stopReason === 'aborted') {
             runs.sent.delete(api.conversationId)
             return
