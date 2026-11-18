@@ -19,7 +19,6 @@ import {
 } from '@earendil-works/pi-ai'
 import type { Api, AssistantMessage, Message, Model } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { ConversationSummary } from '../../shared/protocol.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { implementAction } from '../../lib/actions.ts'
@@ -80,18 +79,20 @@ type Runs = {
 
 type Kind = 'standing' | 'coordinator'
 
-export const kindOf = (summary: ConversationSummary): Kind | undefined =>
-  summary.ownerTaskId !== undefined
+export const kindOf = (owned: boolean, label: string | undefined): Kind | undefined =>
+  owned
     ? undefined
-    : summary.label === 'coordinator'
+    : label === 'coordinator'
       ? 'coordinator'
-      : summary.label === 'agent'
+      : label === 'agent'
         ? 'standing'
         : undefined
 
-const warmedKind = (host: ExtensionHost, id: ConversationId) => {
-  const summary = host.conversations().find((candidate) => candidate.id === id)
-  return summary && kindOf(summary)
+async function warmedKind(host: ExtensionHost, id: ConversationId) {
+  const record = await host.harness().commit((tx) => tx.conversation(id), context)
+  if (!record) return undefined
+  const label = (await host.harness().snapshot(host.metadata, id, context))?.label
+  return kindOf(record.owner !== undefined, label)
 }
 
 export function oneTokenPayload(api: Api, payload: unknown) {
@@ -141,7 +142,7 @@ async function policyFor(
   ttl: number | undefined,
   definitions: Definitions,
 ) {
-  const kind = warmedKind(host, id)
+  const kind = await warmedKind(host, id)
   const profile = await host.harness().snapshot(Profile, id, context)
   const name = profile?.definition ?? (kind === 'coordinator' ? 'coordinator' : undefined)
   const agent = name === undefined ? undefined : definitions.find((item) => item.name === name)
@@ -168,7 +169,7 @@ async function situationOf(
     const concluded = await host.need(ConversationsApi).concluded(context)
     const warming: Run[] = []
     for (const other of runs.active.values()) {
-      if (warmedKind(host, other.id) !== 'coordinator' || concluded.has(other.id)) continue
+      if ((await warmedKind(host, other.id)) !== 'coordinator' || concluded.has(other.id)) continue
       if (
         other.id === run.id ||
         (await policyFor(host, other.id, other.ttl, definitions)).effective.warm
@@ -317,7 +318,7 @@ async function refresh(host: ExtensionHost, runs: Runs, run: Run) {
   if (runs.active.get(run.id) !== run) return
   if (host.want(PauseApi)?.paused()) return stop(runs, run, 'Ultimate is paused')
   if (
-    !warmedKind(host, run.id) ||
+    !(await warmedKind(host, run.id)) ||
     (await host.need(ConversationsApi).concluded(context)).has(run.id)
   )
     return stop(runs, run, 'Not a standing agent or an open branch')
@@ -406,25 +407,22 @@ async function start(
   schedule(host, runs, run)
 }
 
+type Outcome = { kind: 'context-reset' } | { kind: 'answer'; message: AssistantMessage }
+
 export function recoverRun(
-  newestFirst: { kind: string; message?: AssistantMessage }[],
+  newest: Outcome | undefined,
   last: Ping | undefined,
   model: Pick<Model<Api>, 'provider' | 'id'>,
 ) {
-  const latest = newestFirst.find(
-    (entry) =>
-      entry.kind === 'pi.compaction' ||
-      entry.kind === 'pi.reset' ||
-      entry.message?.role === 'assistant',
-  )
-  const answer = latest?.message
+  if (newest?.kind !== 'answer') return undefined
+  const answer = newest.message
   const renewed =
-    answer?.provider === model.provider &&
+    answer.provider === model.provider &&
     answer.model === model.id &&
     answer.stopReason !== 'error' &&
     answer.stopReason !== 'aborted' &&
     answer.usage.cacheRead + answer.usage.cacheWrite > 0
-  if (!answer || !renewed) return undefined
+  if (!renewed) return undefined
   if (!last || last.at < answer.timestamp)
     return { realRequestAt: answer.timestamp, lastCacheRequestAt: answer.timestamp }
   const pinged =
@@ -435,25 +433,25 @@ export function recoverRun(
   return pinged ? { realRequestAt: answer.timestamp, lastCacheRequestAt: last.at } : undefined
 }
 
-async function newestEntries(host: ExtensionHost, id: ConversationId, ttl: number) {
+async function newestOutcome(
+  host: ExtensionHost,
+  id: ConversationId,
+  ttl: number,
+): Promise<Outcome | undefined> {
   const conversation = (await host.harness().conversation(id, context))!
-  const found: { kind: string; message?: AssistantMessage }[] = []
   let cursor: Cursor | undefined
   do {
     const page = await conversation.entries({}, 100, cursor, context)
     for (const entry of page.items) {
+      if (entry.kind === 'pi.compaction' || entry.kind === 'pi.reset')
+        return { kind: 'context-reset' }
       const message = entry.model?.[0]
-      found.push({
-        kind: entry.kind,
-        ...(message?.role === 'assistant' ? { message } : {}),
-      })
-      if (entry.kind === 'pi.compaction' || entry.kind === 'pi.reset') return found
-      if (message?.role === 'assistant') return found
-      if (message && Date.now() - message.timestamp > ttl) return found
+      if (message?.role === 'assistant') return { kind: 'answer', message }
+      if (message && Date.now() - message.timestamp > ttl) return undefined
     }
     cursor = page.next
   } while (cursor)
-  return found
+  return undefined
 }
 
 async function warmedConversations(host: ExtensionHost) {
@@ -471,7 +469,7 @@ async function warmedConversations(host: ExtensionHost) {
   for (const record of records) {
     if (record.owner) continue
     const label = (await host.harness().snapshot(host.metadata, record.id, context))?.label
-    if (label === 'coordinator' || label === 'agent') ids.push(record.id)
+    if (kindOf(false, label)) ids.push(record.id)
   }
   return ids
 }
@@ -486,7 +484,7 @@ async function resume(host: ExtensionHost, runs: Runs, facet: { closed: boolean 
     const timing = model && cacheTiming(model)
     if (!model || !timing) continue
     const recovered = recoverRun(
-      await newestEntries(host, id, timing.ttl),
+      await newestOutcome(host, id, timing.ttl),
       (await readDoc(host, id)).last,
       model,
     )
@@ -691,8 +689,7 @@ export default function cacheWarming(host: ExtensionHost) {
           const now = Date.now()
           for (const [id, sent] of runs.sent)
             if (now - sent.at > CACHE_WARMING_MAX_AGE_MS) runs.sent.delete(id)
-          if (warmedKind(host, api.conversationId))
-            runs.sent.set(api.conversationId, { model, payload, at: now })
+          runs.sent.set(api.conversationId, { model, payload, at: now })
           return undefined
         },
         afterResponse: async (message, api) => {
@@ -700,8 +697,9 @@ export default function cacheWarming(host: ExtensionHost) {
             runs.sent.delete(api.conversationId)
             return
           }
-          if (warmedKind(host, api.conversationId))
+          if (await warmedKind(host, api.conversationId))
             await start(host, runs, api.conversationId, message, facet)
+          else runs.sent.delete(api.conversationId)
         },
       }),
       hook(CompactionTask, {
@@ -759,7 +757,10 @@ export const actions = {
       compact: override(values.compact, isBoolean, 'compact must be a boolean or null'),
       minutes: override(values.minutes, isCount, 'minutes must be a number of at least 0, or null'),
     }
-    if (!warmedKind(host, id) || (await host.need(ConversationsApi).concluded(context)).has(id))
+    if (
+      !(await warmedKind(host, id)) ||
+      (await host.need(ConversationsApi).concluded(context)).has(id)
+    )
       throw new Error(`#${id} is not a standing agent or an open branch`)
     await host.harness().commit(async (tx) => {
       const doc = await tx.doc(State, id)

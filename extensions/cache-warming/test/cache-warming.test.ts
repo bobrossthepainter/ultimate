@@ -186,7 +186,7 @@ it("takes a conversation's override over its agent definition, and the default w
 it('resumes after a restart only from the newest outcome, keeping the real request apart from a ping', () => {
   const model = { provider: 'claude-code', id: 'claude-opus-5-5' }
   const answer = (at: number, cacheRead: number) => ({
-    kind: 'pi.assistant',
+    kind: 'answer' as const,
     message: {
       role: 'assistant',
       provider: 'claude-code',
@@ -203,13 +203,11 @@ it('resumes after a restart only from the newest outcome, keeping the real reque
     read: 9,
     write: 0,
   }
-  expect(recoverRun([answer(now - minutes(59), 9)], ping, model)).toEqual({
+  expect(recoverRun(answer(now - minutes(59), 9), ping, model)).toEqual({
     realRequestAt: now - minutes(59),
     lastCacheRequestAt: now - minutes(5),
   })
-  expect(recoverRun([answer(now - minutes(59), 9)], { ...ping, read: 0 }, model)).toBe(undefined)
-  expect(recoverRun([answer(now - minutes(2), 0)], undefined, model)).toBe(undefined)
-  expect(
-    recoverRun([{ kind: 'pi.compaction' }, answer(now - minutes(9), 9)], undefined, model),
-  ).toBe(undefined)
+  expect(recoverRun(answer(now - minutes(59), 9), { ...ping, read: 0 }, model)).toBe(undefined)
+  expect(recoverRun(answer(now - minutes(2), 0), undefined, model)).toBe(undefined)
+  expect(recoverRun({ kind: 'context-reset' }, undefined, model)).toBe(undefined)
 })
