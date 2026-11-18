@@ -664,12 +664,10 @@ const dayInput =
 function CustomDays({
   from,
   to,
-  today,
   onChange,
 }: {
   from: string
   to: string
-  today: string
   onChange: (days: { from: string; to: string }) => void
 }) {
   return (
@@ -677,7 +675,6 @@ function CustomDays({
       <input
         aria-label="From"
         className={dayInput}
-        max={today}
         onChange={(event) => event.target.value && onChange({ from: event.target.value, to })}
         type="date"
         value={from}
@@ -686,7 +683,6 @@ function CustomDays({
       <input
         aria-label="To"
         className={dayInput}
-        max={today}
         onChange={(event) => event.target.value && onChange({ from, to: event.target.value })}
         type="date"
         value={to}
@@ -744,7 +740,6 @@ function UsageSurface() {
                   setTo(days.to)
                 }}
                 to={to}
-                today={today}
               />
             )}
             <span className="h-4 w-px bg-border" />

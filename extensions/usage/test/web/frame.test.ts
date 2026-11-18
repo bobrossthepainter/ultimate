@@ -22,4 +22,13 @@ describe('usage frame', () => {
     expect(windowOf('custom', '2026-11-18', custom)).toEqual(window)
     expect(windowOf('custom', '2026-11-18', { from: custom.to, to: custom.from })).toEqual(window)
   })
+
+  it('keeps two-digit years as entered instead of mapping them to 19xx', () => {
+    const { since, until } = windowOf('custom', '2026-11-18', {
+      from: '0099-12-31',
+      to: '0100-01-01',
+    })
+    expect(new Date(since!).getFullYear()).toBe(99)
+    expect(until! - since!).toBeGreaterThan(0)
+  })
 })

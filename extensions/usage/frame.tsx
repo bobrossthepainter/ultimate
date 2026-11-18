@@ -8,8 +8,9 @@ export const localDay = (date: Date) =>
   `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 
 const midnight = (day: string, plusDays = 0) => {
-  const [year, month, date] = day.split('-').map(Number)
-  return new Date(year, month - 1, date + plusDays).getTime()
+  const date = new Date(`${day}T00:00`)
+  date.setDate(date.getDate() + plusDays)
+  return date.getTime()
 }
 export const shiftDay = (day: string, days: number) => localDay(new Date(midnight(day, days)))
 
