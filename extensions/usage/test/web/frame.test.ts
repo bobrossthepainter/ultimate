@@ -1,0 +1,25 @@
+import { describe, expect, it } from 'vitest'
+import { windowOf } from '../../frame.tsx'
+
+const custom = { from: '2026-11-03', to: '2026-11-05' }
+
+describe('usage frame', () => {
+  it('starts today and the rolling frames at local midnight, open-ended', () => {
+    expect(windowOf('today', '2026-11-18', custom)).toEqual({
+      since: new Date(2026, 10, 18).getTime(),
+    })
+    expect(windowOf('7d', '2026-11-18', custom)).toEqual({
+      since: new Date(2026, 10, 12).getTime(),
+    })
+    expect(windowOf('all', '2026-11-18', custom)).toEqual({})
+  })
+
+  it('counts the custom end day in full and accepts the days in either order', () => {
+    const window = {
+      since: new Date(2026, 10, 3).getTime(),
+      until: new Date(2026, 10, 6).getTime(),
+    }
+    expect(windowOf('custom', '2026-11-18', custom)).toEqual(window)
+    expect(windowOf('custom', '2026-11-18', { from: custom.to, to: custom.from })).toEqual(window)
+  })
+})
