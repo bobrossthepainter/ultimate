@@ -1,45 +1,58 @@
-const MINUTE_MS = 60_000
-export const TTL = 60 * MINUTE_MS
-export const LEAD = 55 * MINUTE_MS
-export const IDLE_STOP = 8 * 60 * MINUTE_MS
+import { CACHE_WARMING_MAX_AGE_MS } from '@earendil-works/pi-ai'
 
 export type Step = 'ping' | 'compact'
 
-export type Situation = {
-  now: number
-  lastRequest?: number
-  inputAt?: number
-  failedAfter?: number
+export type Policy = {
   warm: boolean
   compact: boolean
-  tokens: number
+  warmMs: number
   minCompactTokens: number
-  compactedAt?: number
 }
 
-export const failing = (failedAt: number | undefined, lastRequest: number | undefined) =>
-  failedAt !== undefined && (lastRequest === undefined || failedAt >= lastRequest)
+export type Situation = {
+  now: number
+  ttl: number
+  delayBeforeRefresh: number
+  realRequestAt: number
+  lastCacheRequestAt: number
+  runActive: boolean
+  withinMaxWarm: boolean
+  tokens: number
+  compactedSinceRequest: boolean
+}
 
-export const warmWindowOpen = (now: number, inputAt: number | undefined) =>
-  inputAt !== undefined && now - inputAt < IDLE_STOP
+export type Decision = Step | { stop: string }
 
-export function nextStep(situation: Situation): Step | undefined {
-  const { now, lastRequest } = situation
-  if (lastRequest === undefined) return undefined
-  const cacheAgeMs = now - lastRequest
-  if (cacheAgeMs < LEAD || cacheAgeMs >= TTL) return undefined
-  const keepsWarm =
-    situation.warm &&
-    warmWindowOpen(now, situation.inputAt) &&
-    !failing(situation.failedAfter, lastRequest)
-  if (keepsWarm) return 'ping'
-  const compactedSinceLastRequest =
-    situation.compactedAt !== undefined && situation.compactedAt >= lastRequest
-  if (
-    situation.compact &&
-    situation.tokens >= situation.minCompactTokens &&
-    !compactedSinceLastRequest
-  )
-    return 'compact'
-  return undefined
+export const lateRefreshCutoff = (
+  situation: Pick<Situation, 'ttl' | 'delayBeforeRefresh' | 'lastCacheRequestAt'>,
+) => {
+  const dueAt = situation.lastCacheRequestAt + situation.delayBeforeRefresh
+  const halfTheMarginBeforeExpiry = Math.floor((situation.ttl - situation.delayBeforeRefresh) / 2)
+  return dueAt + halfTheMarginBeforeExpiry
+}
+
+export const warmWindowEnd = (
+  situation: Pick<Situation, 'realRequestAt' | 'runActive'>,
+  policy: Policy,
+) => situation.realRequestAt + (situation.runActive ? CACHE_WARMING_MAX_AGE_MS : policy.warmMs)
+
+const minutes = (ms: number) => Math.round(ms / 60_000)
+
+export function decide(situation: Situation, policy: Policy): Decision {
+  if (situation.now > lateRefreshCutoff(situation)) return { stop: 'Refresh came too late' }
+  const windowOpen = situation.now <= warmWindowEnd(situation, policy)
+  if (policy.warm && windowOpen)
+    return situation.withinMaxWarm ? 'ping' : { stop: 'Over the limit of warm branches' }
+  if (situation.runActive)
+    return {
+      stop: policy.warm
+        ? `Run longer than ${minutes(CACHE_WARMING_MAX_AGE_MS)} min`
+        : 'Off for this branch',
+    }
+  if (windowOpen) return { stop: 'Off for this branch' }
+  if (!policy.compact) return { stop: `No request for ${minutes(policy.warmMs)} min` }
+  if (situation.tokens < policy.minCompactTokens)
+    return { stop: `Too small to compact (under ${Math.round(policy.minCompactTokens / 1000)}k)` }
+  if (situation.compactedSinceRequest) return { stop: 'Compacted' }
+  return 'compact'
 }

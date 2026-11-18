@@ -185,17 +185,18 @@ so branches adding divergences in parallel do not edit the same lines.
   their process exits, ssh-exec recheck). New fork code follows the same rules
 - Upstream: local-only
 
-### branch-cache extension
+### Generic branch-cache
 
-- Touches: `extensions/branch-cache/` (new; off by default per branch)
+- Touches: `extensions/branch-cache/` (new: server, `due.ts`, `settings.ts`, `refs.ts`, chip popover, README, tests),
+  `tsconfig.web.json` (`due.ts` is no longer browser code)
 - Why: Branch coordinators rebuilt their prompt cache after long waits on the user, subagents or the lander (#27553:
-  41 % of coordinator cost). Per branch, a `cache` chip turns on keep-warm pings (as `keep-warm` does for @ultimate,
-  8 h after the branch's last input of any kind) and compaction before the cache runs cold, also during waits on
-  subagents; with both on it compacts when the warm window ends (#27794). `due.ts` and the ping are adapted copies of
-  `extensions/keep-warm/` (2a6726f), since lint lets server code reach another extension only through its `api.ts`:
-  re-sync them when upstream changes keep-warm's ping (last synced in the 2026-11-17 merge: the ping aborts on release
-  under the `branch-cache.ping` resource key). Its `beforeCompact` hook (`order = -1`, before lineage) asks
-  for the summary on the branch's own cached context instead of lineage's uncached source text
+  41 % of coordinator cost), and Claude on GitHub Copilot keeps only a five-minute cache. It follows pi's own cache
+  warmer: lifetime from the model's `promptCache` (Claude Code: one hour), a timer at 90 % of it, the last request
+  replayed with a one-token cap (Claude Code: an `ok` ping on the next context, identity after the leading system
+  message as `keep-warm` does), warming during runs for an hour and idle for `warmMinutes` (30), a late-refresh
+  cutoff; per-model `branchCache.models` policy, warming on by default, edited in the chip popover. Compaction
+  before cold stays, off by default; its `beforeCompact` hook (before lineage) asks for the summary on the branch's
+  own cached context. Pings abort on release
 - Upstream: candidate
 
 ### Projects rail over Caddy
