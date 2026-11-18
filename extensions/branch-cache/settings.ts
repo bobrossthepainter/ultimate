@@ -1,12 +1,8 @@
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ModelPolicy, Setting, Source } from './refs.ts'
 
-export const DEFAULTS = { warm: true, compact: false, minCompactTokens: 150_000 }
+export const DEFAULTS = { warm: true, compact: false, warmMinutes: 30, minCompactTokens: 150_000 }
 export const DEFAULT_MAX_WARM = 5
-const HOUR_MS = 3_600_000
-
-export const warmMinutesFor = (ttl: number | undefined) =>
-  ttl !== undefined && ttl >= HOUR_MS ? 480 : 30
 
 const objectOf = (raw: unknown) =>
   raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as JsonObject) : {}
@@ -18,7 +14,6 @@ export function readPolicy(
   layers: { user: JsonObject; project: JsonObject },
   provider: string,
   model: string,
-  ttl: number | undefined,
 ): { maxWarm: number; policy: ModelPolicy } {
   const user = objectOf(layers.user.branchCache)
   const project = objectOf(layers.project.branchCache)
@@ -47,7 +42,7 @@ export function readPolicy(
     policy: {
       warm: pick('warm', byDefault(DEFAULTS.warm), isBoolean),
       compact: pick('compact', byDefault(DEFAULTS.compact), isBoolean),
-      warmMinutes: pick('warmMinutes', { value: warmMinutesFor(ttl), source: 'model' }, isCount),
+      warmMinutes: pick('warmMinutes', byDefault(DEFAULTS.warmMinutes), isCount),
       minCompactTokens: pick('minCompactTokens', byDefault(DEFAULTS.minCompactTokens), isCount),
     },
   }

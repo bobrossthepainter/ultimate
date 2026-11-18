@@ -41,7 +41,7 @@ export type Setting<T> = { value: T; source: Source }
 export type ModelPolicy = {
   warm: Setting<boolean>
   compact: Setting<boolean>
-  /** How long an idle branch is kept warm after its last request: 30 min on a five-minute cache, 8 h on an hour-long one. */
+  /** How long an idle branch is kept warm after its last request; 30 min by default, as pi's idle limit. */
   warmMinutes: Setting<number>
   minCompactTokens: Setting<number>
 }

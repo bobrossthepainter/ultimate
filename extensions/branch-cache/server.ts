@@ -109,12 +109,7 @@ async function settingsLayers(host: ExtensionHost) {
 }
 
 async function branchPolicy(host: ExtensionHost, id: ConversationId, model: Model<Api>) {
-  const { maxWarm, policy } = readPolicy(
-    await settingsLayers(host),
-    model.provider,
-    model.id,
-    cacheTiming(model)?.ttl,
-  )
+  const { maxWarm, policy } = readPolicy(await settingsLayers(host), model.provider, model.id)
   const doc = await readDoc(host, id)
   const effective: Policy = {
     warm: doc.warm ?? policy.warm.value,

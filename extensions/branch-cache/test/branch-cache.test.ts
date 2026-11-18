@@ -102,21 +102,15 @@ it('caps the replayed request at one output token and changes nothing else', () 
 })
 
 it('resolves a model policy from defaults, provider and exact keys, the project over the user', () => {
-  expect(
-    readPolicy({ user: {}, project: {} }, 'github-copilot', 'claude-opus-5.5', minutes(5)),
-  ).toEqual({
+  expect(readPolicy({ user: {}, project: {} }, 'github-copilot', 'claude-opus-5.5')).toEqual({
     maxWarm: 5,
     policy: {
       warm: { value: true, source: 'default' },
       compact: { value: false, source: 'default' },
-      warmMinutes: { value: 30, source: 'model' },
+      warmMinutes: { value: 30, source: 'default' },
       minCompactTokens: { value: 150_000, source: 'default' },
     },
   })
-  expect(
-    readPolicy({ user: {}, project: {} }, 'claude-code', 'claude-opus-5-5', minutes(60)).policy
-      .warmMinutes,
-  ).toEqual({ value: 480, source: 'model' })
   const user = {
     branchCache: {
       maxWarm: 3,
@@ -129,7 +123,7 @@ it('resolves a model policy from defaults, provider and exact keys, the project 
   const project = {
     branchCache: { models: { 'github-copilot/*': { minCompactTokens: 'x', warm: false } } },
   }
-  expect(readPolicy({ user, project }, 'github-copilot', 'claude-opus-5.5', minutes(5))).toEqual({
+  expect(readPolicy({ user, project }, 'github-copilot', 'claude-opus-5.5')).toEqual({
     maxWarm: 3,
     policy: {
       warm: { value: false, source: 'project' },
