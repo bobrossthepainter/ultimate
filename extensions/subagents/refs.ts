@@ -80,7 +80,7 @@ export type DefinitionFields = {
 }
 
 /**
- * How its conversations keep their prompt cache warm (the cache-warming extension); only standing agents and branch
+ * How its conversations keep their prompt cache warm (the keep-warm extension); only standing agents and branch
  * coordinators are warmed. `minutes` is the idle window, `shortMinutes` caps it on caches that live under an hour,
  * `compact` compacts before the cache goes cold once the context has `compactTokens`.
  */
