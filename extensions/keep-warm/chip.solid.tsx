@@ -51,7 +51,7 @@ function lifetimeLines(state: WarmState) {
 }
 
 function warmCostLine(state: WarmState) {
-  if (!state.warmCost) return undefined
+  if (!state.warmCost?.pings) return undefined
   const { pings, cost } = state.warmCost
   return `≈ ${dollars(cost)} for ${plural(pings, 'ping')}, one every ${duration(state.pingAfter ?? 0)}`
 }
@@ -107,6 +107,7 @@ function Reset(props: { label: string; shown: boolean; onReset: () => void }) {
 
 function SwitchRow(props: {
   label: string
+  name: string
   setting: Setting<boolean>
   onChange: (value: boolean | null) => void
 }) {
@@ -116,12 +117,12 @@ function SwitchRow(props: {
         <span class="flex-1">{props.label}</span>
         <Tag source={props.setting.source} />
         <Switch
-          aria-label={props.label}
+          aria-label={props.name}
           bind={[() => props.setting.value, (on) => props.onChange(on)]}
         />
       </label>
       <Reset
-        label={props.label}
+        label={props.name}
         onReset={() => props.onChange(null)}
         shown={props.setting.source === 'override'}
       />
@@ -188,6 +189,7 @@ function Popup(props: { id: ConversationId; name: string; state: WarmState; refr
       </div>
       <SwitchRow
         label={`Keep ${props.name} warm`}
+        name={`Keep ${props.name} warm`}
         onChange={(warm) => void set({ warm })}
         setting={props.state.warm}
       />
@@ -207,7 +209,8 @@ function Popup(props: { id: ConversationId; name: string; state: WarmState; refr
       </Show>
       <Show when={props.state.kind === 'coordinator'}>
         <SwitchRow
-          label={`Compact ${props.name} before cold`}
+          label="Compact before cold"
+          name={`Compact ${props.name} before cold`}
           onChange={(compact) => void set({ compact })}
           setting={props.state.compact}
         />
