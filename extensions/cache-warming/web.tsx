@@ -275,11 +275,7 @@ function Chip({ id, name, label }: { id: ConversationId; name: string; label: st
           type="button"
         >
           <FlameIcon
-            className={cn(
-              'size-3',
-              on && (warm ? 'text-orange-500' : 'text-sky-500'),
-              red && 'text-red-500',
-            )}
+            className={cn('size-3', on && warm && 'text-orange-500', red && 'text-red-500')}
           />
           {label}
         </button>
