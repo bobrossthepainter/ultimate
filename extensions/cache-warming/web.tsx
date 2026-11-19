@@ -71,7 +71,7 @@ function Tag({ source }: { source: Source }) {
   return (
     <span
       className={cn(
-        'w-14 shrink-0 text-right text-[10px] text-orange-500/80',
+        'w-14 shrink-0 text-right text-[10px] text-amber-500/80',
         source !== 'override' && 'invisible',
       )}
       data-source={source}
@@ -275,7 +275,7 @@ function Chip({ id, name, label }: { id: ConversationId; name: string; label: st
           type="button"
         >
           <FlameIcon
-            className={cn('size-3', on && warm && 'text-orange-500', red && 'text-red-500')}
+            className={cn('size-3', on && warm && 'text-amber-500', red && 'text-red-500')}
           />
           {label}
         </button>
