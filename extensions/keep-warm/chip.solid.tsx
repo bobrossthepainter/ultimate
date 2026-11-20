@@ -212,7 +212,7 @@ function Popup(props: { id: ConversationId; name: string; state: WarmState; refr
       <Show when={props.state.kind === 'coordinator'}>
         <SwitchRow
           label="Compact before cold"
-          name={`Compact ${props.name} before cold`}
+          name="Compact before cold"
           reset={`Use the agent's compaction for ${props.name}`}
           onChange={(compact) => void set({ compact })}
           setting={props.state.compact}
