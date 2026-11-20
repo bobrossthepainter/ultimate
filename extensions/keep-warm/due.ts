@@ -89,7 +89,7 @@ export function decide(situation: Situation, policy: Policy): Decision {
         : 'Off for this conversation',
     }
   if (windowOpen) return { stop: 'Off for this conversation' }
-  if (situation.windowStart === undefined) return { stop: 'No input from you yet' }
+  if (situation.windowStart === undefined) return { stop: 'Keeps warm after next message' }
   if (!policy.compact)
     return {
       stop:
