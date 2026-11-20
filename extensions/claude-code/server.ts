@@ -1,6 +1,4 @@
 import type { ConversationId } from '@earendil-works/pi-durable'
-import { clampThinkingLevel } from '@earendil-works/pi-ai'
-import type { Model, SimpleStreamOptions } from '@earendil-works/pi-ai'
 import {
   createClaudeCodeProvider,
   claudeCodeEnv,
@@ -31,15 +29,6 @@ export function createUltimateClaudeCodeProvider() {
           : model,
       )
   return { ...provider, getModels, getAllModels: getModels }
-}
-
-export function withSupportedReasoning<O extends SimpleStreamOptions>(
-  model: Model<string>,
-  options: O | undefined,
-): O | undefined {
-  if (options?.reasoning || model.thinkingLevelMap?.off !== null) return options
-  const level = clampThinkingLevel(model, 'off')
-  return level === 'off' ? options : ({ ...options, reasoning: level } as O)
 }
 
 type StableLifecycleFields = {
@@ -146,23 +135,11 @@ export default function claudeCode(host: ExtensionHost) {
   }
   const stream: typeof upstream.stream = (model, context, options) => {
     if (shared.closing) throw new Error('Claude Code provider is closing')
-    return track(
-      upstream.stream(
-        model,
-        context,
-        withBestEffortProjectEnv(withSupportedReasoning(model, options)),
-      ),
-    )
+    return track(upstream.stream(model, context, withBestEffortProjectEnv(options)))
   }
   const streamSimple: typeof upstream.streamSimple = (model, context, options) => {
     if (shared.closing) throw new Error('Claude Code provider is closing')
-    return track(
-      upstream.streamSimple(
-        model,
-        context,
-        withBestEffortProjectEnv(withSupportedReasoning(model, options)),
-      ),
-    )
+    return track(upstream.streamSimple(model, context, withBestEffortProjectEnv(options)))
   }
   const apiKey = upstream.auth.apiKey!
   const checkAuthWithProjectEnv: typeof apiKey.check = (input) => {
