@@ -46,7 +46,7 @@ function lifetimeLines(state: CacheWarmingState) {
 }
 
 function warmCostLine(state: CacheWarmingState) {
-  if (!state.warmCost) return undefined
+  if (!state.warmCost?.pings) return undefined
   const { pings, cost } = state.warmCost
   return `≈ ${dollars(cost)} for ${pings} ping${pings === 1 ? '' : 's'}, one every ${duration(state.pingAfter ?? 0)}`
 }

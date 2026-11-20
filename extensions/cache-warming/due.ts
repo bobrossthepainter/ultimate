@@ -89,9 +89,9 @@ export function decide(situation: Situation, policy: Policy): Decision {
         : 'Off for this conversation',
     }
   if (windowOpen) return { stop: 'Off for this conversation' }
-  if (situation.windowStart === undefined) return { stop: 'Keeps warm after next message' }
   if (!policy.compact && policy.warm && policy.warmMs <= situation.ttl)
     return { stop: 'No ping needed' }
+  if (situation.windowStart === undefined) return { stop: 'Keeps warm after next message' }
   if (!policy.compact)
     return {
       stop:
