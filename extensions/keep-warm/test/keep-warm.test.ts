@@ -47,6 +47,12 @@ it('pings a five-minute cache at 4.5 minutes for 30 minutes after the request, t
   ).toEqual({
     stop: 'No request for 30 min',
   })
+  expect(
+    decide(hour({ realRequestAt: now - minutes(54), windowStart: now - minutes(54) }), {
+      ...policy,
+      compact: false,
+    }),
+  ).toEqual({ stop: 'No ping needed' })
 })
 
 it('keeps a branch with a run warm for an hour after its request, and never compacts it', () => {
