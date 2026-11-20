@@ -59,13 +59,7 @@ export {
   StatusLine,
 } from '../app/primitives.tsx'
 /** The title bar's project chip, for an extension that replaces it in `titlebar.project` with a menu. */
-export {
-  prettyName,
-  ProjectChip,
-  projectHeading,
-  projectTitle,
-  Wordmark,
-} from '../app/titlebar.tsx'
+export { ProjectChip, projectHeading, projectTitle, Wordmark } from '../app/titlebar.tsx'
 /** Isolates another extension's component you render, such as a document renderer: it throws into an error card. */
 export { ExtensionBoundary } from '../app/boundary.tsx'
 /** The transcript's and composer's reading column classes, for a card that sits in that column. */
@@ -84,10 +78,22 @@ export { useTranscriptScroll } from '../app/transcript.tsx'
 /** Renders with the values other extensions provide for your point, or through them (`Rendered`); see `definePoint`. */
 export { AllProvided, Provided, Rendered } from '../app/boundary.tsx'
 export { ConversationScope } from './conversation-scope.tsx'
+/** The conversation of the `ConversationScope` around an element, or undefined outside every scope. */
+export { scopeOf } from './conversation-scope.tsx'
+/** Mounts a Solid component (`*.solid.tsx`) where React renders; its code uses `@/sdk/solid`. */
+export { island } from './island.tsx'
 /** Sends what the composer inside it submits somewhere else, such as a new side chat; see `composer` renderers. */
-export { Composer, ComposerRedirect, fillComposer, insertIntoComposer } from '../app/composer.tsx'
+export { Composer, ComposerRedirect } from '../app/composer.tsx'
+export { fillComposer, insertIntoComposer } from '../app/drafts.ts'
 export type { ComposerTarget } from '../app/composer.tsx'
 export { api, bundle, switched } from './client.ts'
+/** The page's ui-sdk agent bridge: `bridge()` drives and observes its components. */
+export { uiAgent } from './client.ts'
+export type { UiAgent } from './agent.ts'
+/** As in `@/sdk/solid`: attribute the server writes `write` starts to the agent when `source` is `agent`. */
+export { writingAs } from './writer.ts'
+/** Who the write being made now is attributed to, to carry past an `await` or a later effect. */
+export { writerNow } from './writer.ts'
 export { ActionError } from './api.ts'
 export type { ActionOptions, Api } from './api.ts'
 export type { UseActionOptions } from './hooks.ts'
@@ -145,6 +151,7 @@ export {
   formatTime,
   formatTokens,
   plural,
+  prettyName,
   shortenPath,
 } from './format.ts'
 /** Class names joined, Tailwind conflicts resolved: `cn('px-2', active && 'bg-accent')`. */

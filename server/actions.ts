@@ -1,4 +1,4 @@
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord/json'
 import type { Execution } from './harness.ts'
 import type { Device } from '../shared/events.ts'
@@ -8,6 +8,7 @@ export interface ActionContext {
   host: ExtensionHost
   conversationId?: ConversationId
   device?: Device
+  uiChanged(tx: Tx, change: { key: string; value?: JsonValue; previous?: JsonValue }): Promise<void>
   signal: AbortSignal
   exec(
     command: string,

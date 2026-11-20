@@ -58,7 +58,7 @@ The existing `workspace_workflow` prompt section starts and waits for the same d
 on creation; setup commands run again before the model can use tools.
 Failed setup keeps its output tail and never force-removes dirty output. The conversation's next tool call retries it (checkout and setup again), so fixing the cause, such as a PATH without `pnpm`, takes effect in the same conversation; until it succeeds every tool call is blocked with the setup's error.
 
-Info's Workspace section (`Workspaces` in `ui.tsx`) shows the lander queue, the shown conversation's checkout and
+Info's Workspace section (`Workspaces` in `ui.solid.tsx`) shows the lander queue, the shown conversation's checkout and
 statistics over every checkout, read-only: landing goes through agents. Concluding a conversation can release its clean, landed checkout.
 `isolation` says why the project cannot be isolated, if it cannot; `info {id}` reads the record and current tips; `create {cwd?, title?}` returns a new conversation ID.
 `github` returns `https://github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub; landing cards and
@@ -167,7 +167,8 @@ lander's sidebar row shows the feature it lands or landed last.
    `{ "command": "pnpm test", "timeout": 180 }`.
    A failing check
    reruns once: passing then is reported as flaky, failing again reports the output tail to the submitter once every
-   command of its group settled. Each command keeps its own memo, steps and flaky note. A passed or flaky check records its last
+   command of its group settled. Each command keeps its own memo, steps and flaky note; the note names what failed on the
+   first run (`pnpm test · exit 1: test/a.test.ts > its name`, or `Out of memory: exit 137`). A passed or flaky check records its last
    output line (ANSI stripped, at most 200 characters) as `summary`, shown muted after the command on its step row.
    A failed run's log entry keeps its output tail as `output` (not in `steps`), under a collapsed "Output" in the
    lander's log, so a check that then passed as flaky can still be diagnosed.

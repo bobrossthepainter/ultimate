@@ -651,6 +651,7 @@ it('conclude merges concurrent additions, deduplicates ids and returns kept chec
       '.',
       new AbortController().signal,
     ),
+    uiChanged: async () => undefined,
   }
   const results = await Promise.all([
     conversationActions.conclude({ ids: [first, first] }, ctx),

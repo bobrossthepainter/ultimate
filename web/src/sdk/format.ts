@@ -52,10 +52,16 @@ export function elidePath(path: string, max = 40): string {
   return `${head}/…/${tail}`
 }
 
-/** `1 page`, `3 pages`: a count with its noun, plural by `s`. */
-export function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`
+export function prettyName(folder: string) {
+  return folder
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((word) => word[0].toUpperCase() + word.slice(1))
+    .join(' ')
 }
+
+/** `1 page`, `3 pages`: a count with its noun, plural by `s`; in lib/ so a shared `.ts` helper says it the same way. */
+export { plural } from '../../../lib/plural.ts'
 
 /** What to show for a thrown value: an Error's message, anything else as a string. */
 export function errorMessage(error: unknown): string {

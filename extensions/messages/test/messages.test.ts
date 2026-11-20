@@ -698,20 +698,17 @@ it('lets a standing agent message the user and ends its run with it', async () =
   const view = await f.recipient.context(context)
   expect(view.entries.at(-1)?.kind).toBe('pi.tool-result')
 })
-it('refuses messages to the user from conversations that are not standing agents or branches', async () => {
+it('lets an ownerless conversation without a parent or starter message the user', async () => {
   const f = await fixture()
-  await f.send('@scout', 'SEND ' + JSON.stringify({ to: 'user', text: 'Update' }))
-  await until(async () => (await replies(f)).length === 1)
-  expect((await f.log())!.messages).toHaveLength(2)
-  expect(f.observed.join('\n')).toContain(
-    'Only @ultimate, standing agents and branches message the user; send this to the conversation that started you.',
-  )
-  await f.send('user', 'Relayed update')
-  expect((await f.log())!.messages.at(-1)).toMatchObject({
-    from: 1,
-    to: 'user',
-    text: 'Relayed update',
-  })
+  await (
+    await f.recipient.submit(
+      { type: 'input', content: 'SEND ' + JSON.stringify({ to: 'user', text: 'Design ready' }) },
+      context,
+    )
+  ).wait(context)
+  expect((await f.log())!.messages).toMatchObject([
+    { from: f.recipient.id, to: 'user', text: 'Design ready', state: 'delivered' },
+  ])
 })
 it('resolves a standing address and returns unanswered inputs as failure replies', async () => {
   const f = await fixture()
@@ -914,13 +911,9 @@ it('lets a subagent message only the conversation that started it', async () => 
   const view = await (await f.opened.harness.conversation(workerId, context))!.context(context)
   expect(JSON.stringify(view.entries)).toContain('Use message only to update #1')
 
-  // An owned conversation that is no subagent cannot bypass @ultimate either.
   const run = await child(false)
   await send(run, 'user')
-  expect((await f.log())!.messages).toHaveLength(1)
-  expect(f.observed.join('\n')).toContain(
-    'Only @ultimate, standing agents and branches message the user',
-  )
+  expect((await f.log())!.messages.at(-1)).toMatchObject({ from: run, to: 'user' })
 })
 it('refuses self, unknown ids, tally roots and unknown names with valid names', async () => {
   const f = await fixture()
@@ -2896,4 +2889,87 @@ it('keeps a request open when a late failure report names a fire whose run hande
   ).toEqual([])
   expect(other.posted).toHaveLength(3)
   expect(other.posted.some((p) => (p.body as { failed: boolean }).failed)).toBe(false)
+})
+it('fails a tell at once when the other Ultimate has no route back for its answer', async () => {
+  // An asker on one machine told an Ultimate on another that had no route back: both answers failed there and the
+  // requests stayed open on the asker for weeks.
+  const replier = await remoteFixture()
+  Object.assign(replier.host, { projects: async () => [{ name: 'my-app', current: true }] })
+  const bridge = createServer(async (request, response) => {
+    let raw = ''
+    for await (const chunk of request) raw += String(chunk)
+    const args = (JSON.parse(raw) as { args: JsonValue }).args
+    const [status, json] = await actions
+      .remote(args, replier.action())
+      .then((delivered) => [200, { result: delivered }] as const)
+      .catch((error: Error) => [500, { error: error.message.slice(0, 500) }] as const)
+    response.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(json))
+  })
+  await new Promise<void>((done) => bridge.listen(0, '127.0.0.1', done))
+  servers.push(bridge)
+  const asker = await remoteFixture()
+  Object.assign(asker.host, {
+    projects: async () => [
+      { name: 'asker', current: true },
+      {
+        name: 'my-app',
+        current: false,
+        running: { url: `http://127.0.0.1:${(bridge.address() as AddressInfo).port}` },
+      },
+    ],
+  })
+  const tell = (reply: boolean) =>
+    asker.service().tell(ROOT_CONVERSATION_ID, { project: 'my-app', text: 'Probe', reply }, context)
+  await expect(tell(true)).rejects.toThrow(
+    `my-app on ${hostname()} cannot answer: add asker on ${hostname()} to remotes in its user settings, or tell with reply: false.`,
+  )
+  expect((await asker.log())!.messages.at(-1)).toMatchObject({ reply: true, state: 'failed' })
+  expect((await replier.log())?.messages ?? []).toEqual([])
+  expect((await tell(false)).delivered).toBeGreaterThan(0)
+})
+it('accepts a retried request that another copy already took, though the route back is gone', async () => {
+  const f = await remoteFixture()
+  const routes = Promise.withResolvers<void>()
+  let looked = 0
+  Object.assign(f.host, {
+    projects: async () => {
+      looked += 1
+      if (looked === 1) await routes.promise
+      return [{ name: 'ultimate', current: true }]
+    },
+  })
+  const retry = actions.remote({ key: 'twice', text: 'Probe', reply: true, from }, f.action())
+  await until(() => looked === 1)
+  const first = await actions.remote(
+    { key: 'twice', text: 'Probe', reply: false, from },
+    f.action(),
+  )
+  routes.resolve()
+  expect(await retry).toBe(first)
+})
+it('lets @ultimate dismiss its open request to another project, and a late reply leaves it dismissed', async () => {
+  const other = await otherUltimate(() => [200, { result: 7 }])
+  const f = await remoteFixture(other.url)
+  const told = await f
+    .service()
+    .tell(ROOT_CONVERSATION_ID, { project: 'poe2-rust', text: 'Probe' }, context)
+  const settle = (args: { messageId: number; text: string; dismiss?: boolean }) =>
+    actions.settle(args, { ...f.action(), conversationId: ROOT_CONVERSATION_ID })
+  await expect(settle({ messageId: told.message, text: 'Answered via a relay' })).rejects.toThrow(
+    'closes only with dismiss: true',
+  )
+  await settle({ messageId: told.message, text: 'Answered via a relay', dismiss: true })
+  const key = (other.posted[0].body as { key: string }).key
+  await actions.remoteReply({ key, text: 'Late', failed: false }, f.action())
+  await actions.remoteReply({ key, text: 'Late note', failed: false, interim: 3 }, f.action())
+  await f.opened.root.waitForIdle(context)
+  expect((await f.log())!.messages.find((m) => m.id === told.message)).toMatchObject({
+    state: 'dismissed',
+    error: 'Answered via a relay',
+  })
+  expect((await f.log())!.messages.filter((m) => m.re === told.message)).toEqual([])
+  expect(await replies(f)).toEqual([])
+  await expect(settle({ messageId: told.message, text: 'Again', dismiss: true })).rejects.toThrow(
+    'These questions are no longer open',
+  )
 })

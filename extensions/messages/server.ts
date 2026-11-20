@@ -40,7 +40,14 @@ import { receiptOf, send } from './send.ts'
 import type { Device } from '../../shared/events.ts'
 import type { Context } from '@earendil-works/chord/context'
 import { branchesConcluded, reported, route, working } from './route.ts'
-import { projectsSection, remoteAction, remoteReplyAction, tellTask, tell } from './remote.ts'
+import {
+  dismissTell,
+  projectsSection,
+  remoteAction,
+  remoteReplyAction,
+  tellTask,
+  tell,
+} from './remote.ts'
 import { branchTool } from './branch.ts'
 import { remoteProgress } from './progress.ts'
 import { safeToRerun } from '../../lib/replay.ts'
@@ -178,6 +185,11 @@ export const actions = {
       (await actingAs(host, conversationId, ctx)) !== primary
     )
       throw new Error("Only @ultimate settles the user's questions")
+    const log = await host.harness().snapshot(Messages, ROOT_CONVERSATION_ID, ctx)
+    if (log?.messages.some((m) => m.id === messageId && m.to === 'remote')) {
+      if (!closing) throw new Error('A request to another project closes only with dismiss: true')
+      return { id: await dismissTell(host, primary, messageId as number, text.trim(), ctx) }
+    }
     const entry = await userRunInput(host, conversationId, ctx)
     const via = { conversation: conversationId, ...(entry === undefined ? {} : { entry }) }
     return {
@@ -315,7 +327,7 @@ export default function messages(host: ExtensionHost) {
           starter === undefined
             ? ''
             : ` #${starter} started you: when you stop with nothing under way (no subagent, landing or reply pending), your final answer goes to it and wakes it; while work is under way it arrives as a note, and so do your one-way messages to it.`
-        return `Use message to contact #id or @name. @ultimate, standing agents and branches may message user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply. A message to an agent whose message you still owe an answer becomes that answer and ends your run; use it only to attach images.${upward}\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
+        return `Use message to contact #id or @name. Any conversation except a subagent may message user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply. A message to an agent whose message you still owe an answer becomes that answer and ends your run; use it only to attach images.${upward}\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
 
       section('projects', async (input, ctx) => {

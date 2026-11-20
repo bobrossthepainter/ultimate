@@ -22,8 +22,9 @@ so branches adding divergences in parallel do not edit the same lines.
 
 ### voice-chatgpt extension
 
-- Touches: `extensions/voice-chatgpt/`, `extensions/voice/` (transcriber extension point), `shared/extension-api.ts`,
-  voice tests. Since the 2026-11-17 merge, `extensions/voice/server.ts` reads the key with upstream's shared
+- Touches: `extensions/voice-chatgpt/`, `extensions/voice/` (transcriber extension point; since the 2026-11-20 merge
+  the mic is upstream's Solid `button.solid.tsx`, re-checking status on extension or login changes and opening Secrets
+  only for a named `secret`), `shared/extension-api.ts`, voice tests. Since the 2026-11-17 merge, `extensions/voice/server.ts` reads the key with upstream's shared
   `openaiSecretOrNonOAuthKey` from `lib/openai.ts`; the fork keeps only its `VoiceHost` type with `want`
 - Why: Dictation through the ChatGPT (openai-codex) subscription
 - Upstream: candidate
@@ -86,7 +87,10 @@ so branches adding divergences in parallel do not edit the same lines.
   command plays on the machine running Ultimate, 2026-11-16 merge), `extensions/coding-tools/background.ts` (upstream's
   `bash` `background: true` starts through `exec.start`, so it runs where the working directory lives, 2026-11-17
   merge), `server/harness.ts` default runner and `extensions/exec/exec.ts` local `env` (upstream's work cgroup:
-  local agent tool processes spawn through `workSpawn` so they land in the capped `work` cgroup, 2026-11-18 merge)
+  local agent tool processes spawn through `workSpawn` so they land in the capped `work` cgroup, 2026-11-18 merge),
+  `extensions/info/panel.solid.tsx` (the Execution section re-applied on upstream's Solid Info panel, 2026-11-20
+  merge), `.ultimate/extensions/solid-progress/server.ts` (upstream's progress surface reads git through `ctx.exec`,
+  2026-11-20 merge)
 - Why: Core-tier service running project and worktree commands where their directory lives; `exec.protocol` point for
   remote targets (pod-local proof). The give-back set includes 21b7d4cc: each protocol's `describe` and exec's
   `target` action, so the Info panel shows where a conversation's commands run. Extension actions' `ctx.exec` runs
@@ -151,7 +155,10 @@ so branches adding divergences in parallel do not edit the same lines.
 
 ### Mermaid extension
 
-- Touches: `extensions/mermaid/`, `package.json` + `pnpm-lock.yaml` (`mermaid`)
+- Touches: `extensions/mermaid/`, `package.json` + `pnpm-lock.yaml` (`mermaid`), `tsconfig.web.json` (`draw.ts`).
+  Upstream's Markdown renderer became Solid in the 2026-11-20 merge, so `codeBlocks` renderers are Solid components:
+  the diagram is `diagram.solid.tsx` (theme read from the `dark` class on `<html>`), Mermaid itself sits in `draw.ts`,
+  loaded with the first diagram, and `ui.tsx` re-exports `draw` and `token` for the architect
 - Why: `mermaid` code blocks in messages draw as diagrams in the theme's colours, Mermaid loaded with the first one
 - Upstream: candidate
 
@@ -167,7 +174,8 @@ so branches adding divergences in parallel do not edit the same lines.
 
 ### Push iPhone install hint
 
-- Touches: `extensions/push/web.tsx` (`blocked`: Share, Add to Home Screen)
+- Touches: `extensions/push/notifications.solid.tsx` (`blocked`: Share, Add to Home Screen; upstream moved the chip to
+  Solid in the 2026-11-20 merge)
 - Why: iOS only receives pushes once installed to the home screen; upstream's message does not say how. The fork's
   `getNotifications` guard and its test were dropped in the 2026-11 merge: upstream's `hasPushSupport` check (32e64840)
   covers it
@@ -191,7 +199,8 @@ so branches adding divergences in parallel do not edit the same lines.
   `@ultimate` and `branch` chips, README, tests), `lib/agents.ts` (`cache:` definition field: parse, serialize,
   overlay diff and merge), `extensions/subagents/` (`refs.ts` type, `server.ts` save, `fields.tsx` Prompt cache
   field, `definitions.tsx`, test), `agents/ultimate.md` and `agents/coordinator.md` (`cache:` defaults),
-  `shared/extension-api.ts` (`keep-warm` in `defaultOff`)
+  `shared/extension-api.ts` (`keep-warm` in `defaultOff`), `test/ui-changed.test.ts` (enables `keep-warm` for
+  upstream's `ui.changed` test of its switch, 2026-11-20 merge)
 - Why: one warmer for @ultimate and branch coordinators, configured per agent in the Agents panel and overridden per
   conversation from its chip (#40606, Robert's answers on card 527). Upstream's `keep-warm` warmed only hour-long
   caches (Claude Code), so @ultimate on Copilot Claude was never warmed. Lifetime from the model's `promptCache`
@@ -205,7 +214,8 @@ so branches adding divergences in parallel do not edit the same lines.
 ### Projects rail over Caddy
 
 - Touches: `extensions/projects/` (`refs.ts` `served`, `links.ts`, `server.ts` wants `CaddyApi`, `web.tsx` label),
-  `extensions/caddy/` (`CaddyApi.served()`)
+  `extensions/caddy/` (`CaddyApi.served()`); the label lives in upstream's Solid `rail.solid.tsx` since the 2026-11-20
+  merge
 - Why: Upstream's rail links other Ultimates only over loopback or on their Tailscale port, so on a page served by
   the fork's Caddy hosting (`https://<domain>:<port>`) every other project was greyed out "not on the tailnet".
   Caddy now names each routed project's origin, and the rail links there when the page's host matches; the dimmed
@@ -239,7 +249,8 @@ so branches adding divergences in parallel do not edit the same lines.
 ### Previews through Caddy
 
 - Touches: `extensions/instance/` (`server.ts` start/stop/list publish through an optional `want(CaddyApi)`, `web.tsx`
-  card, links and switcher, `refs.ts` `caddy`, README), `extensions/caddy/` (`publishRoute`/`unpublishRoute`,
+  card; since the 2026-11-20 merge links in upstream's `link.solid.tsx`, the switcher in `switcher.solid.tsx`, and
+  `onCaddy`/`reachable` in `previews.ts`, `refs.ts` `caddy`, README), `extensions/caddy/` (`publishRoute`/`unpublishRoute`,
   README), `server/main.ts` (an unsupervised server honours `ULTIMATE_PROXY_ORIGIN`, beside upstream's SIGINT/SIGTERM
   handlers, which moved into that branch in the 2026-11-17 merge),
   `.ultimate/skills/preview-demo/`, `skills/ui-preview-round/SKILL.md`, `extensions/instance/test/e2e/instance.test.ts`.
