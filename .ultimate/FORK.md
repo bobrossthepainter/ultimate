@@ -250,7 +250,8 @@ so branches adding divergences in parallel do not edit the same lines.
 
 - Touches: `extensions/instance/` (`server.ts` start/stop/list publish through an optional `want(CaddyApi)`, `web.tsx`
   card; since the 2026-11-20 merge links in upstream's `link.solid.tsx`, the switcher in `switcher.solid.tsx`, and
-  `onCaddy`/`reachable` in `previews.ts`, `refs.ts` `caddy`, README), `extensions/caddy/` (`publishRoute`/`unpublishRoute`,
+  `onCaddy`/`reachable` in `previews.ts`, `refs.ts` `caddy`, README; since the 2026-11-21 merge the card's Caddy link
+  sits in upstream's Solid `call.solid.tsx`, and `web.tsx` keeps the switcher on without `canFrameLoopbackPreviews`), `extensions/caddy/` (`publishRoute`/`unpublishRoute`,
   README), `server/main.ts` (an unsupervised server honours `ULTIMATE_PROXY_ORIGIN`, beside upstream's SIGINT/SIGTERM
   handlers, which moved into that branch in the 2026-11-17 merge),
   `.ultimate/skills/preview-demo/`, `skills/ui-preview-round/SKILL.md`, `extensions/instance/test/e2e/instance.test.ts`.
@@ -270,7 +271,9 @@ so branches adding divergences in parallel do not edit the same lines.
   paragraph). Since the 2026-11-18 merge it sits beside upstream's question side chats (`open {message}`, read-only
   by `question`): branch copies keep `readOnly` and the full `lib/side-chat-guard.ts`, question copies keep upstream's
   `readOnlyCall` list; `Stage`, `Cut` and the header name the main (`@ultimate`, `#id · title`, or the asker);
-  `isSideChat` in `lib/acting-as.ts` is now upstream's
+  `isSideChat` in `lib/acting-as.ts` is now upstream's. Since the 2026-11-21 merge the composer frame is upstream's
+  Solid `frame.solid.tsx`, with the fork's branch main re-applied (`mainName`/`shortName` in `logic.ts`, shared with
+  the React `Stage`)
 - Why: ask a running branch questions without disturbing it; a branch is usually mid-run, so the fork point moved
   from the last answered input to the newest finished tool round, for @ultimate too
 - Upstream: candidate

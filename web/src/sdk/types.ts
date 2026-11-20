@@ -99,6 +99,8 @@ export interface ToolCallView {
 
 /** `core` is the rendering so far, starting with the generic tool card. */
 export type ToolRenderer = ComponentType<{ call: ToolCallView; core: ReactNode }>
+export type SolidToolProps = { call: ToolCallView; core: SolidElement }
+export type SolidEntryProps = { entry: EntryRecord; core: SolidElement; blocks?: readonly number[] }
 /** A tool call as one short line of plain text, for a folded run's step list; hooks are allowed. */
 export type ToolLineRenderer = ComponentType<{ call: ToolCallView }>
 /**
@@ -139,10 +141,26 @@ export type CodeBlockRenderer = SolidComponent<{
   core: SolidElement
 }>
 
+/**
+ * A queued input above the composer: `item`, `core`, the core's row, and `cancel`, its cancel button. Return `core` for
+ * items you leave alone. Contribute a Solid one as `island(C)` with `C` typed `SolidInboxProps`; a React one mounts
+ * through the core's bridge.
+ */
 export type InboxRenderer = ComponentType<{ item: InboxItem; core: ReactNode; cancel: ReactNode }>
+export type SolidInboxProps = { item: InboxItem; core: SolidElement; cancel: SolidElement }
 
-/** Wraps the shown conversation's composer (`core`); `dock` when it sits in a narrow side region. */
+/**
+ * Wraps the shown conversation's composer (`core`); `dock` when it sits in a narrow side region. Contribute a Solid one
+ * as `island(C)` with `C` typed `SolidComposerProps`; a React one mounts through the core's bridge.
+ */
 export type ComposerRenderer = ComponentType<{ core: ReactNode; dock?: boolean }>
+export type SolidComposerProps = { core: SolidElement; dock?: boolean }
+
+/** Where a `ComposerRedirect` sends what the composer inside it submits, and what its empty composer says. */
+export interface ComposerTarget {
+  placeholder: string
+  send: (text: string) => Promise<unknown>
+}
 
 /** What a document renderer receives: the shown conversation's document of its kind, live. */
 export interface DocumentProps {

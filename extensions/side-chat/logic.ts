@@ -1,5 +1,25 @@
 import type { QuestionSide, SideChat, SideChatIndex } from './refs.ts'
 
+interface MainSummary {
+  label?: string
+  title?: string
+  ownerTaskId?: number
+}
+
+export function mainName(
+  id: number | undefined,
+  ultimate: number | undefined,
+  summary: MainSummary | undefined,
+) {
+  if (id === undefined) return undefined
+  if (id === ultimate) return '@ultimate'
+  if (summary?.label === 'coordinator' && summary.ownerTaskId === undefined)
+    return `#${id}${summary.title ? ` · ${summary.title}` : ''}`
+  return undefined
+}
+
+export const shortName = (name: string) => (name === '@ultimate' ? name : 'the branch')
+
 export interface TabKey {
   key: string
   shiftKey: boolean

@@ -5,9 +5,13 @@
 import type {
   AgentState,
   ConversationId,
+  EntryId,
   EntryRecord,
+  InboxItem,
+  LiveState,
   UsageState,
 } from '@earendil-works/pi-durable'
+import { historyCursorFromStreamBefore } from '../../../shared/protocol.ts'
 import type { JsonValue } from '@earendil-works/chord/json'
 import {
   createContext,
@@ -16,6 +20,7 @@ import {
   createRoot,
   createSignal,
   createStore,
+  getOwner,
   onSettled,
   reconcile,
   runWithOwner,
@@ -32,7 +37,7 @@ import { actions, allCommands } from './actions.ts'
 import type { CommandItem, ExtensionRecord } from './registry.ts'
 import { ROOT } from './api.ts'
 import type { ActionArgs, ActionError } from './api.ts'
-import { api as client, reads, registry, store, uiState } from './client.ts'
+import { api as client, reads, registry, reportCompact, store, uiState } from './client.ts'
 import { events } from './events.ts'
 import { errorMessage } from './format.ts'
 import { restartAccepted, restartPhase, restartTimedOut } from './restart.ts'
@@ -41,6 +46,11 @@ import type { ReadState, Reader } from './reads.ts'
 import { extensionUiKey, writeUiState } from './ui-state.ts'
 import type { UiUpdate, Widen } from './ui-state.ts'
 import type { State } from './store.ts'
+import { compactDocs, compactTools } from './registry.ts'
+import type { CompactRow, ComposerTarget } from './types.ts'
+import type { ConversationSummary } from '../../../shared/protocol.ts'
+import type { ToolCall } from '@earendil-works/pi-ai'
+import type { TranscriptFrame } from './transcript-frame.ts'
 import { subscribeViewport, viewport } from './viewport.ts'
 import type { Viewport } from './viewport.ts'
 
@@ -53,6 +63,8 @@ export { events } from './events.ts'
  * the person. Kit controls run their change handlers in it; a write started after an `await` counts as the person's.
  */
 export { writingAs } from './writer.ts'
+/** Who the write being made now is attributed to, to carry past an `await`: `writingAs(who, …)` at the later write. */
+export { writerNow } from './writer.ts'
 export { ROOT } from './api.ts'
 export { actionRef, docRef } from '../../../shared/extension-api.ts'
 export {
@@ -67,16 +79,79 @@ export {
   prettyName,
   shortenPath,
 } from './format.ts'
-export { formatKeys } from './keys.ts'
+export { formatKeys, isMac } from './keys.ts'
+/** Whether the device types on a touch keyboard, which focusing an input would slide up over the page. */
+export { touchKeyboard } from './viewport.ts'
 /** The installed link, inline-code and code-block renderers of Markdown, in discovery order (`useExtensions()` records). */
-export { codeBlockRenderers, inlineCodeRenderers, linkRenderers } from './registry.ts'
+export {
+  codeBlockRenderers,
+  composerRenderers,
+  entryRenderers,
+  inboxRenderer,
+  inlineCodeRenderers,
+  linkRenderers,
+  messageItems,
+  provisionsOf,
+  toolLine,
+  toolRenderers,
+} from './registry.ts'
+/** Typed props of Solid tool and entry renderers contributed as `island(Component)`. */
+export type {
+  ComposerTarget,
+  SolidComposerProps,
+  SolidInboxProps,
+  SolidEntryProps,
+  SolidToolProps,
+  ToolCallView,
+} from './types.ts'
+/**
+ * The points the core reads: a run's start, the parked runs, a message's reference, the upload target, the empty
+ * transcript, the composer's placeholder.
+ */
+export {
+  ComposerPlaceholder,
+  EmptyTranscript,
+  FileUpload,
+  MessageReference,
+  ParkedRuns,
+  RunStart,
+} from './types.ts'
+/** True while the previous page's picture still covers this one after a reload. */
+export { covered } from './resume.ts'
+/** A transcript's shared frame: its entries and scroll elements, for the contributions it renders. */
+export { createTranscriptFrame } from './transcript-frame.ts'
 export { keepLast } from '../../../lib/errors.ts'
 export { cn } from 'cn'
+/** The transcript's and composer's reading column classes, for a card that sits in that column. */
+export { column } from '../app/layout.ts'
 
 /** The extension whose contribution renders here; `island` provides it. */
 export const ExtensionName = createContext<string | null>(null)
 /** The conversation `useDoc` reads, as React's `ConversationScope` gives it; null reads the shown conversation. */
 export const ConversationScope = createContext<ConversationId | null>(null)
+/**
+ * Sends what the composer inside it submits somewhere else, such as a new side chat: `value` reads the target, or
+ * undefined to send to the conversation; a composer renderer provides it around its `core`.
+ */
+export const ComposerRedirect = createContext<Accessor<ComposerTarget | undefined>>(() => undefined)
+/** The transcript around a contribution: its loaded entries and its scroll elements; null outside one. */
+export const Transcript = createContext<TranscriptFrame | null>(null)
+
+/**
+ * The entries the transcript around a contribution has loaded, oldest first, as `useTranscript` from `@/sdk` reads them:
+ * the active context and any earlier history the reader paged in; outside a transcript, the conversation's streamed ones.
+ */
+export function useTranscript(): Accessor<readonly EntryRecord[]> {
+  const frame = useContext(Transcript)
+  const conversation = useConversation()
+  if (!frame) return () => conversation().entries
+  const [entries, setEntries] = createSignal(frame.entries())
+  onSettled(() => {
+    setEntries(() => frame.entries())
+    return frame.subscribe(() => setEntries(() => frame.entries()))
+  })
+  return entries
+}
 
 type Target = ConversationId | 'shown'
 type Doc = JsonValue | null | undefined
@@ -145,8 +220,13 @@ function createReplica() {
   }
 }
 
-let replica: ReturnType<typeof createReplica> | undefined
-const shared = () => (replica ??= runWithOwner(null, () => createRoot(createReplica)))
+const page = createRoot(() => getOwner())
+const once = <T>(make: () => T) => {
+  let made: { value: T } | undefined
+  return () => (made ??= { value: runWithOwner(page, () => createRoot(make)) }).value
+}
+
+const shared = once(createReplica)
 
 type DocAccessor<T> = Accessor<Readonly<T> | null | undefined>
 
@@ -281,6 +361,10 @@ const selected =
     const { state } = shared()
     return createMemo(() => select(state()))
   }
+/** A slice of the client state, as `useStore` from `@/sdk` reads it; it updates when the slice changes identity. */
+export function useStore<T>(select: (state: State) => T): Accessor<T> {
+  return selected(select)()
+}
 /** Stream state: connecting, open, or reconnecting. */
 export const useConnection = selected((state) => state.connection)
 /** Build identity, machine, process, persistence, code, extensions, skills, context files. */
@@ -316,41 +400,24 @@ export function useEvent(channel: string, handler: (data: unknown) => void) {
   onSettled(() => events.on(channel, handler))
 }
 
-let extensions: Accessor<readonly ExtensionRecord[]> | undefined
-
 /** Installed web facets, in folder order, as `useExtensions` from `@/sdk` reads them. */
-export function useExtensions() {
-  return (extensions ??= runWithOwner(null, () =>
-    createRoot(() => {
-      const [records, setRecords] = createSignal(registry.getSnapshot())
-      registry.subscribe(() => setRecords(registry.getSnapshot()))
-      return records
-    }),
-  ))
-}
-
-let commands: Accessor<CommandItem[]> | undefined
+export const useExtensions = once((): Accessor<readonly ExtensionRecord[]> => {
+  const [records, setRecords] = createSignal(registry.getSnapshot())
+  registry.subscribe(() => setRecords(registry.getSnapshot()))
+  return records
+})
 
 /** Core and extension commands, as the palette lists them. */
-export function useCommands() {
-  const records = useExtensions()
-  return (commands ??= runWithOwner(null, () =>
-    createRoot(() => createMemo(() => allCommands(records()))),
-  ))
-}
-
-let shownViewport: Accessor<Viewport> | undefined
+export const useCommands = once((): Accessor<CommandItem[]> =>
+  createMemo(() => allCommands(useExtensions()())),
+)
 
 /** How much room the window has, `phone`, `tablet` or `desktop`, as `useViewport` from `@/sdk` reads it. */
-export function useViewport() {
-  return (shownViewport ??= runWithOwner(null, () =>
-    createRoot(() => {
-      const [current, setCurrent] = createSignal(viewport())
-      subscribeViewport(() => setCurrent(viewport()))
-      return current
-    }),
-  ))
-}
+export const useViewport = once((): Accessor<Viewport> => {
+  const [current, setCurrent] = createSignal(viewport())
+  subscribeViewport(() => setCurrent(viewport()))
+  return current
+})
 
 /** Shell navigation and commands, as `useUltimate()` from `@/sdk` gives them. */
 export const { switchConversation, showSurface, runCommand, openPanel, focusComposer } = actions
@@ -367,6 +434,31 @@ export function useConversationId(): Accessor<ConversationId | undefined> {
   const { state } = shared()
   const scoped = useContext(ConversationScope)
   return createMemo(() => scoped ?? state().view?.conversation.id)
+}
+
+/** Conversation `id()`'s summary (title, label, busy, parent), updating only when that row changes. */
+export function useConversationSummary(
+  id: Accessor<ConversationId | undefined>,
+): Accessor<ConversationSummary | undefined> {
+  const { state } = shared()
+  return createMemo(() => {
+    const wanted = id()
+    return wanted === undefined
+      ? undefined
+      : state().conversations.find((summary) => summary.id === wanted)
+  })
+}
+
+/**
+ * The transcript around a contribution, as `useTranscriptScroll` from `@/sdk` gives them: its scroll element and the
+ * element whose children are its rows (`data-entry-id`); null outside a transcript or before it mounts.
+ */
+export function useTranscriptElements() {
+  const frame = useContext(Transcript)
+  return {
+    scroll: () => frame?.scroll.current ?? null,
+    content: () => frame?.content.current ?? null,
+  }
 }
 
 /** `pi.agent` of the conversation `ConversationScope` gives, or the shown one: model, thinking level, cwd, tools. */
@@ -391,17 +483,25 @@ export function useDialog(id: string): [Accessor<boolean>, (open: boolean) => vo
 export const useModels = selected((state) => state.models)
 
 const noUsage: UsageState = { models: {}, tools: {} }
+const noLive: LiveState = {}
+const noEntries: readonly EntryRecord[] = []
 
 /**
  * The conversation `ConversationScope` gives, or the shown one, as `useConversation` from `@/sdk` reads it: `id`,
- * `loading`, its streamed `entries` (oldest first), `agent` (`pi.agent`) and `usage` (`pi.usage`).
+ * `loading`, its streamed `entries` (oldest first), the `older` history cursor, `agent` (`pi.agent`), `usage`
+ * (`pi.usage`), `live` (`pi.live`), `inbox` (`pi.inbox`: queued steers, follow-ups and writes) and `busy` while a run is
+ * in progress.
  */
 export type ConversationState = {
   id?: ConversationId
   loading: boolean
   entries: readonly EntryRecord[]
+  older?: EntryId
   agent: AgentState
   usage: UsageState
+  live: LiveState
+  inbox: readonly InboxItem[]
+  busy: boolean
 }
 
 function useScopedView() {
@@ -414,15 +514,56 @@ export function useConversation(): Accessor<ConversationState> {
   const view = useScopedView()
   return createMemo((): ConversationState => {
     const shown = view()
+    const live = (shown?.docs['pi.live'] ?? noLive) as LiveState
     return {
       id: shown?.conversation.id,
       loading: !shown,
-      entries: shown?.entries ?? [],
+      entries: shown?.entries ?? noEntries,
+      older: historyCursorFromStreamBefore(shown?.before),
       agent: shown?.docs['pi.agent'] ?? {},
       usage: (shown?.docs['pi.usage'] ?? noUsage) as UsageState,
+      live,
+      inbox: (shown?.docs['pi.inbox'] as { items?: InboxItem[] } | undefined)?.items ?? noInbox,
+      busy: !!live.run,
     }
   })
 }
+const noInbox: readonly InboxItem[] = []
+
+/**
+ * How the scoped or shown conversation folds when it uses compact mode (`compact` contributions), else undefined:
+ * `keeps(call)` for calls that stay visible, `thread` and `summary` for its receded stretches. It follows the root
+ * documents the contributions read.
+ */
+export function useCompact() {
+  const records = useExtensions()
+  const { state } = shared()
+  const id = useConversationId()
+  const kinds = createMemo(() => compactDocs(records()).join(','))
+  createEffect(kinds, (joined) => {
+    const releases = joined ? joined.split(',').map((kind) => store.watchDocOf(ROOT, kind)) : []
+    return () => releases.forEach((release) => release())
+  })
+  const docs = createMemo(() => (kinds() ? state().docsOf[ROOT] : undefined) ?? noDocs)
+  const conversation = createMemo(() => {
+    const shown = id()
+    return shown === undefined
+      ? undefined
+      : state().conversations.find((summary) => summary.id === shown)
+  })
+  return createMemo(() => {
+    const compact = compactTools(records(), conversation(), docs(), reportCompact)
+    if (!compact) return undefined
+    const rootDocs = docs()
+    const thread = compact.thread
+    return {
+      keeps: (call: ToolCall) => compact.keeps(call, rootDocs),
+      thread: thread && ((row: CompactRow) => thread(row, rootDocs)),
+      summary: compact.summary,
+    }
+  })
+}
+const noDocs = {}
 
 /** Shows a notice in the page's notice stack, as a failed command does. */
 export const notify = (notice: Parameters<typeof store.notify>[0]) => store.notify(notice)

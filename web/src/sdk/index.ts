@@ -70,11 +70,8 @@ export { Card } from '../app/card.tsx'
 export { Fold, useFold } from '../app/fold.tsx'
 /** The entries a go-back set aside, which the model's context leaves out. */
 export { setAsideIds } from '../app/compact.ts'
-/** A message's footer as the transcript shows it: details such as usage, time, copy, go back and a reference link. */
-export { MessageActions } from '../app/message-actions.tsx'
-/** A turn of the user's as the transcript shows a typed one; `text` gives the words a delivered message carries. */
-export { UserText, UserView } from '../app/user-turn.tsx'
-export { useTranscriptScroll } from '../app/transcript.tsx'
+/** A message's footer, a user's turn and its words as the transcript shows them. */
+export { MessageActions, UserText, UserView } from '../app/transcript-parts.tsx'
 /** Renders with the values other extensions provide for your point, or through them (`Rendered`); see `definePoint`. */
 export { AllProvided, Provided, Rendered } from '../app/boundary.tsx'
 export { ConversationScope } from './conversation-scope.tsx'
@@ -82,10 +79,8 @@ export { ConversationScope } from './conversation-scope.tsx'
 export { scopeOf } from './conversation-scope.tsx'
 /** Mounts a Solid component (`*.solid.tsx`) where React renders; its code uses `@/sdk/solid`. */
 export { island } from './island.tsx'
-/** Sends what the composer inside it submits somewhere else, such as a new side chat; see `composer` renderers. */
-export { Composer, ComposerRedirect } from '../app/composer.tsx'
 export { fillComposer, insertIntoComposer } from '../app/drafts.ts'
-export type { ComposerTarget } from '../app/composer.tsx'
+export type { ComposerTarget, SolidComposerProps } from './types.ts'
 export { api, bundle, switched } from './client.ts'
 /** The page's ui-sdk agent bridge: `bridge()` drives and observes its components. */
 export { uiAgent } from './client.ts'
@@ -132,6 +127,7 @@ export {
   useTasks,
   useToolDuration,
   useTranscript,
+  useTranscriptScroll,
   useUiState,
   useUltimate,
 } from './hooks.ts'

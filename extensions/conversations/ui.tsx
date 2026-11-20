@@ -15,13 +15,19 @@ export const ConversationPhase = definePoint<
   ConversationId | undefined,
   { label: ReactNode; word: string; waiting: boolean } | undefined
 >('conversations.phase')
-/** Whether conversation `id` gets no summaries, so its transcript hides older summary lines (lineage: a root). */
-export const Unsummarized = definePoint<ConversationId, boolean>('conversations.unsummarized')
+export { Unsummarized } from './points.ts'
+
 /** The plan task conversation `id` works on (`plan` provides it): its chip and title. */
 export const ConversationTask = definePoint<
   ConversationId | undefined,
   { chip: ReactNode; title: string } | undefined
 >('conversations.task')
+/**
+ * The chip of the plan task `conversation` works on (`plan` provides it as `island(Chip)`); a Solid host renders it with
+ * `Provided` from `@/sdk/parts.solid.tsx`, `on` naming where it sits (`call 3f2a`) so each chip's name is unique.
+ * Nothing renders while it works on no task or plan is off.
+ */
+export { ConversationTaskChip } from './points.ts'
 /**
  * The epic coordinator `id` works itself (`plan` provides it): its newest open epic, else its newest, when none of its
  * tasks went to a subagent; `progress` counts its acceptance criteria confirmed or estimated done (`5/8`) when it has
