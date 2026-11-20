@@ -57,9 +57,10 @@ function statusLines(state: CacheWarmingState, now: number) {
     const expires = state.lastAt + state.ttl
     lines.push(expires > now ? `Runs out ${clock(expires)}` : `Cold since ${clock(expires)}`)
   }
+  if (state.running && state.next?.step === 'ping') return [...lines, 'Working · kept warm']
   if (state.next)
     lines.push(
-      `${state.next.step === 'ping' ? 'Next ping' : 'Compacts'} ${clock(Math.max(now, state.next.at))}${state.running ? ' (in a run)' : ''}`,
+      `${state.next.step === 'ping' ? 'Next ping' : 'Compacts'} ${clock(Math.max(now, state.next.at))}`,
     )
   else if (state.warm.value || state.compact.value) lines.push(state.idle ?? 'Nothing due')
   if (state.warmUntil !== undefined && state.warmUntil > now)
