@@ -164,7 +164,7 @@ it("warms @ultimate for 8 h after the user's last input on an hour-long cache, 9
   ).toEqual({ stop: 'No input from you for 90 min' })
   expect(
     decide(fiveMinutes({ from: 'input', windowStart: undefined }), { ...policy, compact: false }),
-  ).toEqual({ stop: 'No input from you yet' })
+  ).toEqual({ stop: 'Keeps warm after next message' })
 })
 
 it("takes a conversation's override over its agent definition, and the default without either", () => {
