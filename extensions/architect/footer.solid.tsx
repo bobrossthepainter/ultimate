@@ -34,27 +34,30 @@ export function Footer(props: {
       return Promise.resolve()
     }
     if (saving?.note === next) return saving.done
-    const done = props.edit({ op: 'note', note: next }).then(
-      () => {
+    const done = props
+      .edit({ op: 'note', note: next })
+      .then(() => {
         if (note() === next) setNote(undefined)
-      },
-      (failure: unknown) => {
-        if (saving?.note === next) saving = undefined
-        throw failure
-      },
-    )
+      })
+      .finally(() => {
+        if (saving?.done === done) saving = undefined
+      })
     saving = { note: next, done }
     return done
   }
+  const [submitting, setSubmitting] = createSignal(false)
   const send = async () => {
+    if (submitting()) return
+    setSubmitting(true)
     setFailed(undefined)
     try {
       await saveNote()
+      props.onSend()
     } catch (failure) {
       setFailed(errorMessage(failure))
-      return
+    } finally {
+      setSubmitting(false)
     }
-    props.onSend()
   }
   const count = () => props.drafts.comments.length
   const over = () => count() > limits.comments
@@ -119,7 +122,7 @@ export function Footer(props: {
           </Button>
           <Recipient onChange={(id) => run({ op: 'to', to: id })} value={props.to} />
           <Button
-            disabled={props.sending || over() || props.to === undefined}
+            disabled={submitting() || props.sending || over() || props.to === undefined}
             onClick={send}
             size="xs"
           >
