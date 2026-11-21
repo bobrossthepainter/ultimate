@@ -58,11 +58,11 @@ export function ChatPanel(props: {
   const chat = useDocOf(() => props.branch, ChatDoc)
   const [starting, setStarting] = createSignal(false)
   const [error, setError] = createSignal<string>()
-  const start = (fresh: boolean) => {
+  const start = (branch: ConversationId, fresh: boolean) => {
     setStarting(true)
     setError(undefined)
     return api
-      .action(ChatAction, { branch: props.branch, ...(fresh && { fresh }) })
+      .action(ChatAction, { branch, ...(fresh && { fresh }) })
       .catch((failure: unknown) => setError(errorMessage(failure)))
       .finally(() => setStarting(false))
   }
@@ -71,7 +71,7 @@ export function ChatPanel(props: {
     return current !== undefined && current?.id === undefined ? props.branch : undefined
   })
   createEffect(missing, (branch) => {
-    if (branch !== undefined) void start(false)
+    if (branch !== undefined) void start(branch, false)
   })
   const stale = () => {
     const version = chat()?.version
@@ -100,7 +100,7 @@ export function ChatPanel(props: {
             aria-label="New chat"
             class="flex size-7 items-center justify-center rounded-md hover:bg-accent hover:text-foreground disabled:opacity-50"
             disabled={starting()}
-            onClick={() => start(true)}
+            onClick={() => start(props.branch, true)}
             size={null}
             title="Start over: a new copy of the architect"
             type="button"
@@ -126,7 +126,12 @@ export function ChatPanel(props: {
           <span class="min-w-0 flex-1">
             Opened at v{chat()?.version}; v{props.latest} is newer.
           </span>
-          <Button disabled={starting()} onClick={() => start(true)} size="xs" variant="outline">
+          <Button
+            disabled={starting()}
+            onClick={() => start(props.branch, true)}
+            size="xs"
+            variant="outline"
+          >
             {starting() && <LoaderIcon class="animate-spin" />}
             New chat on v{props.latest}
           </Button>
@@ -144,7 +149,11 @@ export function ChatPanel(props: {
           {(message) => (
             <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
               <p class="font-mono text-[11.5px] break-words text-error">{message()}</p>
-              <Button onClick={() => start(chat()?.id !== undefined)} size="xs" variant="outline">
+              <Button
+                onClick={() => start(props.branch, chat()?.id !== undefined)}
+                size="xs"
+                variant="outline"
+              >
                 Try again
               </Button>
             </div>

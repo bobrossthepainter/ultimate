@@ -26,6 +26,22 @@ export function Footer(props: {
     setFailed(undefined)
     props.edit(change).catch((failure: unknown) => setFailed(errorMessage(failure)))
   }
+  const saveNote = async () => {
+    const next = note()
+    setNote(undefined)
+    if (next !== undefined && next !== props.drafts.note)
+      await props.edit({ op: 'note', note: next })
+  }
+  const send = async () => {
+    setFailed(undefined)
+    try {
+      await saveNote()
+    } catch (failure) {
+      setFailed(errorMessage(failure))
+      return
+    }
+    props.onSend()
+  }
   const count = () => props.drafts.comments.length
   const over = () => count() > limits.comments
   return (
@@ -38,9 +54,8 @@ export function Footer(props: {
           aria-label="Overall note"
           class="mb-2 block max-h-40 min-h-12 w-full resize-y rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground/50 focus:border-brand/50 focus-visible:ring-0"
           onBlur={() => {
-            const next = note()
-            if (next !== undefined && next !== props.drafts.note) run({ op: 'note', note: next })
-            setNote(undefined)
+            setFailed(undefined)
+            saveNote().catch((failure: unknown) => setFailed(errorMessage(failure)))
           }}
           onValueChange={setNote}
           placeholder="An overall note (optional)"
@@ -91,7 +106,7 @@ export function Footer(props: {
           <Recipient onChange={(id) => run({ op: 'to', to: id })} value={props.to} />
           <Button
             disabled={props.sending || over() || props.to === undefined}
-            onClick={() => props.onSend()}
+            onClick={send}
             size="xs"
           >
             {props.sending ? 'Sending…' : `Send (${count()})`}

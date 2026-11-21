@@ -126,12 +126,15 @@ function SwitchRow(props: {
   )
 }
 
-function MinutesRow(props: { setting: Setting<number>; onSave: (value: number | null) => void }) {
+function MinutesRow(props: {
+  setting: Setting<number>
+  onSave: (value: number | null) => Promise<unknown>
+}) {
   const label = 'Warm for'
   const [draft, setDraft] = createSignal<number | null>()
   const commit = (next: number | null) => {
-    if (next === null) setDraft(undefined)
-    else if (next !== props.setting.value) props.onSave(next)
+    if (next === null || next === props.setting.value) setDraft(undefined)
+    else void props.onSave(next).finally(() => setDraft(undefined))
   }
   return (
     <div class="flex h-7 items-center gap-2 px-2 text-[11.5px]">
@@ -154,7 +157,7 @@ function MinutesRow(props: { setting: Setting<number>; onSave: (value: number | 
         label={label}
         onReset={() => {
           setDraft(undefined)
-          props.onSave(null)
+          void props.onSave(null)
         }}
         shown={props.setting.source === 'override'}
       />
@@ -202,7 +205,7 @@ function Popup(props: {
         setting={state().warm}
       />
       <Show when={state().warm.value || state().compact.value}>
-        <MinutesRow onSave={(minutes) => void set({ minutes })} setting={state().minutes} />
+        <MinutesRow onSave={(minutes) => set({ minutes })} setting={state().minutes} />
       </Show>
       <Show when={state().warm.value && warmCost()}>
         {(line) => (

@@ -1,7 +1,7 @@
 /** @jsxImportSource @solidjs/web */
 import { WorkflowIcon } from '@lucide/solid'
 import { Loading as LoadingBoundary, lazy } from 'solid-js'
-import { api, defineWebExtension } from '@/sdk/solid'
+import { api, defineWebExtension, writerNow, writingAs } from '@/sdk/solid'
 import { drawableBranchNow } from './branch.solid.tsx'
 import { CommentsCard, QuestionCard } from './card.solid.tsx'
 import { Frame, Loading } from './frame.solid.tsx'
@@ -51,8 +51,9 @@ export default defineWebExtension({
         if (context.conversationId === undefined) return
         const branch = drawableBranchNow(context.conversationId)
         if (branch === undefined) return
+        const who = writerNow()
         await api.action(DrawAction, { conversation: branch })
-        openArchitecture({ branch })
+        writingAs(who, () => openArchitecture({ branch }))
       },
     },
   ],

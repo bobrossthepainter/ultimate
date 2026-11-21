@@ -14,6 +14,8 @@ import {
   showSurface,
   switchConversation,
   useAction,
+  writerNow,
+  writingAs,
 } from '@/sdk/solid'
 import { CheckAction, MergeAction, StateAction } from './refs.ts'
 import type { UpstreamState } from './refs.ts'
@@ -187,15 +189,18 @@ function Upstream() {
       .finally(() => refetch().finally(() => setChecking(false)))
   }
   const merge = () => {
+    const who = writerNow()
     setBusy(true)
     setError(undefined)
     return api
       .action(MergeAction)
-      .then(({ id }) => {
-        events.emit('ultimate:sent', { conversationId: id })
-        showSurface('agent')
-        switchConversation(id)
-      })
+      .then(({ id }) =>
+        writingAs(who, () => {
+          events.emit('ultimate:sent', { conversationId: id })
+          showSurface('agent')
+          switchConversation(id)
+        }),
+      )
       .catch((cause: unknown) => setError(failure(cause)))
       .finally(() => setBusy(false))
   }

@@ -3,6 +3,7 @@ import { ChartColumnStacked } from '@lucide/solid'
 import type { JSX } from '@solidjs/web'
 import { createMemo, For, Match, Show, Switch } from 'solid-js'
 import type { Accessor } from 'solid-js'
+import { Button } from '@/components/ui/button.solid.tsx'
 import { Input } from '@/components/ui/input.solid.tsx'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control.solid.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.solid.tsx'
@@ -294,12 +295,9 @@ function Cell(props: { children: JSX.Element; left?: boolean; class?: string }) 
   )
 }
 
-function Row(props: { children: JSX.Element; onClick?: () => void }) {
+function Row(props: { children: JSX.Element; hover?: boolean }) {
   return (
-    <tr
-      class={cn('border-t border-border/40', props.onClick && 'hover:bg-accent/50')}
-      onClick={() => props.onClick?.()}
-    >
+    <tr class={cn('border-t border-border/40', props.hover && 'hover:bg-accent/50')}>
       {props.children}
     </tr>
   )
@@ -457,9 +455,19 @@ function Branches(props: { report: Report; unit: Unit; local: boolean }) {
       >
         <For each={props.report.branches} keyed={(branch) => `${branch.title ?? ''}#${branch.id}`}>
           {(branch) => (
-            <Row onClick={props.local ? () => open(branch().id) : undefined}>
+            <Row hover={props.local}>
               <Cell class="max-w-72 truncate" left>
-                {branch().title ?? `#${branch().id}`}
+                <Show when={props.local} fallback={branch().title ?? `#${branch().id}`}>
+                  <Button
+                    aria-label={`Open branch #${branch().id}`}
+                    class="h-auto max-w-full justify-start truncate p-0 text-[length:inherit] font-normal hover:underline"
+                    onClick={() => open(branch().id)}
+                    size={null}
+                    variant={null}
+                  >
+                    {branch().title ?? `#${branch().id}`}
+                  </Button>
+                </Show>
               </Cell>
               <Cell>{show(amount(branch().total, props.unit), props.unit)}</Cell>
               <Cell>{branch().total.calls.toLocaleString()}</Cell>

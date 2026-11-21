@@ -117,9 +117,13 @@ it('shows the report and asks for the picked frame', async ({ onTestFinished }) 
   expect(harness.reports.at(-1)).toEqual({ since: midnight.getTime() })
 
   await pick('custom')
-  const from = agent.snapshot().find((entry) => !entry.offPage && entry.label === 'From')!
+  const field = (label: string) =>
+    agent.snapshot().find((entry) => !entry.offPage && entry.label === label)!
   const set = await agent.act({
-    steps: [{ ref: from.ref, action: 'setValue', args: ['2026-11-03'] }],
+    steps: [
+      { ref: field('From').ref, action: 'setValue', args: ['2026-11-03'] },
+      { ref: field('To').ref, action: 'setValue', args: ['2026-11-05'] },
+    ],
   })
   expect(set.ok).toBe(true)
   await settle()
@@ -127,7 +131,5 @@ it('shows the report and asks for the picked frame', async ({ onTestFinished }) 
   await expectDistinctAgentNames(agent)
   const { since, until } = harness.reports.at(-1)!
   expect(new Date(since!)).toEqual(new Date(2026, 10, 3))
-  const tomorrow = new Date(midnight)
-  tomorrow.setDate(tomorrow.getDate() + 1)
-  expect(until).toBe(tomorrow.getTime())
+  expect(new Date(until!)).toEqual(new Date(2026, 10, 6))
 })
