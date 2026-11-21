@@ -72,6 +72,7 @@
     "extensions/lineage/points.ts",
     "extensions/lineage/memory-chip.ts",
     "extensions/system/tab.ts",
+    "extensions/usage/frame.ts",
     "extensions/phase/types.ts",
     "extensions/phase/subtree.ts",
     "extensions/plan/body.ts",
