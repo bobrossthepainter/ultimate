@@ -2,8 +2,8 @@
 import { Code, Workflow } from '@lucide/solid'
 import { createEffect, createSignal, onSettled, Show } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
-import type { CodeBlockRenderer } from '@/sdk'
 import { cn, errorMessage } from '@/sdk/solid'
+import type { CodeBlockRenderer } from '@/sdk/solid'
 
 let next = 0
 const theme = () => (document.documentElement.classList.contains('dark') ? 'dark' : 'light')
