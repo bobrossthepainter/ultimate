@@ -41,12 +41,14 @@ The project is the directory Ultimate was started in (`ultimate [dir]`); the Inf
 source when `info` is enabled; the building-blocks prompt names the clone root. Put a project's app in its `.ultimate/extensions/<name>/`. When the
 project is Ultimate itself, that is `.ultimate/extensions/` in the clone, not `extensions/`, which holds the built-ins.
 
-Extensions outside the clone import exactly what built-ins import (`@/sdk`, `@/components/…`, `react`,
-`lucide-react`, any package installed in the clone): Ultimate resolves those from its clone, and Tailwind picks up their
-classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`; for extensions of
-other projects, the `check_extensions` tool ([check-extensions](../../extensions/check-extensions/README.md)) formats, lints and
-type-checks them with the clone's config. Never copy an extension into the clone to check it: the running host would
-load it. Then try them in the browser. Agents live in the same three places
+Extensions outside the clone import exactly what built-ins import (`@/sdk/solid`, `@/components/…`,
+`@lucide/solid`, any package installed in the clone; a React facet imports `@/sdk`, see [React compatibility](react-compat.md)): Ultimate resolves those from its clone, and Tailwind picks up their
+classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`. Elsewhere, the
+`check_extensions` tool ([check-extensions](../../extensions/check-extensions/README.md)) formats, lints and
+type-checks them with the clone's config, and `node <clone>/scripts/check-extension.ts [folder…]` type-checks them
+from a shell (default: the current project's `.ultimate/extensions/*`); neither writes into the clone or the project.
+Never copy an extension into the clone to check it: the running host would load it. Then try them in the browser.
+Agents live in the same three places
 (`agents/`); an enabled extension may also ship an `agents/` folder. Those definitions load as built-ins before
 user/project definitions and overlays, and disappear when the extension is disabled. Skills load as [Discovery and settings](../settings.md) describes, later scopes winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
 [Surfaces](surfaces.md)).

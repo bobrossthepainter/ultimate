@@ -14,7 +14,8 @@ so branches adding divergences in parallel do not edit the same lines.
 
 ### Supervisor network flags
 
-- Touches: `bin/ultimate.ts`, `server/main.ts`, `extensions/instance/server.ts`, `extensions/review/surface.tsx`,
+- Touches: `bin/ultimate.ts`, `server/main.ts`, `extensions/instance/server.ts`, `extensions/review/file-diff.solid.tsx` (comment ids without
+  `crypto.randomUUID`, missing on plain-HTTP LAN pages; re-applied on upstream's Solid review in the 2026-11-23 merge),
   `test/e2e/supervisor-*`
 - Why: `--host`/`--allowed-origin` for private-network access, `--proxy-origin` for a loopback TLS reverse proxy (HTTP
   and SSE; no HMR socket)
@@ -89,8 +90,7 @@ so branches adding divergences in parallel do not edit the same lines.
   merge), `server/harness.ts` default runner and `extensions/exec/exec.ts` local `env` (upstream's work cgroup:
   local agent tool processes spawn through `workSpawn` so they land in the capped `work` cgroup, 2026-11-18 merge),
   `extensions/info/panel.solid.tsx` (the Execution section re-applied on upstream's Solid Info panel, 2026-11-20
-  merge), `.ultimate/extensions/solid-progress/server.ts` (upstream's progress surface reads git through `ctx.exec`,
-  2026-11-20 merge), `vite.config.ts` host-local allowlist (`extensions/antigravity/`: upstream's provider runs the
+  merge), `vite.config.ts` host-local allowlist (`extensions/antigravity/`: upstream's provider runs the
   `agy` CLI login on the machine running Ultimate, like Claude Code, 2026-11-22 merge)
 - Why: Core-tier service running project and worktree commands where their directory lives; `exec.protocol` point for
   remote targets (pod-local proof). The give-back set includes 21b7d4cc: each protocol's `describe` and exec's
@@ -239,14 +239,6 @@ so branches adding divergences in parallel do not edit the same lines.
 - Touches: `agents/ultimate.md` (one sentence in "Coordinators and messages")
 - Why: A research handover or insight forwarded from another project or session sat as background instead of being
   acted on; @ultimate now routes it to a branch in the same turn and tells the user where it went
-- Upstream: candidate
-
-### Stable selectors in verify-ui
-
-- Touches: `skills/verify-ui/SKILL.md` (one bullet under "How")
-- Why: In #27553, 6 of 7 browser failures came from ambiguous selectors and guessing the ⌘K palette. The bullet names
-  the attributes the app already sets (`data-ui="surface-tabs"`, `data-surface`, `data-ui="palette"`, cmdk's
-  `data-value`), checked against the running UI
 - Upstream: candidate
 
 ### Previews through Caddy

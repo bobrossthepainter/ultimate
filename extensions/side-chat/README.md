@@ -1,6 +1,6 @@
 Side chats are temporary, ownerless copies of the standing @ultimate conversation, of a branch, or of the conversation that asked an open question (see [Question side chats](#question-side-chats)). The user opens one to explore a tangent or ask a question while main keeps running, then discards it or sends a summary back without waking main. A side chat keeps its fixed `Side chat` title: `open` turns its automatic summaries off (`setAutomaticSummaries` on the conversations service), so no intent, reply or spawn trigger asks the summary model; only Summarize & inject does.
 
-## UI (`web.tsx`)
+## UI (`web.solid.tsx`)
 
 - **Main** is the conversation shown when it is @ultimate or a branch (an unowned `coordinator`); every label names it: `@ultimate`, or `#123 · Branch title`.
 - **Tab** in main's composer toggles side chat mode (`togglesSideMode`, `logic.ts`): a bare Tab, not while a popup owns it, never in a side chat's or a subagent's composer (one level only); Shift+Tab stays the thinking level. A Normal / Side chat switch above the composer shows the mode and toggles it by click; the prompt turns dashed brand and its placeholder says main keeps running. Enter sends through the core's `ComposerRedirect` to `open`, then the new side chat comes to the front and the mode returns to normal.
