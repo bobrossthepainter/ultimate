@@ -250,7 +250,7 @@ function Popup(props: {
         <Show when={state().agent}>
           {(agent) => (
             <Button
-              class="h-auto font-normal text-foreground/80 underline-offset-2 hover:underline"
+              class="h-auto justify-start p-0 text-[length:inherit] font-normal text-foreground/80 underline-offset-2 hover:underline"
               onClick={() => events.emit('subagents:open-definition', { name: agent() })}
               size={null}
               variant={null}
