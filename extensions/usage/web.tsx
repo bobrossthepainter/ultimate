@@ -10,8 +10,11 @@ import {
   StatusLine,
   useAction,
   useExtensionUiState,
+  useNow,
   useUltimate,
 } from '@/sdk'
+import { FRAMES, isFrame, localDay, shiftDay, windowOf } from './frame.tsx'
+import type { Frame } from './frame.tsx'
 import { AllAction, ReportAction, SpokeAction, SpokesAction } from './refs.ts'
 import type { Bucket, Instance, Kinds, RebuildCause, Report, Spoke } from './refs.ts'
 
@@ -30,9 +33,6 @@ const CAUSES: Record<RebuildCause, string> = {
   prefix: 'earlier context changed',
 }
 
-const RANGES = { '7d': 7, '30d': 30, all: undefined } as const
-type RangeName = keyof typeof RANGES
-const isRange = (value: string): value is RangeName => Object.hasOwn(RANGES, value)
 type Unit = '$' | 'tokens'
 const isUnit = (value: string): value is Unit => value === '$' || value === 'tokens'
 
@@ -604,7 +604,7 @@ function State<T>({
   return <Empty>loading…</Empty>
 }
 
-type Range = { since?: number }
+type Range = { since?: number; until?: number }
 
 function Here({ range, unit }: { range: Range; unit: Unit }) {
   const state = useAction(ReportAction, range, { every: 30000 })
@@ -658,23 +658,51 @@ const HERE = 'here'
 const ALL = 'all'
 const spokeId = (spoke: Spoke) => spoke.url
 
-function useSince(days: number | undefined) {
-  return useMemo(() => {
-    if (days === undefined) return {}
-    const start = new Date()
-    start.setHours(0, 0, 0, 0)
-    start.setDate(start.getDate() - days + 1)
-    return { since: start.getTime() }
-  }, [days])
+const dayInput =
+  'h-6 rounded-md border border-border/70 bg-transparent px-1.5 font-mono text-[11px] text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [color-scheme:light] dark:[color-scheme:dark]'
+
+function CustomDays({
+  from,
+  to,
+  onChange,
+}: {
+  from: string
+  to: string
+  onChange: (days: { from: string; to: string }) => void
+}) {
+  return (
+    <span className="flex items-center gap-1">
+      <input
+        aria-label="From"
+        className={dayInput}
+        onChange={(event) => event.target.value && onChange({ from: event.target.value, to })}
+        type="date"
+        value={from}
+      />
+      <span>–</span>
+      <input
+        aria-label="To"
+        className={dayInput}
+        onChange={(event) => event.target.value && onChange({ from, to: event.target.value })}
+        type="date"
+        value={to}
+      />
+    </span>
+  )
 }
 
 function UsageSurface() {
   const [scope, setScope] = useExtensionUiState('scope', HERE)
-  const [storedRange, setRange] = useExtensionUiState('range', '30d')
+  const [storedFrame, setFrame] = useExtensionUiState('range', '30d')
   const [storedUnit, setUnit] = useExtensionUiState('unit', '$')
-  const rangeName: RangeName = isRange(storedRange) ? storedRange : '30d'
+  const today = localDay(new Date(useNow(60_000)))
+  const [storedFrom, setFrom] = useExtensionUiState('from', '')
+  const [storedTo, setTo] = useExtensionUiState('to', '')
+  const frame: Frame = isFrame(storedFrame) ? storedFrame : '30d'
   const unit: Unit = isUnit(storedUnit) ? storedUnit : '$'
-  const range = useSince(RANGES[rangeName])
+  const from = storedFrom || shiftDay(today, -29)
+  const to = storedTo || today
+  const range = useMemo(() => windowOf(frame, today, { from, to }), [frame, today, from, to])
   const spokesState = useAction(SpokesAction, null)
   const spokes = spokesState.data?.spokes ?? []
   const scopes = [
@@ -698,12 +726,22 @@ function UsageSurface() {
       <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto" data-usage-surface>
         <section className="mx-auto flex max-w-6xl flex-col gap-3 px-3 py-3 md:px-5">
           <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground">
-            <Chips<RangeName>
+            <Chips<Frame>
               label="Range"
-              onChange={setRange}
-              options={(Object.keys(RANGES) as RangeName[]).map((id) => ({ id, title: id }))}
-              value={rangeName}
+              onChange={setFrame}
+              options={FRAMES.map((id) => ({ id, title: id }))}
+              value={frame}
             />
+            {frame === 'custom' && (
+              <CustomDays
+                from={from}
+                onChange={(days) => {
+                  setFrom(days.from)
+                  setTo(days.to)
+                }}
+                to={to}
+              />
+            )}
             <span className="h-4 w-px bg-border" />
             <Chips<Unit>
               label="Unit"
