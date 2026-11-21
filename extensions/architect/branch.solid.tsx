@@ -1,8 +1,9 @@
+/** @jsxImportSource @solidjs/web */
 import type { ConversationId } from '@earendil-works/pi-durable'
-import { getState, ROOT, useConversations, useDocOf } from '@/sdk'
-import type { ConversationSummary } from '@/sdk'
-import { getRoots, useRoots } from '../lineage/ui.tsx'
-import { StandingDoc } from '../subagents/ui.tsx'
+import { getState, ROOT, useConversations, useDocOf } from '@/sdk/solid'
+import type { ConversationSummary } from '@/sdk/solid'
+import { getRoots, useRoots } from '../lineage/ui.solid.tsx'
+import { StandingDoc } from '../subagents/ui.solid.tsx'
 
 export function branchOf(summary: ConversationSummary | undefined, id: ConversationId) {
   return summary?.label === 'architect' && summary.parentConversationId !== undefined
@@ -28,9 +29,10 @@ function notDrawable(
 
 export function useNotDrawable() {
   const conversations = useConversations()
-  const roots = useRoots() ?? [ROOT]
-  const standing = useDocOf(ROOT, StandingDoc) ?? {}
-  return (id: ConversationId) => notDrawable(id, conversations, roots, standing)
+  const roots = useRoots()
+  const standing = useDocOf(() => ROOT, StandingDoc)
+  return (id: ConversationId) =>
+    notDrawable(id, conversations(), roots() ?? [ROOT], standing() ?? {})
 }
 
 export function drawableBranchNow(id: ConversationId) {

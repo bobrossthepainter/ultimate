@@ -1,3 +1,4 @@
+/** @jsxImportSource @solidjs/web */
 import type { ArchitectureComment } from './refs.ts'
 
 export type Change = 'added' | 'changed' | 'removed'
