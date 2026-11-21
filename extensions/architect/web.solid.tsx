@@ -1,17 +1,18 @@
-import { WorkflowIcon } from 'lucide-react'
-import { lazy, Suspense } from 'react'
-import { api, defineWebExtension } from '@/sdk'
-import { drawableBranchNow } from './branch.tsx'
-import { CommentsCard, QuestionCard } from './card.tsx'
-import { Frame, Loading } from './frame.tsx'
-import { ArchitectureLink, openArchitecture } from './link.tsx'
+/** @jsxImportSource @solidjs/web */
+import { WorkflowIcon } from '@lucide/solid'
+import { Loading as LoadingBoundary, lazy } from 'solid-js'
+import { api, defineWebExtension } from '@/sdk/solid'
+import { drawableBranchNow } from './branch.solid.tsx'
+import { CommentsCard, QuestionCard } from './card.solid.tsx'
+import { Frame, Loading } from './frame.solid.tsx'
+import { ArchitectureLink, openArchitecture } from './link.solid.tsx'
 import { DrawAction } from './refs.ts'
 
-const Viewer = lazy(() => import('./surface.tsx'))
+const Viewer = lazy(() => import('./surface.solid.tsx'))
 
 function ArchitectureSurface() {
   return (
-    <Suspense
+    <LoadingBoundary
       fallback={
         <Frame>
           <Loading />
@@ -19,7 +20,7 @@ function ArchitectureSurface() {
       }
     >
       <Viewer />
-    </Suspense>
+    </LoadingBoundary>
   )
 }
 

@@ -1,6 +1,7 @@
+/** @jsxImportSource @solidjs/web */
 import type { ConversationId } from '@earendil-works/pi-durable'
-import { useCallback } from 'react'
-import { api, useDocOf } from '@/sdk'
+import type { Accessor } from 'solid-js'
+import { api, useDocOf } from '@/sdk/solid'
 import { DraftsDoc, EditAction } from './refs.ts'
 import type { ArchitectureComment, DraftEdit, Drafts } from './refs.ts'
 
@@ -10,13 +11,11 @@ export const limits = { comments: 50, text: 4000 } as const
 
 const empty: Drafts = { comments: [], note: '' }
 
-export function useDrafts(branch: ConversationId, version: number) {
+export function useDrafts(branch: Accessor<ConversationId>, version: Accessor<number>) {
   const doc = useDocOf(branch, DraftsDoc)
-  const drafts = doc?.versions[String(version)] ?? empty
-  const edit = useCallback(
-    (change: DraftEdit) => api.action(EditAction, { branch, version, edit: change }),
-    [branch, version],
-  )
+  const drafts = () => doc()?.versions[String(version())] ?? empty
+  const edit = (change: DraftEdit) =>
+    api.action(EditAction, { branch: branch(), version: version(), edit: change })
   return [drafts, edit] as const
 }
 
