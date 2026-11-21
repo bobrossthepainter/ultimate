@@ -13,8 +13,8 @@ import {
   useNow,
   useUltimate,
 } from '@/sdk'
-import { FRAMES, isFrame, localDay, shiftDay, windowOf } from './frame.tsx'
-import type { Frame } from './frame.tsx'
+import { FRAMES, isFrame, localDay, shiftDay, windowOf } from './frame.ts'
+import type { Frame } from './frame.ts'
 import { AllAction, ReportAction, SpokeAction, SpokesAction } from './refs.ts'
 import type { Bucket, Instance, Kinds, RebuildCause, Report, Spoke } from './refs.ts'
 

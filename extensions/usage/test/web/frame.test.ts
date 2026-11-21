@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { windowOf } from '../../frame.tsx'
+import { windowOf } from '../../frame.ts'
 
 const custom = { from: '2026-11-03', to: '2026-11-05' }
 
