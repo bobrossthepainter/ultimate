@@ -46,8 +46,8 @@ Extensions outside the clone import exactly what built-ins import (`@/sdk/solid`
 classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`. Elsewhere, the
 `check_extensions` tool ([check-extensions](../../extensions/check-extensions/README.md)) formats, lints and
 type-checks them with the clone's config, and `node <clone>/scripts/check-extension.ts [folder…]` type-checks them
-from a shell (default: the current project's `.ultimate/extensions/*`); neither writes into the clone, and only
-`check_extensions` with `fix: true` rewrites the checked files.
+from a shell (default: the current project's `.ultimate/extensions/*`). Both only read, except `check_extensions`
+with `fix: true`, which formats the checked files in place, built-in ones included.
 Never copy an extension into the clone to check it: the running host would load it. Then try them in the browser.
 Agents live in the same three places
 (`agents/`); an enabled extension may also ship an `agents/` folder. Those definitions load as built-ins before

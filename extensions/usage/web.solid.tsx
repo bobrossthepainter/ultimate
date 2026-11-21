@@ -459,7 +459,7 @@ function Branches(props: { report: Report; unit: Unit; local: boolean }) {
               <Cell class="max-w-72 truncate" left>
                 <Show when={props.local} fallback={branch().title ?? `#${branch().id}`}>
                   <Button
-                    aria-label={`Open branch #${branch().id}`}
+                    aria-label={`Open branch #${branch().id}${branch().title ? ` · ${branch().title}` : ''}`}
                     class="h-auto max-w-full justify-start truncate p-0 text-[length:inherit] font-normal hover:underline"
                     onClick={() => open(branch().id)}
                     size={null}

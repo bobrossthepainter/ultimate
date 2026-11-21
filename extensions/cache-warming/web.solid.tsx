@@ -134,7 +134,10 @@ function MinutesRow(props: {
   const [draft, setDraft] = createSignal<number | null>()
   const commit = (next: number | null) => {
     if (next === null || next === props.setting.value) setDraft(undefined)
-    else void props.onSave(next).finally(() => setDraft(undefined))
+    else
+      void props.onSave(next).finally(() => {
+        if (draft() === next) setDraft(undefined)
+      })
   }
   return (
     <div class="flex h-7 items-center gap-2 px-2 text-[11.5px]">

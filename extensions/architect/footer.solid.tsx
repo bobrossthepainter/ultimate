@@ -26,11 +26,25 @@ export function Footer(props: {
     setFailed(undefined)
     props.edit(change).catch((failure: unknown) => setFailed(errorMessage(failure)))
   }
-  const saveNote = async () => {
+  let saving: { note: string; done: Promise<void> } | undefined
+  const saveNote = (): Promise<void> => {
     const next = note()
-    setNote(undefined)
-    if (next !== undefined && next !== props.drafts.note)
-      await props.edit({ op: 'note', note: next })
+    if (next === undefined || next === props.drafts.note) {
+      setNote(undefined)
+      return Promise.resolve()
+    }
+    if (saving?.note === next) return saving.done
+    const done = props.edit({ op: 'note', note: next }).then(
+      () => {
+        if (note() === next) setNote(undefined)
+      },
+      (failure: unknown) => {
+        if (saving?.note === next) saving = undefined
+        throw failure
+      },
+    )
+    saving = { note: next, done }
+    return done
   }
   const send = async () => {
     setFailed(undefined)
