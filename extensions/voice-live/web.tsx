@@ -34,6 +34,7 @@ import {
   events,
   formatKeys,
   formatTime,
+  island,
   provide,
   Provided,
   useAction,
@@ -49,13 +50,14 @@ import {
   UserText,
   UserView,
 } from '@/sdk'
-import type { EntryRenderer, UltimateActions } from '@/sdk'
+import type { UltimateActions } from '@/sdk'
 import { ConversationPhase } from '../conversations/ui.tsx'
 import { Body, Bubble } from '../messages/ui.tsx'
 import { SideChatsDoc, useSideChatFront } from '../side-chat/ui.tsx'
 import { UnderUltimate, Unlisted } from '../sidebar/ui.tsx'
 import { openAgentSource, StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import * as live from './live.tsx'
+import { QuietAgentRow } from './quiet-row.solid.tsx'
 import type { VoiceMode } from './live.tsx'
 import { openQuestion } from '../../lib/message-state.ts'
 import { MessagesDoc } from '../messages/ui.tsx'
@@ -461,7 +463,7 @@ function Stage() {
   }, [inFront])
 
   useLayoutEffect(() => {
-    const parent = ref.current?.parentElement
+    const parent = ref.current?.closest<HTMLElement>('[data-ui="conversation"]')
     if (!parent) return undefined
     const observer = new ResizeObserver(() => setWidth(parent.clientWidth))
     observer.observe(parent)
@@ -469,7 +471,7 @@ function Stage() {
   }, [isMain, voice])
 
   useLayoutEffect(() => {
-    const parent = ref.current?.parentElement
+    const parent = ref.current?.closest<HTMLElement>('[data-ui="conversation"]')
     if (!parent || !inFront) return undefined
     const layers = [...parent.children].filter(
       (child): child is HTMLElement => child instanceof HTMLElement && !child.contains(ref.current),
@@ -942,7 +944,11 @@ function VoiceDock({ core }: { core: ReactNode }) {
   )
 }
 
-function useVoiceRow(main: number | undefined): ReactNode {
+function useVoiceRow({
+  conversation: main,
+}: {
+  conversation: ConversationId | undefined
+}): ReactNode {
   const { voice } = useIds()
   const mode = useMode()
   const actions = useUltimate()
@@ -1418,16 +1424,6 @@ function QuestionRow({ entry }: { entry: EntryRecord }) {
   )
 }
 
-const QuietAgentRow: EntryRenderer = ({ core }) => {
-  const id = useConversation((conversation) => conversation.id)
-  const { voice } = useIds()
-  return id === voice ? (
-    <div className="text-xs text-muted-foreground opacity-60">{core}</div>
-  ) : (
-    core
-  )
-}
-
 export default defineWebExtension({
   slots: {
     'composer.actions': [StartButton],
@@ -1450,7 +1446,7 @@ export default defineWebExtension({
     'voice.line': LineRow,
     'voice.heard': HeardRow,
     'voice.answer': () => null,
-    'pi.assistant': QuietAgentRow,
+    'pi.assistant': island(QuietAgentRow),
     'voice.session': SessionRow,
     'voice.context': ContextRow,
     'voice.utterance': UtteranceRow,

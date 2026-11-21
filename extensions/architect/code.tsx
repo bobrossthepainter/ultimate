@@ -1,6 +1,5 @@
 import { ArrowUpRightIcon, FileCodeIcon } from 'lucide-react'
-import { cn } from '@/sdk'
-import { openReview } from '../review/ui.tsx'
+import { cn, events } from '@/sdk'
 import { useGithubRepo } from '../workspaces/ui.tsx'
 import type { ArchitectureCode, PartCode } from './refs.ts'
 
@@ -29,7 +28,12 @@ export function PartSource({ code, where }: { code: PartCode; where?: Architectu
     <button
       className={cn(chipClass, 'cursor-pointer hover:border-brand/50 hover:text-foreground')}
       data-architect-source={label}
-      onClick={() => openReview(where.spec!, { file: source.path, line: source.line ?? 1 })}
+      onClick={() =>
+        events.emit('review:open', {
+          spec: where.spec!,
+          at: { file: source.path, line: source.line ?? 1 },
+        })
+      }
       title={`Open ${label} in Review, in the branch's change`}
       type="button"
     >

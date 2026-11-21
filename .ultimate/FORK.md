@@ -90,7 +90,8 @@ so branches adding divergences in parallel do not edit the same lines.
   local agent tool processes spawn through `workSpawn` so they land in the capped `work` cgroup, 2026-11-18 merge),
   `extensions/info/panel.solid.tsx` (the Execution section re-applied on upstream's Solid Info panel, 2026-11-20
   merge), `.ultimate/extensions/solid-progress/server.ts` (upstream's progress surface reads git through `ctx.exec`,
-  2026-11-20 merge)
+  2026-11-20 merge), `vite.config.ts` host-local allowlist (`extensions/antigravity/`: upstream's provider runs the
+  `agy` CLI login on the machine running Ultimate, like Claude Code, 2026-11-22 merge)
 - Why: Core-tier service running project and worktree commands where their directory lives; `exec.protocol` point for
   remote targets (pod-local proof). The give-back set includes 21b7d4cc: each protocol's `describe` and exec's
   `target` action, so the Info panel shows where a conversation's commands run. Extension actions' `ctx.exec` runs
@@ -167,7 +168,8 @@ so branches adding divergences in parallel do not edit the same lines.
 - Touches: `extensions/architect/` (with `agents/architect.md`), `extensions/mermaid/ui.tsx`, `extensions/review/ui.tsx`
   (`Recipient` export; upstream deleted the file as unused, the fork keeps it for this), `shared/extension-api.ts`
   (`defaultOff`), `test/architect.test.ts`. Its refs and props use upstream's branded `ConversationId` (2026-11
-  merge)
+  merge). Since the 2026-11-22 merge a source chip opens Review with upstream's `review:open` page event (upstream
+  dropped `openReview`)
 - Why: Off-by-default Architecture tab: an architect agent draws a branch's architectural change as Mermaid versions;
   the user's comments on parts go to the coordinator as input
 - Upstream: local-only
@@ -197,8 +199,9 @@ so branches adding divergences in parallel do not edit the same lines.
 
 - Touches: `extensions/cache-warming/` (new, grown from the fork's branch-cache: server, `due.ts`, `refs.ts`, the
   `@ultimate` and `branch` chips, README, tests), `lib/agents.ts` (`cache:` definition field: parse, serialize,
-  overlay diff and merge), `extensions/subagents/` (`refs.ts` type, `server.ts` save, `fields.tsx` Prompt cache
-  field, `definitions.tsx`, test), `agents/ultimate.md` and `agents/coordinator.md` (`cache:` defaults),
+  overlay diff and merge), `extensions/subagents/` (`refs.ts` type, `server.ts` save, test; since the 2026-11-22
+  merge the Prompt cache field is `CacheField` in upstream's Solid `fields.solid.tsx`, wired into its Solid
+  `definitions.solid.tsx` Agents editor), `agents/ultimate.md` and `agents/coordinator.md` (`cache:` defaults),
   `shared/extension-api.ts` (`keep-warm` in `defaultOff`), `test/ui-changed.test.ts` (enables `keep-warm` for
   upstream's `ui.changed` test of its switch, 2026-11-20 merge)
 - Why: one warmer for @ultimate and branch coordinators, configured per agent in the Agents panel and overridden per
@@ -267,7 +270,9 @@ so branches adding divergences in parallel do not edit the same lines.
 - Touches: `extensions/side-chat/` (open from a branch, fork at the newest finished step, read-only branch copies,
   labels naming main), `extensions/lineage/server.ts` (`branchOf` and catch-up skip side chats), `lib/acting-as.ts`
   (`isSideChat`), `lib/side-chat-guard.ts` and `extensions/codemode/server.ts` (codemode's nested tools and globals
-  get the side-chat guard), `extensions/sidebar/` (`sidebar.under-branch` point), `agents/coordinator.md` (one
+  get the side-chat guard), `extensions/sidebar/` (`sidebar.under-branch` point; since the 2026-11-22 merge it lives
+  in upstream's `points.ts` with an object input `{ conversation }`, rendered by the Solid in-flight row in
+  `root.solid.tsx`), `agents/coordinator.md` (one
   paragraph). Since the 2026-11-18 merge it sits beside upstream's question side chats (`open {message}`, read-only
   by `question`): branch copies keep `readOnly` and the full `lib/side-chat-guard.ts`, question copies keep upstream's
   `readOnlyCall` list; `Stage`, `Cut` and the header name the main (`@ultimate`, `#id · title`, or the asker);

@@ -1,5 +1,4 @@
-/** Review for other extensions' browser code: open the Review surface at a spec, and the actions behind it. */
-export { openReview } from './link.tsx'
+/** Review for other extensions' browser code: the recipient picker and the actions behind the Review surface. */
 export { Recipient } from './recipient.tsx'
 export type { ReviewTarget } from './link.tsx'
 export { DiffAction, RangesAction, RecipientAction, SendAction } from './refs.ts'
