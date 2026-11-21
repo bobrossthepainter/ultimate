@@ -104,7 +104,8 @@ so branches adding divergences in parallel do not edit the same lines.
   `docs/extensions/example-app.md` (checking other projects' extensions), `docs/extensions/actions.md` (stale
   fail-closed `ctx.exec` text removed), `skills/write-extension/`
 - Why: `check_extensions` tool: format, lint and type-check any project's `.ultimate/extensions/` with the clone's
-  config from Ultimate's own process
+  config from Ultimate's own process. Upstream's `scripts/check-extension.ts` (2026-11-23 merge) only type-checks from
+  a shell; Robert kept ours (card 633), and `places.md` names both
 - Upstream: candidate
 
 ### SSH exec extension
@@ -159,17 +160,20 @@ so branches adding divergences in parallel do not edit the same lines.
 - Touches: `extensions/mermaid/`, `package.json` + `pnpm-lock.yaml` (`mermaid`), `tsconfig.web.json` (`draw.ts`).
   Upstream's Markdown renderer became Solid in the 2026-11-20 merge, so `codeBlocks` renderers are Solid components:
   the diagram is `diagram.solid.tsx` (theme read from the `dark` class on `<html>`), Mermaid itself sits in `draw.ts`,
-  loaded with the first diagram, and `ui.tsx` re-exports `draw` and `token` for the architect
+  loaded with the first diagram, and `ui.solid.tsx` re-exports `draw` and `token` for the architect. Since the
+  2026-11-23 merge (upstream's Solid-only core) the facet is `web.solid.tsx`
 - Why: `mermaid` code blocks in messages draw as diagrams in the theme's colours, Mermaid loaded with the first one
 - Upstream: candidate
 
 ### Architect extension
 
-- Touches: `extensions/architect/` (with `agents/architect.md`), `extensions/mermaid/ui.tsx`, `extensions/review/ui.tsx`
-  (`Recipient` export; upstream deleted the file as unused, the fork keeps it for this), `shared/extension-api.ts`
+- Touches: `extensions/architect/` (with `agents/architect.md`), `extensions/mermaid/ui.solid.tsx`,
+  `extensions/review/ui.solid.tsx` (Solid `Recipient` export; upstream has no review contract, the fork keeps it for
+  this), `shared/extension-api.ts`
   (`defaultOff`), `test/architect.test.ts`. Its refs and props use upstream's branded `ConversationId` (2026-11
   merge). Since the 2026-11-22 merge a source chip opens Review with upstream's `review:open` page event (upstream
-  dropped `openReview`)
+  dropped `openReview`). Since the 2026-11-23 merge the whole extension is Solid (`*.solid.tsx`, kit controls,
+  an `architect:open` page event for its chips; Discard and Delete comment carry `data-agent-confirm`)
 - Why: Off-by-default Architecture tab: an architect agent draws a branch's architectural change as Mermaid versions;
   the user's comments on parts go to the coordinator as input
 - Upstream: local-only
@@ -192,7 +196,10 @@ so branches adding divergences in parallel do not edit the same lines.
   `readOnly`/`safeToRerun` on fork tools, and replaced two architect `exhaustive-deps` disables with `useEffectEvent`.
   The 2026-11-16 merge brought `no-unowned-work`: fork fire-and-forget work is named with `rebuiltOnOpen` (usage
   history, Plannotator sweep, ssh-exec first checks) or `inProcess` (preview route and Plannotator decision after
-  their process exits, ssh-exec recheck). New fork code follows the same rules
+  their process exits, ssh-exec recheck). The 2026-11-23 merge brought upstream's Solid-only core
+  (`ui-framework-boundaries`: no React in `extensions/`): every fork facet (architect, usage, caddy, cache-warming,
+  brave, upstream-sync, plannotator, check-extensions, mermaid) is now `web.solid.tsx` on the ui-sdk kit, with no lint
+  exception, and the fork's contracts are `ui.solid.tsx` (exec, mermaid, review). New fork code follows the same rules
 - Upstream: local-only
 
 ### Cache warming per agent
@@ -211,7 +218,8 @@ so branches adding divergences in parallel do not edit the same lines.
   `ok` ping on the next context, identity after the leading system message); @ultimate's window counts from the
   user's last input (480 min, 90 on caches under an hour), a coordinator's from its last request (30 min).
   Compaction before cold stays, off by default. `branchCache.models` is gone. `keep-warm`'s folder stays untouched
-  so merges stay cheap; re-check on each merge whether upstream changed it or the definition fields
+  so merges stay cheap; re-check on each merge whether upstream changed it or the definition fields. Since the
+  2026-11-23 merge the chips are Solid (`web.solid.tsx`, modelled on keep-warm's chip; minutes save on commit)
 - Upstream: candidate (replaces keep-warm; send with the cache findings in memory upstream-cache-feedback)
 
 ### Projects rail over Caddy
@@ -231,7 +239,9 @@ so branches adding divergences in parallel do not edit the same lines.
   once per address), `test/remote-spokes.test.ts`
 - Why: Usage surface: list-price cost of this instance's model calls by day, cost type, cache rebuilds (with cause),
   role, model and branch (with cache hit rate and rebuilds), and the same for every other Ultimate it reaches (hub
-  and spokes); spokes without the extension show their `pi.usage` totals
+  and spokes); spokes without the extension show their `pi.usage` totals. Today and custom date ranges (`frame.ts`,
+  #40887) joined it in the 2026-11-23 merge, when the surface became Solid (`web.solid.tsx`; `frame.ts` in
+  `tsconfig.web.json`)
 - Upstream: local-only (written generically, so it could be given back)
 
 ### @ultimate routes forwarded insights
@@ -246,7 +256,8 @@ so branches adding divergences in parallel do not edit the same lines.
 - Touches: `extensions/instance/` (`server.ts` start/stop/list publish through an optional `want(CaddyApi)`, `web.tsx`
   card; since the 2026-11-20 merge links in upstream's `link.solid.tsx`, the switcher in `switcher.solid.tsx`, and
   `onCaddy`/`reachable` in `previews.ts`, `refs.ts` `caddy`, README; since the 2026-11-21 merge the card's Caddy link
-  sits in upstream's Solid `call.solid.tsx`, and `web.tsx` keeps the switcher on without `canFrameLoopbackPreviews`), `extensions/caddy/` (`publishRoute`/`unpublishRoute`,
+  sits in upstream's Solid `call.solid.tsx`; since the 2026-11-23 merge upstream's `web.solid.tsx` keeps the
+  switcher on without `canFrameLoopbackPreviews`, and `switcher.solid.tsx` reads through `useExternal`), `extensions/caddy/` (`publishRoute`/`unpublishRoute`,
   README), `server/main.ts` (an unsupervised server honours `ULTIMATE_PROXY_ORIGIN`, beside upstream's SIGINT/SIGTERM
   handlers, which moved into that branch in the 2026-11-17 merge),
   `.ultimate/skills/preview-demo/`, `skills/ui-preview-round/SKILL.md`, `extensions/instance/test/e2e/instance.test.ts`.
@@ -269,8 +280,10 @@ so branches adding divergences in parallel do not edit the same lines.
   by `question`): branch copies keep `readOnly` and the full `lib/side-chat-guard.ts`, question copies keep upstream's
   `readOnlyCall` list; `Stage`, `Cut` and the header name the main (`@ultimate`, `#id · title`, or the asker);
   `isSideChat` in `lib/acting-as.ts` is now upstream's. Since the 2026-11-21 merge the composer frame is upstream's
-  Solid `frame.solid.tsx`, with the fork's branch main re-applied (`mainName`/`shortName` in `logic.ts`, shared with
-  the React `Stage`)
+  Solid `frame.solid.tsx`, with the fork's branch main re-applied (`mainName`/`shortName` in `logic.ts`). Since the
+  2026-11-23 merge the rest is upstream's Solid `web.solid.tsx` with the fork re-applied: `UnderBranch` rows,
+  the main's name in `Stage`, the header and `Cut`, and `Unlisted` by the `side-chat` label; `UnderBranch` is a
+  Solid point exported from `sidebar/ui.solid.tsx`
 - Why: ask a running branch questions without disturbing it; a branch is usually mid-run, so the fork point moved
   from the last answered input to the newest finished tool round, for @ultimate too
 - Upstream: candidate
