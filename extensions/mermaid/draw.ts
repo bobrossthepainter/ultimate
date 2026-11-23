@@ -63,10 +63,10 @@ function config(theme: 'dark' | 'light') {
 }
 
 function natural(svg: string) {
-  const element = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement
+  const element = new DOMParser().parseFromString(svg, 'text/html').querySelector('svg')!
   const width = element.getAttribute('viewBox')?.split(/\s+/)[2]
   if (width) element.setAttribute('width', width)
-  return new XMLSerializer().serializeToString(element)
+  return element.outerHTML
 }
 
 let queue: Promise<unknown> = Promise.resolve()
