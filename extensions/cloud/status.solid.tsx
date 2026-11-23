@@ -245,7 +245,7 @@ export function CloudStatus() {
       <Match when={data()?.status === 'local'}>
         <span
           class="flex items-center gap-1.5 text-muted-foreground/70"
-          title="The project has no GitHub origin, so it is not backed up"
+          title="The project has no Git host origin, so it is not backed up"
         >
           <Cloud class="size-3" />
           not backed up

@@ -83,7 +83,9 @@ export async function backup(host: ExtensionHost, force: boolean) {
         'This machine is a satellite (cloud.satellite in user settings): it never backs up, so it cannot replace the backups of the machine that owns this project',
       )
     if (ready.status === 'local')
-      throw new Error(`${host.projectRoot} has no GitHub origin remote, so it cannot be backed up`)
+      throw new Error(
+        `${host.projectRoot} has no Git host origin remote, so it cannot be backed up`,
+      )
     return await upload(host, running, ready, force)
   } finally {
     running.backup = undefined

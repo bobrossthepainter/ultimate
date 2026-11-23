@@ -12,7 +12,7 @@ export type CloudService = {
    * restart let this home record it). Undefined unless backups are on and the chapter has one.
    */
   lastBackup(): Promise<LastBackup | undefined>
-  /** Off when unconfigured; local when the project has no GitHub origin; satellite when this machine never backs up. */
+  /** Off when unconfigured; local when the project has no Git host origin; satellite when this machine never backs up. */
   status(): Promise<'off' | 'local' | 'satellite' | 'on'>
 }
 /** Optional chapter backup service; resolve with `want` at call time. */

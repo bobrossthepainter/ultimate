@@ -316,3 +316,12 @@ so branches adding divergences in parallel do not edit the same lines.
   `queueMicrotask` too, so they never ran and the worker died out of heap. The mock now holds only the store's
   `flush` and passes other microtasks through (2026-11-23 merge)
 - Upstream: candidate
+
+### Cloud identity for any Git host
+
+- Touches: `lib/project-identity.ts` (`remoteKey`; `projectIdentity` uses it, `projectKey`/`githubRepo` stay
+  GitHub-only), `test/cloud-identity.test.ts`, the "no Git host origin" wording in `extensions/cloud/`,
+  `extensions/dream/` and `scripts/restore.ts`
+- Why: projects whose origin is a Gitea/Forgejo or GitLab host get backed up as `<host>/<owner>/<repo>`; GitHub keys
+  stay byte-identical
+- Upstream: candidate

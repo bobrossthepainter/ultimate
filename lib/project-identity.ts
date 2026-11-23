@@ -34,12 +34,22 @@ export async function readGithubRepo(key: string): Promise<GithubRepo> {
   }
 }
 
+export function remoteKey(remote: string): string | undefined {
+  const trimmed = remote.trim()
+  const scp = /^(?:[^@/]+@)?([^/:]+):(?!\/)(.*)$/.exec(trimmed)
+  const url = scp ? undefined : URL.parse(trimmed)
+  const host = (scp ? scp[1] : url?.hostname)?.toLowerCase()
+  const path = (scp ? scp[2] : url?.pathname)?.split('/').filter(Boolean)
+  if (!host || !path) return undefined
+  path.push(path.pop()?.replace(/\.git$/i, '') ?? '')
+  if (path.length < 2 || !path.every((part) => /^[\w.-]+$/.test(part))) return undefined
+  if (host === 'github.com' && path.length !== 2) return undefined
+  return [host, ...path].join('/').toLowerCase()
+}
+
 export function projectKey(remote: string): string | undefined {
-  const match =
-    /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/*$/i.exec(
-      remote.trim(),
-    )
-  return match ? `github.com/${match[1]}/${match[2]}`.toLowerCase() : undefined
+  const key = remoteKey(remote)
+  return key?.startsWith('github.com/') ? key : undefined
 }
 
 export const githubRepo = (projectRoot: string) =>
@@ -49,7 +59,7 @@ export async function projectIdentity(
   root: string,
 ): Promise<{ key: string; rootCommit: string } | undefined> {
   try {
-    const key = projectKey(await git(root, 'remote', 'get-url', 'origin'))
+    const key = remoteKey(await git(root, 'remote', 'get-url', 'origin'))
     if (!key) return undefined
     const rootsNewestFirst = (await git(root, 'rev-list', '--max-parents=0', 'HEAD')).split('\n')
     const rootCommit = rootsNewestFirst.at(-1)!

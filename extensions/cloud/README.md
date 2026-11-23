@@ -17,9 +17,10 @@ process-scoped experiments: `ULTIMATE_CLOUD_URL`, `ULTIMATE_CLOUD_TOKEN`, `ULTIM
 `ULTIMATE_CLOUD_MACHINE`. Preview instances stay silent unless `ULTIMATE_CLOUD_URL` is set explicitly;
 previews strip the cloud variables they inherit.
 
-A project is its GitHub repository (`lib/project-identity.ts`): the `origin` remote normalised to
-`github.com/<owner>/<repo>`, lowercased. A project without a GitHub origin cannot be backed up; its status line says
-`not backed up`.
+A project is its Git repository (`lib/project-identity.ts`): the `origin` remote (HTTPS, `ssh://` or scp-style
+`git@host:path`) normalised to `<host>/<owner>/<repo>`, lowercased, without user, port and `.git`; nested groups stay
+(`<host>/<group>/<sub>/<repo>`). GitHub origins give `github.com/<owner>/<repo>`. A project without such an origin
+cannot be backed up; its status line says `not backed up`.
 
 ## Satellites
 

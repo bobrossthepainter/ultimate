@@ -199,7 +199,7 @@ it.each([undefined, 'off', 'local'] as const)(
     const result = await actions.asleep({ name: 'other-name' }, f.call)
     const reasons = {
       off: 'Cloud backups are off',
-      local: 'Project has no GitHub origin; cloud backup is local-only',
+      local: 'Project has no Git host origin; cloud backup is local-only',
     }
     expect(result).toMatchObject({
       sleep: {
