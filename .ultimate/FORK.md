@@ -93,7 +93,9 @@ so branches adding divergences in parallel do not edit the same lines.
   merge), `vite.config.ts` host-local allowlist (`extensions/antigravity/`: upstream's provider runs the
   `agy` CLI login on the machine running Ultimate, like Claude Code, 2026-11-22 merge), `extensions/lineage/catchup.ts`
   (upstream's untracked-file `ls-files` in `changedFiles` routed through `exec.git`, and
-  `extensions/coding-tools/background.ts` keeps upstream's `dropHostNodeEnv` through `exec.start`, 2026-11-23 merge)
+  `extensions/coding-tools/background.ts` keeps upstream's `dropHostNodeEnv` through `exec.start`, 2026-11-23 merge;
+  `extensions/subagents/server.ts` keeps its stop-time `git diff` on the `Exec` service, dropping upstream's
+  `lib/exec.ts` import, second 2026-11-23 merge)
 - Why: Core-tier service running project and worktree commands where their directory lives; `exec.protocol` point for
   remote targets (pod-local proof). The give-back set includes 21b7d4cc: each protocol's `describe` and exec's
   `target` action, so the Info panel shows where a conversation's commands run. Extension actions' `ctx.exec` runs
@@ -306,3 +308,11 @@ so branches adding divergences in parallel do not edit the same lines.
   fork's SVG `extensions/mermaid`, which the user approved; one renderer per job. `lovely-mermaid` stays installed
   but unused. Re-check on each merge whether upstream changed either renderer
 - Upstream: local-only
+
+### Store test queues only the flush microtask
+
+- Touches: `test/web/store.test.ts` ("still dispatches valid opens … when one local 413 callback throws")
+- Why: upstream's test mocks every `queueMicrotask` into an array; on Node 26.13 undici's body reads use
+  `queueMicrotask` too, so they never ran and the worker died out of heap. The mock now holds only the store's
+  `flush` and passes other microtasks through (2026-11-23 merge)
+- Upstream: candidate

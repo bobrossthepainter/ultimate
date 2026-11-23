@@ -730,8 +730,10 @@ describe('web replica store', () => {
     await tick()
     const secondRefusal: unknown[] = []
     const microtasks: (() => void)[] = []
+    const queue = globalThis.queueMicrotask
     const spy = vi.spyOn(globalThis, 'queueMicrotask').mockImplementation((fn) => {
-      microtasks.push(fn)
+      if (fn.name === 'flush') microtasks.push(fn)
+      else queue(fn)
     })
     try {
       store.watchRead(
