@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { Flame, X } from '@lucide/solid'
 import { For, Show, createMemo } from 'solid-js'
 import type { ConversationId } from '@earendil-works/pi-durable'
@@ -15,10 +14,10 @@ import {
   formatAgo,
   keepLast,
   useAction,
+  useConversationId,
   useConversations,
   useDocOf,
   useNow,
-  useShownConversation,
 } from '@/sdk/solid'
 import { StandingDoc } from '../subagents/refs.ts'
 import { duration } from './duration.ts'
@@ -311,7 +310,7 @@ export function UltimateChip() {
 }
 
 export function BranchChip() {
-  const shown = useShownConversation()
+  const shown = useConversationId()
   const conversations = useConversations()
   const coordinator = createMemo(() => {
     const row = conversations().find((summary) => summary.id === shown())

@@ -12,6 +12,7 @@ import {
   surfaceItems,
 } from './registry.ts'
 import type { CommandItem } from './registry.ts'
+import type { UiState } from './store.ts'
 import type { CommandContribution, UltimateActions, UltimateContext } from './types.ts'
 import { overlays, viewport } from './viewport.ts'
 import type { Viewport } from './viewport.ts'
@@ -68,14 +69,26 @@ export const regionKeys = {
   panels: [shellKeys.panelOpen, false],
 } as const
 
-export const ownDefault = (region: Region, on: Viewport) => on === 'tablet' && region === 'sidebar'
+const ownDefault = (region: Region, on: Viewport) => on === 'tablet' && region === 'sidebar'
+
+export function regionOpenOn(
+  region: Region,
+  on: Viewport,
+  desktop: boolean,
+  open: UiState['open'],
+) {
+  return on === 'desktop' ? desktop : (open?.[on]?.[region] ?? ownDefault(region, on))
+}
 
 export function regionOpen(region: Region) {
-  const on = viewport()
-  if (on !== 'desktop') return store.getState().ui.open?.[on]?.[region] ?? ownDefault(region, on)
   const [key, fallback] = regionKeys[region]
   const value = uiState.get(key)
-  return typeof value === 'boolean' ? value : fallback
+  return regionOpenOn(
+    region,
+    viewport(),
+    typeof value === 'boolean' ? value : fallback,
+    store.getState().ui.open,
+  )
 }
 
 function setRegionOpen(region: Region, open: boolean) {
@@ -124,17 +137,17 @@ export const actions: UltimateActions = {
   close: (dialog) => store.setUi({ dialogs: { ...store.getState().ui.dialogs, [dialog]: false } }),
   openPalette: () => store.setUi({ paletteOpen: true }),
 
-  focusComposer: () =>
-    [
-      document.getElementById('composer-input'),
-      ...document.querySelectorAll('[data-composer-target] textarea'),
-    ]
-      .find(function isUncoveredComposer(input): input is HTMLElement {
-        return input instanceof HTMLElement && !input.closest('[inert]')
-      })
-      ?.focus(),
+  focusComposer: () => uncoveredComposer()?.focus(),
   setTheme: (theme) => store.setUi({ theme }),
 }
+
+export const uncoveredComposer = () =>
+  [
+    document.getElementById('composer-input'),
+    ...document.querySelectorAll('[data-composer-target] textarea'),
+  ].find(function isUncoveredComposer(input): input is HTMLElement {
+    return input instanceof HTMLElement && !input.closest('[inert]')
+  })
 
 export function runCommand(id: string, context: UltimateContext = currentContext()) {
   const command = allCommands().find((candidate) => candidate.id === id)

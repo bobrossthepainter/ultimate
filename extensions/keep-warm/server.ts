@@ -23,11 +23,12 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { onCommit } from '../../lib/commits.ts'
 import { admitCompaction, compacting } from '../../lib/compaction.ts'
 import { inProcess, rebuiltOnOpen } from '../../lib/errors.ts'
-import { parseConversationId } from '../../lib/ids.ts'
+import { conversationIdentity, parseConversationId } from '../../lib/ids.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
-import { deadline } from '../../lib/timers.ts'
+import { deadline, nextTurn } from '../../lib/timers.ts'
 import type { Cancel } from '../../lib/timers.ts'
 import { ContextUsageDoc, ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
@@ -80,9 +81,15 @@ type Run = {
   cancel?: Cancel
 }
 
+type Dormant = Pick<
+  Run,
+  'id' | 'model' | 'payload' | 'ttl' | 'delayBeforeRefresh' | 'realRequestAt' | 'lastCacheRequestAt'
+>
+
 type Runs = {
   sent: Map<ConversationId, { model: Model<Api>; payload: unknown; at: number }>
   active: Map<ConversationId, Run>
+  dormant: Map<ConversationId, Dormant>
   stopped: Map<ConversationId, string>
 }
 
@@ -205,7 +212,9 @@ async function situationOf(
   if (kind === 'coordinator') {
     const concluded = await host.need(ConversationsApi).concluded(context)
     const warming: Run[] = []
-    for (const other of runs.active.values()) {
+    const candidates =
+      runs.active.get(run.id) === run ? runs.active.values() : [...runs.active.values(), run]
+    for (const other of candidates) {
       if ((await warmedKind(host, other.id)) !== 'coordinator' || concluded.has(other.id)) continue
       if (
         other.id === run.id ||
@@ -236,11 +245,22 @@ async function situationOf(
   return { situation, policy: effective }
 }
 
-function stop(runs: Runs, run: Run, reason: string) {
+function stop(runs: Runs, run: Run, reason: string, rearmable = false) {
   if (runs.active.get(run.id) !== run) return
   runs.active.delete(run.id)
   run.cancel?.()
   run.controller.abort()
+  if (rearmable)
+    runs.dormant.set(run.id, {
+      id: run.id,
+      model: run.model,
+      ...(run.payload !== undefined ? { payload: run.payload } : {}),
+      ttl: run.ttl,
+      delayBeforeRefresh: run.delayBeforeRefresh,
+      realRequestAt: run.realRequestAt,
+      lastCacheRequestAt: run.lastCacheRequestAt,
+    })
+  else runs.dormant.delete(run.id)
   runs.stopped.set(run.id, reason)
 }
 
@@ -270,38 +290,17 @@ async function commitPing(
   }, context)
 }
 
-async function pingRequest(host: ExtensionHost, run: Run) {
-  const signal = AbortSignal.any([run.controller.signal, AbortSignal.timeout(PING_TIMEOUT_MS)])
-  if (run.payload !== undefined) {
-    const replayed = run.payload
-    return host.modelRuntime
-      .streamSimple(
-        run.model,
-        { messages: [] },
-        {
-          ...getCacheWarmingRequestOptions({}, signal),
-          onPayload: () => replayed,
-        },
-      )
-      .result()
-  }
-  const { messages, agent } = await nextRequestMessages(host, run.id)
-  messages.push({ role: 'user', content: PING_QUESTION, timestamp: Date.now() })
-  return host.modelRuntime
-    .streamSimple(
-      run.model,
-      { messages },
-      {
-        ...(agent.thinkingLevel === 'off' ? {} : { reasoning: agent.thinkingLevel }),
-        maxRetries: 0,
-        signal,
-      },
-    )
-    .result()
+async function preparePing(host: ExtensionHost, run: Run) {
+  if (run.payload !== undefined) return { payload: run.payload }
+  return nextRequestMessages(host, run.id)
 }
 
 async function sendPing(host: ExtensionHost, runs: Runs, run: Run) {
+  const prepared = await preparePing(host, run)
+  if (run.controller.signal.aborted || runs.active.get(run.id) !== run) return
+  if (host.want(PauseApi)?.paused()) return stop(runs, run, 'Ultimate is paused', true)
   const at = Date.now()
+  if (at > lateRefreshCutoff(run)) return stop(runs, run, 'Refresh came too late')
   const attempt: Ping = {
     at,
     provider: run.model.provider,
@@ -313,9 +312,40 @@ async function sendPing(host: ExtensionHost, runs: Runs, run: Run) {
     doc.last = attempt
     doc.pings = (doc.pings ?? 0) + 1
   }, context)
+  if (run.controller.signal.aborted || runs.active.get(run.id) !== run) return
+  const signal = AbortSignal.any([run.controller.signal, AbortSignal.timeout(PING_TIMEOUT_MS)])
   let answer: AssistantMessage
   try {
-    answer = await pingRequest(host, run)
+    answer =
+      'payload' in prepared
+        ? await host.modelRuntime
+            .streamSimple(
+              run.model,
+              { messages: [] },
+              {
+                ...getCacheWarmingRequestOptions({}, signal),
+                onPayload: () => prepared.payload,
+              },
+            )
+            .result()
+        : await host.modelRuntime
+            .streamSimple(
+              run.model,
+              {
+                messages: [
+                  ...prepared.messages,
+                  { role: 'user', content: PING_QUESTION, timestamp: at },
+                ],
+              },
+              {
+                ...(prepared.agent.thinkingLevel === 'off'
+                  ? {}
+                  : { reasoning: prepared.agent.thinkingLevel }),
+                maxRetries: 0,
+                signal,
+              },
+            )
+            .result()
   } catch (error) {
     if (run.controller.signal.aborted) return
     const message = error instanceof Error ? error.message : String(error)
@@ -356,7 +386,7 @@ async function startCompaction(host: ExtensionHost, runs: Runs, run: Run, tokens
 async function refresh(host: ExtensionHost, runs: Runs, run: Run) {
   run.cancel = undefined
   if (runs.active.get(run.id) !== run) return
-  if (host.want(PauseApi)?.paused()) return stop(runs, run, 'Ultimate is paused')
+  if (host.want(PauseApi)?.paused()) return stop(runs, run, 'Ultimate is paused', true)
   if (
     !(await warmedKind(host, run.id)) ||
     (await host.need(ConversationsApi).concluded(context)).has(run.id)
@@ -370,7 +400,7 @@ async function refresh(host: ExtensionHost, runs: Runs, run: Run) {
   const step = decide(situation, policy)
   if (step === 'ping') return sendPing(host, runs, run)
   if (step === 'compact') return startCompaction(host, runs, run, situation.tokens)
-  stop(runs, run, step.stop)
+  stop(runs, run, step.stop, step.stop !== 'Refresh came too late' && step.stop !== 'Compacted')
 }
 
 function schedule(host: ExtensionHost, runs: Runs, run: Run) {
@@ -401,6 +431,7 @@ async function start(
   runs.sent.delete(id)
   const previous = runs.active.get(id)
   if (previous) stop(runs, previous, 'Context changed')
+  runs.dormant.delete(id)
   runs.stopped.delete(id)
   const model = sent
     ? sent.model
@@ -524,38 +555,106 @@ async function carryOverOff(host: ExtensionHost) {
   }, context)
 }
 
+async function resumeOne(
+  host: ExtensionHost,
+  runs: Runs,
+  id: ConversationId,
+  facet: { closed: boolean },
+) {
+  if (runs.active.has(id)) return
+  const ref = (await agentOf(host, id))?.model
+  if (ref?.provider !== 'claude-code') return
+  const model = host.modelRuntime.getModel(ref.provider, ref.modelId)
+  const timing = model && cacheTiming(model)
+  if (!model || !timing) return
+  const recovered = recoverRun(
+    await newestOutcome(host, id, timing.ttl),
+    (await readDoc(host, id)).last,
+    model,
+  )
+  if (!recovered || facet.closed || runs.active.has(id)) return
+  const cutoff = lateRefreshCutoff({
+    ...timing,
+    lastCacheRequestAt: recovered.lastCacheRequestAt,
+  })
+  if (Date.now() > cutoff) return
+  const run: Run = {
+    id,
+    model,
+    ...timing,
+    ...recovered,
+    nextAt: recovered.lastCacheRequestAt + timing.delayBeforeRefresh,
+    controller: new AbortController(),
+  }
+  runs.dormant.delete(id)
+  runs.stopped.delete(id)
+  runs.active.set(id, run)
+  schedule(host, runs, run)
+}
+
 async function resume(host: ExtensionHost, runs: Runs, facet: { closed: boolean }) {
   await carryOverOff(host)
   const concluded = await host.need(ConversationsApi).concluded(context)
   for (const id of await warmedConversations(host)) {
-    if (concluded.has(id) || runs.active.has(id)) continue
-    const ref = (await agentOf(host, id))?.model
-    if (ref?.provider !== 'claude-code') continue
-    const model = host.modelRuntime.getModel(ref.provider, ref.modelId)
-    const timing = model && cacheTiming(model)
-    if (!model || !timing) continue
-    const recovered = recoverRun(
-      await newestOutcome(host, id, timing.ttl),
-      (await readDoc(host, id)).last,
-      model,
-    )
-    if (!recovered || facet.closed || runs.active.has(id)) continue
-    const cutoff = lateRefreshCutoff({
-      ...timing,
-      lastCacheRequestAt: recovered.lastCacheRequestAt,
-    })
-    if (Date.now() > cutoff) continue
-    const run: Run = {
-      id,
-      model,
-      ...timing,
-      ...recovered,
-      nextAt: recovered.lastCacheRequestAt + timing.delayBeforeRefresh,
+    if (concluded.has(id)) continue
+    await resumeOne(host, runs, id, facet)
+  }
+}
+
+async function rearm(
+  host: ExtensionHost,
+  runs: Runs,
+  id: ConversationId,
+  facet: { closed: boolean } = { closed: false },
+) {
+  if (facet.closed || runs.active.has(id) || host.want(PauseApi)?.paused()) return
+  const saved = runs.dormant.get(id)
+  if (saved) {
+    const now = Date.now()
+    if (now > lateRefreshCutoff(saved)) {
+      runs.dormant.delete(id)
+      return
+    }
+    if (
+      !(await warmedKind(host, id)) ||
+      (await host.need(ConversationsApi).concluded(context)).has(id)
+    ) {
+      runs.dormant.delete(id)
+      return
+    }
+    const model = (await agentOf(host, id))?.model
+    if (model?.provider !== saved.model.provider || model.modelId !== saved.model.id) {
+      runs.dormant.delete(id)
+      return
+    }
+    const candidate: Run = {
+      ...saved,
+      nextAt: saved.lastCacheRequestAt + saved.delayBeforeRefresh,
       controller: new AbortController(),
     }
-    runs.active.set(id, run)
-    schedule(host, runs, run)
+    const checkAt = Math.max(now, candidate.nextAt)
+    const { situation, policy } = await situationOf(
+      host,
+      runs,
+      candidate,
+      checkAt,
+      await discover(host),
+    )
+    if (facet.closed || runs.active.has(id) || runs.dormant.get(id) !== saved) return
+    const step = decide(situation, policy)
+    if (typeof step !== 'string') {
+      if (step.stop === 'Refresh came too late' || step.stop === 'Compacted')
+        runs.dormant.delete(id)
+      runs.stopped.set(id, step.stop)
+      return
+    }
+    runs.dormant.delete(id)
+    runs.stopped.delete(id)
+    runs.active.set(id, candidate)
+    schedule(host, runs, candidate)
+    return
   }
+  await resumeOne(host, runs, id, facet)
 }
 
 const text = (message: AssistantMessage) =>
@@ -581,7 +680,7 @@ async function commitCompactionUsage(
 async function nextRequestMessages(host: ExtensionHost, id: ConversationId) {
   const conversation = (await host.harness().conversation(id, context))!
   let messages: Message[] = [...(await conversation.context(context)).messages]
-  const leadingConversationIdentity = `You are conversation #${id}.`
+  const leadingConversationIdentity = conversationIdentity(id)
   if (
     !messages.some(
       (message) => message.role === 'user' && message.content === leadingConversationIdentity,
@@ -718,6 +817,7 @@ export default function keepWarm(host: ExtensionHost) {
   const facet = { closed: false }
   const stopAll = (reason: string) => {
     for (const run of runs.active.values()) stop(runs, run, reason)
+    runs.dormant.clear()
     runs.sent.clear()
   }
   host.react(
@@ -730,7 +830,40 @@ export default function keepWarm(host: ExtensionHost) {
     },
     { from: 'now' },
   )
-  host.onOpen(async () => {
+  host.onOpen(async (opened) => {
+    let wasPaused = Boolean(host.want(PauseApi)?.paused())
+    let cancelRearm: Cancel | undefined
+    const stopWatchingPause = onCommit(host.harness(), (publication) => {
+      for (const change of publication.changes) {
+        if (
+          change.type !== 'document' ||
+          change.kind !== 'change' ||
+          change.conversationId !== ROOT_CONVERSATION_ID ||
+          change.record.kind !== 'pause.state'
+        )
+          continue
+        const nowPaused = Boolean(change.value.paused)
+        const resumedFromPause = wasPaused && !nowPaused
+        wasPaused = nowPaused
+        if (resumedFromPause) {
+          cancelRearm?.()
+          cancelRearm = nextTurn(() =>
+            inProcess(
+              're-arming dormant warming runs belongs to this open process',
+              (async () => {
+                for (const id of runs.dormant.keys()) await rearm(host, runs, id, facet)
+                await resume(host, runs, facet)
+              })().catch((error: unknown) => host.notice(`Keep warm: ${String(error)}`)),
+            ),
+          )
+        }
+      }
+    })
+    opened.defer(() => {
+      cancelRearm?.()
+      stopWatchingPause()
+      stopAll('Ultimate restarted')
+    })
     rebuiltOnOpen(
       'warming runs are rebuilt from the stored answers and pings each time the extension opens',
       resume(host, runs, facet).catch((error: unknown) =>
@@ -738,7 +871,6 @@ export default function keepWarm(host: ExtensionHost) {
       ),
     )
   })
-  host.onRelease(async () => stopAll('Ultimate restarted'))
   host.onClose(async () => {
     facet.closed = true
     stopAll('Keep warm reloaded')
@@ -767,6 +899,7 @@ export default function keepWarm(host: ExtensionHost) {
       hook(CompactionTask, {
         beforeCompact: async (_compaction, api, ctx) => {
           runs.sent.delete(api.conversationId)
+          runs.dormant.delete(api.conversationId)
           const run = runs.active.get(api.conversationId)
           if (run) stop(runs, run, 'Compacted')
           const doc = await api.snapshot(State, api.conversationId, ctx)
@@ -788,6 +921,7 @@ const runsOf = (host: ExtensionHost) =>
   host.resource<Runs>('keep-warm.runs', () => ({
     sent: new Map(),
     active: new Map(),
+    dormant: new Map(),
     stopped: new Map(),
   }))
 
@@ -839,7 +973,11 @@ export const actions = {
         else Object.assign(doc, { [key]: value })
       }
     }, context)
-    return state(host, runsOf(host), id)
+    const runs = runsOf(host)
+    await rearm(host, runs, id)
+    for (const dormantId of runs.dormant.keys())
+      if (dormantId !== id) await rearm(host, runs, dormantId)
+    return state(host, runs, id)
   }),
 }
 export const userActions = ['set']

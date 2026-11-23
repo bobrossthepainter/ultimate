@@ -1,10 +1,10 @@
-/** @jsxImportSource @solidjs/web */
 import { createAgent } from '@ui-sdk/solid/agent'
 import { flush } from 'solid-js'
 import { expect, it, vi } from 'vitest'
 import { ExtensionName } from '@/sdk/solid'
 import { SOURCE_HEADER } from '../../../../shared/protocol.ts'
 import type { UiUpdateRequest } from '../../../../shared/protocol.ts'
+import { expectDistinctAgentNames } from '../../../../test/web/agent-names.ts'
 import { FakeSource } from '../../../../test/web/fake-source.ts'
 import { renderSolid } from '../../../../test/web/solid-dom-setup.ts'
 import { store, uiState } from '../../../../web/src/sdk/client.ts'
@@ -20,7 +20,7 @@ vi.mock('../../../../web/src/sdk/client.ts', async () => {
   const { createUiState } = await import('../../../../web/src/sdk/ui-state.ts')
   const { createRegistry } = await import('../../../../web/src/sdk/registry.ts')
   const fetch = async (path: RequestInfo | URL, init?: RequestInit) => {
-    if (path !== '/api/ui') return Response.json({ ok: true })
+    if (path !== '/api/ui') return Response.json({ ok: true, refused: {} })
     const { ops } = JSON.parse(init!.body as string) as UiUpdateRequest
     const source = new Headers(init?.headers).get(SOURCE_HEADER)
     for (const { key, value } of ops) harness.writes.push({ key, value, source })
@@ -63,9 +63,10 @@ it('lets an agent open Sounds, set the variant and volume, and turn sounds off',
   const changes = vi.fn<Parameters<typeof agent.subscribe>[0]>()
   onTestFinished(agent.subscribe(changes))
   const opened = await agent.act({
-    steps: [{ ref: control('Sounds', 'popover').ref, action: 'setOpen', args: [true] }],
+    steps: [{ ref: control('Sound settings', 'popover').ref, action: 'setOpen', args: [true] }],
   })
   expect(opened).toMatchObject({ ok: true })
+  await expectDistinctAgentNames(agent)
   const variant = control('Variant', 'segmented-control')
   expect(variant).toMatchObject({ value: 'chiptune' })
   const orchestra = variant.items?.find((item) => item.label === 'Orchestra')

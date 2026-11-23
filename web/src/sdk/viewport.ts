@@ -1,5 +1,3 @@
-import { useSyncExternalStore } from 'react'
-
 /**
  * How much room the window has. On a `phone` the sidebar and the panel overlay the conversation; on a `tablet` (an
  * unfolded foldable, a narrow window) the sidebar docks beside it and the panel overlays; on a `desktop` both dock.
@@ -20,7 +18,7 @@ export function viewport(): Viewport {
   return desktop.matches ? 'desktop' : tablet.matches ? 'tablet' : 'phone'
 }
 
-function subscribe(listener: () => void) {
+export function subscribeViewport(listener: () => void) {
   const { tablet, desktop } = media()
   tablet.addEventListener('change', listener)
   desktop.addEventListener('change', listener)
@@ -29,8 +27,6 @@ function subscribe(listener: () => void) {
     desktop.removeEventListener('change', listener)
   }
 }
-
-export const useViewport = () => useSyncExternalStore(subscribe, viewport)
 
 /** Whether the device types on a touch keyboard, which focusing an input would slide up over the page. */
 export const touchKeyboard = () => matchMedia('(pointer: coarse)').matches

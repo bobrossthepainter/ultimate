@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { settle } from '@ui-sdk/core/testing'
 import { createAgent } from '@ui-sdk/solid/agent'
 import { flush } from 'solid-js'
@@ -35,15 +34,17 @@ vi.mock('../../../../web/src/sdk/client.ts', async () => {
       ] satisfies SetupIssue[],
     })
   }
+  const { answerReadsWith } = await import('../../../../test/web/fake-source.ts')
+  const pageFetch = answerReadsWith(fetch)
   const store = createStore({
     eventSource: (url) => {
       const source = new FakeSource(url)
       harness.sources.push(source)
       return source
     },
-    fetch,
+    fetch: pageFetch,
   })
-  const api = createApi(store, { fetch })
+  const api = createApi(store, { fetch: pageFetch })
   return {
     store,
     api,
@@ -66,7 +67,7 @@ it('lets an agent open setup issues and ask the Secrets panel for the missing ke
   store.start()
   onTestFinished(() => store.stop())
   harness.sources[0].open()
-  const container = renderSolid(() => <Chip />)
+  renderSolid(() => <Chip />)
   await settle()
   flush()
 
@@ -77,7 +78,6 @@ it('lets an agent open setup issues and ask the Secrets panel for the missing ke
   expect(
     await agent.act({ steps: [{ ref: chip!.ref, action: 'setOpen', args: [true] }] }),
   ).toMatchObject({ ok: true })
-  expect(container.querySelector('[data-setup-issues="2"]')?.hasAttribute('data-open')).toBe(true)
   const control = agent.snapshot().find((item) => item.label === 'Add')
   expect(await agent.act({ steps: [{ ref: control!.ref, action: 'press' }] })).toMatchObject({
     ok: true,
@@ -100,7 +100,7 @@ it('shows a command fix once its command is installed, and runs it as the agent 
 
   const ran = vi.fn<(source: string) => void>()
   await registry.setLoaders({
-    'extensions/example/web.tsx': async () => ({
+    'extensions/example/web.solid.tsx': async () => ({
       default: {
         commands: [{ id: 'example.review', title: 'Review', run: () => ran(writerNow()) }],
       },

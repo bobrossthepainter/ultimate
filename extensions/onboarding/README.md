@@ -38,7 +38,7 @@ while @ultimate is idle, its newest run failed that way and nothing since the st
 meanwhile may have failed too), a repeated call continues it instead, checked and admitted in one commit, so two calls
 start one run. Once @ultimate answered anything after the start, onboarding is under way and a call sends nothing.
 
-Start here is a card above @ultimate's composer (`survey.tsx`, through the SDK's `composer` renderer) until
+Start here is a card above @ultimate's composer (`survey.solid.tsx`, through the SDK's `composer` renderer) until
 onboarding has run for the project's root: `onboarding.starts` names the root, or the root carries memories (a new
 chapter's root, set up long ago; `onboarded.ts`). Its one button, **Set up with @ultimate**, calls `start { root }`,
 like Get ready's Continue; once that records the root, the card is gone for good. While @ultimate's model has no
@@ -68,15 +68,17 @@ the agent should wait for an `onboarding.choice` input before continuing.
 
 The tool renderer shows a quiet, transcript-width card:
 
-- **Extensions:** recommended extensions as checkboxes, initially checked unless the user's settings disable them.
-  The default-off built-ins (`cloud`, `parallel`, `tailscale`, `health`, `classify`, `phase`, `sounds`;
-  see [settings](../../docs/settings.md)) start unchecked unless the user's settings enable them, each with one line
-  on what it needs (a key, a service, a Worker).
-  Core-tier extensions (`ExtensionInfo.core`, such as `subagents`, `messages`, `lineage`, `onboarding` and `documents`)
-  stay checked and disabled with "core, always on": the server keeps them enabled whatever the settings say. Dependencies are checked with their extension (`phase` needs
-  `classify`).
+- **Extensions:** optional extras as checkboxes (`choices.ts`). Two recommended rows start checked unless the user's
+  settings disable one of their extensions: **Jev (TypeSafe)** turns on `classify`, `phase` and `recall` together,
+  and **Web search (Parallel)** turns on `parallel`, with a line that Ultimate can build its own web search tool
+  instead. Each says what it powers, which key it needs, what it costs and what leaves the machine. The other
+  default-off built-ins (`sounds`, `tailscale`, `health`, `cloud`; see [settings](../../docs/settings.md)) start
+  unchecked unless the user's settings enable them, each with its README line. Extensions already on are listed
+  behind "N more are on already".
   Continue applies user-global choices with `applyFirstRun`. Both checked and unchecked choices are saved explicitly;
-  project settings can still override user settings.
+  project settings can still override user settings. The choice input lists the keys (`secrets` declared by a
+  chosen extension) that are still missing, and the settled card shows each with an **Add** button that opens the
+  Secrets panel at it, turning to "set" once saved; @ultimate asks the user to add them.
 - **Project:** "Use this project's setup?", chips showing its extensions, settings, agents and skills, and its
   `.ultimate/README.md` behind "What's in it". Use it / Keep global remembers the decision through `decide`.
   The tool refuses this card when there is no project setup or it is already decided.
@@ -119,7 +121,7 @@ contributions, secrets, prompt sections and hooks, and its folder. Empty groups 
 ## Actions
 
 This default-on built-in exports browser actions. Settings choices and completion actions are user-only: agents
-cannot apply them through codemode `ultimate.action`.
+cannot apply them through codemode `tools.action`.
 
 - `start { root?, instructions? }`: starts the flow above once per root, returning `{ id }`; user-only.
 - `walkthrough`: has @ultimate run the walkthrough again, without setup, returning `{ id }`; user-only.

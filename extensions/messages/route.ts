@@ -16,7 +16,7 @@ import { isOpen } from '../../lib/message-state.ts'
 import { terminal } from './log.ts'
 import type { Message } from './api.ts'
 import type { DeliveredMessage, Serves } from './refs.ts'
-import { FiredEntry, MessageEntry, ReplyEntry } from '../entries/api.ts'
+import { FiredEntry, FinishedEntry, MessageEntry, ReplyEntry } from '../entries/api.ts'
 import { LanderReportEntry } from '../workspaces/api.ts'
 import { Standing } from '../subagents/api.ts'
 import { send } from './send.ts'
@@ -24,6 +24,8 @@ import { branchesAwaitingRemoteReply } from './remote.ts'
 import { ownerOutput, sameOwner, Serving, Started } from './addresses.ts'
 import { sendResult } from './delivery.ts'
 import { scanNonterminalTasks } from './tasks.ts'
+
+const userInputKinds = new Set(['pi.user', 'voice.utterance', 'review.comments'])
 
 async function hasRunQueuedInputOrWakeTask(tx: Tx, id: ConversationId) {
   if ((await tx.doc(LiveDoc, id)).run || (await tx.doc(InboxDoc, id)).items.length) return true
@@ -131,7 +133,7 @@ export async function reported(
     const output = await ownerOutput(host, tx, starter, entry)
     if (output && (output.owner.kind !== 'branch' || concluded.has(output.owner.id)))
       outputs.push({ ...output, submission })
-    if (FiredEntry.is(entry)) {
+    if (FiredEntry.is(entry) || FinishedEntry.is(entry)) {
       for (const branch of entry.data.branches ?? []) {
         const branchSpokeLast =
           log.messages.findLast((m) => m.from === branch && m.to === starter)?.id ?? 0
@@ -219,19 +221,26 @@ export function route(host: ExtensionHost) {
       by: ConversationId
       down?: boolean
     },
-    { phase: 'observe' } | { phase: 'forward'; routes: Route[] },
+    { phase: 'observe' } | { phase: 'answered' } | { phase: 'forward'; routes: Route[] },
     null
   >({
     name: 'board.route',
     version: 1,
     initial: () => ({ phase: 'observe' }),
     phases: {
-      observe: async (task, runtime, ctx) => {
-        const settled = await runtime.waitForTask(task.input.generation, ctx)
-        const answer =
-          settled.state.outcome.status === 'completed'
-            ? settled.state.outcome.result.entryId
-            : undefined
+      observe: (task, runtime, ctx) =>
+        runtime.commit(
+          () => ({
+            status: 'waiting',
+            checkpoint: { phase: 'answered' },
+            on: [task.input.generation],
+            policy: 'allSettled',
+          }),
+          ctx,
+        ),
+      answered: async (task, runtime, ctx) => {
+        const [outcome] = await runtime.outcomes([task.input.generation], ctx)
+        const answer = outcome.status === 'completed' ? outcome.result.entryId : undefined
         const { by, down } = task.input
         const id = runtime.conversationId
         await runtime.commit(async (tx) => {
@@ -279,6 +288,7 @@ export function route(host: ExtensionHost) {
             let everyInputReturnsToAnotherAsker = true
 
             let answersOnlyRoutedInputs = true
+            let answersOnlyUserInputs = true
             const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
             for (const { entry: entryId } of inputsSettledByThisAnswer) {
               const entry = await tx.entry(entryId)
@@ -297,10 +307,13 @@ export function route(host: ExtensionHost) {
               if (asked && data?.from === by) return []
               if (!asked) everyInputReturnsToAnotherAsker = false
               if (data?.routed !== true) answersOnlyRoutedInputs = false
+              if (!entry || !userInputKinds.has(entry.kind)) answersOnlyUserInputs = false
             }
 
             const report =
-              !answersOnlyRoutedInputs && !(await concludedOrWorkUnderway(host, tx, id))
+              !answersOnlyRoutedInputs &&
+              !answersOnlyUserInputs &&
+              !(await concludedOrWorkUnderway(host, tx, id))
             const routeToStarter = (body: string, options: Route['options']) => [
               {
                 to: by,

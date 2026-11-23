@@ -23,7 +23,7 @@ async function setupFixture(decision?: boolean) {
     join(config, 'extensions/x/server.ts'),
     "import { defineExtension } from '@earendil-works/pi-durable'; export default defineExtension({ name: 'x' })",
   )
-  await writeFile(join(config, 'extensions/x/web.tsx'), 'export default {}')
+  await writeFile(join(config, 'extensions/x/web.solid.tsx'), 'export default {}')
   await writeFile(
     join(config, 'extensions/x/README.md'),
     '# X\n\nA local extension. Another sentence.',
@@ -138,10 +138,12 @@ it('gates project resources until the local setup is chosen, and remembers the c
     expect(enabled('x')).toBe(true)
     expect(enabled('plan')).toBe(false)
     expect(await tools()).not.toContain('plan')
-    expect((await web()).some((path) => path.endsWith('/x/web.tsx'))).toBe(true)
+    expect((await web()).some((path) => path.endsWith('/x/web.solid.tsx'))).toBe(true)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(true)
     expect(projectDecision(project, home)).toBe(true)
-    await server.close()
+    const first = server
+    server = undefined
+    await first.close()
     server = await fauxServer(options)
     expect(server.system.current().project.decision).toBe(true)
     expect(drive(server).enabled('x')).toBe(true)
@@ -158,10 +160,10 @@ it('applies extension choices live at project and user scope, keeping other sett
     const { action, enabled, web } = drive(server)
     await action('setExtension', { name: 'splash', enabled: false, scope: 'project' })
     expect(enabled('splash')).toBe(false)
-    expect((await web()).some((path) => path.endsWith('/splash/web.tsx'))).toBe(false)
+    expect((await web()).some((path) => path.endsWith('/splash/web.solid.tsx'))).toBe(false)
     await action('setExtension', { name: 'splash', enabled: true, scope: 'project' })
     expect(enabled('splash')).toBe(true)
-    expect((await web()).some((path) => path.endsWith('/splash/web.tsx'))).toBe(true)
+    expect((await web()).some((path) => path.endsWith('/splash/web.solid.tsx'))).toBe(true)
     const projectSettings = JSON.parse(await readFile(projectFile, 'utf8'))
     expect(projectSettings).toMatchObject({
       custom: { keep: 1 },
@@ -187,10 +189,10 @@ it('applies extension choices live at project and user scope, keeping other sett
     await rename(userFile + '.tmp', userFile)
     await action('setExtension', { name: 'sounds', enabled: true, scope: 'user' })
     expect(enabled('sounds')).toBe(true)
-    expect((await web()).some((path) => path.endsWith('/sounds/web.tsx'))).toBe(true)
+    expect((await web()).some((path) => path.endsWith('/sounds/web.solid.tsx'))).toBe(true)
     await action('setExtension', { name: 'sounds', enabled: false, scope: 'user' })
     expect(enabled('sounds')).toBe(false)
-    expect((await web()).some((path) => path.endsWith('/sounds/web.tsx'))).toBe(false)
+    expect((await web()).some((path) => path.endsWith('/sounds/web.solid.tsx'))).toBe(false)
     expect(JSON.parse(await readFile(userFile, 'utf8'))).toMatchObject({
       custom: 'user',
       extensions: { extra: 2, enable: [], disable: ['sounds'] },
@@ -224,7 +226,7 @@ it('withdraws the local setup, adopts it into user settings, and remembers the f
     expect(enabled('x')).toBe(false)
     expect(enabled('plan')).toBe(true)
     expect(await tools()).toContain('plan')
-    expect((await web()).some((path) => path.endsWith('/x/web.tsx'))).toBe(false)
+    expect((await web()).some((path) => path.endsWith('/x/web.solid.tsx'))).toBe(false)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(false)
     const adoptDenied = await post(server, '/api/extensions/onboarding/actions/adoptProjectSetup', {
       args: {},
@@ -249,7 +251,9 @@ it('withdraws the local setup, adopts it into user settings, and remembers the f
     expect(await action('status')).toMatchObject({ firstRun: true, off: false })
     await action('firstRunDone')
     expect((await action('status')).firstRun).toBe(false)
-    await server.close()
+    const first = server
+    server = undefined
+    await first.close()
     server = await fauxServer(options)
     expect(server.system.current().project.decision).toBe(false)
     expect(drive(server).enabled('x')).toBe(false)
@@ -329,7 +333,7 @@ it('offers setup only to named definitions, refuses inapplicable cards, and dedu
     )
     const choice = {
       card: 'extensions',
-      extensions: { messages: true, faux: false },
+      extensions: { messages: true, faux: false, parallel: true },
       toolCallId: 'setup-1',
     }
     const receipts = await Promise.all(
@@ -349,10 +353,11 @@ it('offers setup only to named definitions, refuses inapplicable cards, and dedu
     expect(entries[0].data).toEqual({
       card: choice.card,
       toolCallId: choice.toolCallId,
-      summary: 'enabled messages; disabled faux',
+      summary: 'enabled messages, parallel; disabled faux',
+      missing: ['PARALLEL_API_KEY'],
     })
     expect(JSON.stringify(entries[0].model)).toContain(
-      'Setup choice (extensions): enabled messages; disabled faux',
+      'Setup choice (extensions): enabled messages, parallel; disabled faux\\nMissing keys: PARALLEL_API_KEY. Ask the user',
     )
     const otherTab = await post(server, '/api/extensions/onboarding/actions/choose', {
       args: { ...choice, extensions: { messages: false, faux: true } },
@@ -362,7 +367,7 @@ it('offers setup only to named definitions, refuses inapplicable cards, and dedu
     expect(otherTab.data.error).toContain('already has a different choice')
     expect(
       JSON.parse(await readFile(join(home, '.ultimate/settings.json'), 'utf8')).extensions,
-    ).toMatchObject({ enable: ['messages'], disable: ['faux'] })
+    ).toMatchObject({ enable: ['messages', 'parallel'], disable: ['faux'] })
 
     // Fail after the setting is applied but before admission. Retrying must still notify the agent once.
     const retry = { card: 'project', local: true, toolCallId: 'retry-project' }
@@ -415,24 +420,26 @@ it('offers setup only to named definitions, refuses inapplicable cards, and dedu
     ).toBe(200)
     expect(
       JSON.parse(await readFile(join(home, '.ultimate/settings.json'), 'utf8')).extensions,
-    ).toMatchObject({ enable: ['messages', 'plan'], disable: ['faux', 'info'] })
+    ).toMatchObject({ enable: ['messages', 'parallel', 'plan'], disable: ['faux', 'info'] })
     expect(
       JSON.stringify(
         await run('codemode', {
-          code: `return await ultimate.action('onboarding', 'choose', ${JSON.stringify(choice)});`,
+          code: `return await tools.action({extension: 'onboarding', action: 'choose', args: ${JSON.stringify(choice)}});`,
         }),
       ),
     ).toContain('onboarding/choose is a user-only action')
     expect(
       JSON.stringify(
         await run('codemode', {
-          code: "return await ultimate.action('onboarding', 'start', {root: 1});",
+          code: "return await tools.action({extension: 'onboarding', action: 'start', args: {root: 1}});",
         }),
       ),
     ).toContain('onboarding/start is a user-only action')
     expect(
       JSON.stringify(
-        await run('codemode', { code: "return await ultimate.action('workspaces', 'setupGit');" }),
+        await run('codemode', {
+          code: "return await tools.action({extension: 'workspaces', action: 'setupGit'});",
+        }),
       ),
     ).toContain('workspaces/setupGit is a user-only action')
     // Absence is checked independently of the remembered project decision.

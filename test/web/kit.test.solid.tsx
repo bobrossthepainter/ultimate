@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { Info } from '@lucide/solid'
 import { createAgent } from '@ui-sdk/core/agent'
 import { settle } from '@ui-sdk/core/testing'
@@ -6,12 +5,14 @@ import { flush } from 'solid-js'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { Checkbox } from '@/components/ui/checkbox.solid.tsx'
+import { Input, SecretInput, Textarea } from '@/components/ui/input.solid.tsx'
 import { Popover, PopoverContent } from '@/components/ui/popover.solid.tsx'
 import { StatusPopoverTrigger } from '@/components/ui/status-trigger.solid.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip.solid.tsx'
 import { actionRef, api, useUiState } from '@/sdk/solid'
 import { SOURCE_HEADER } from '../../shared/protocol.ts'
 import { uiState } from '../../web/src/sdk/client.ts'
+import { expectDistinctAgentNames } from './agent-names.ts'
 import { renderSolid } from './solid-dom-setup.ts'
 
 const request = vi.hoisted(() =>
@@ -142,6 +143,58 @@ it('lets an agent open a tooltip and a status popover by their names', async () 
     true,
   )
   expect(container.textContent).toContain('Everything is fine')
+})
+
+it('lets an agent fill text fields and a secret it can never read back', async () => {
+  const typed = vi.fn<(value: string, source: string) => void>()
+  const container = renderSolid(() => (
+    <>
+      <Input aria-label="Machine name" onValueChange={(value, d) => typed(value, d.source)} />
+      <Textarea aria-label="Notes" onValueChange={(value, d) => typed(value, d.source)} />
+      <SecretInput aria-label="API token" onValueChange={(value, d) => typed(value, d.source)} />
+    </>
+  ))
+  await settle()
+  const result = await agent.act({
+    steps: [
+      { ref: refFor('Machine name'), action: 'setValue', args: ['laptop'] },
+      { ref: refFor('Notes'), action: 'setValue', args: ['two\nlines'] },
+      { ref: refFor('API token'), action: 'setValue', args: ['hunter2'] },
+    ],
+  })
+  expect(result.ok).toBe(true)
+  flush()
+  expect(typed.mock.calls).toEqual([
+    ['laptop', 'agent'],
+    ['two\nlines', 'agent'],
+    ['hunter2', 'agent'],
+  ])
+  const field = container.querySelector<HTMLInputElement>('input[aria-label="API token"]')!
+  expect(field.type).toBe('password')
+  expect(JSON.stringify(agent.snapshot())).not.toContain('hunter2')
+  container.querySelector<HTMLButtonElement>('[aria-label="Show API token"]')!.click()
+  flush()
+  expect(field.type).toBe('text')
+  expect(field.value).toBe('hunter2')
+  expect(JSON.stringify(agent.snapshot())).not.toContain('hunter2')
+})
+
+it('fails on a name the bridge would also resolve to another control, and passes on distinct ones', async () => {
+  renderSolid(() => (
+    <>
+      <Button>Save</Button>
+      <Button>Quick save</Button>
+    </>
+  ))
+  await expect(expectDistinctAgentNames(agent)).rejects.toThrow('to deeply equal []')
+  document.body.replaceChildren()
+  renderSolid(() => (
+    <>
+      <Button>Run</Button>
+      <Button>Runner</Button>
+    </>
+  ))
+  await expectDistinctAgentNames(agent)
 })
 
 it('dims a disabled button that stays focusable', () => {

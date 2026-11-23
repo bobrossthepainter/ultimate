@@ -47,7 +47,7 @@ it('resets the stall timer on output but stops continuous output at the total li
   hanging(50)
   const ran = runLanderCheck('.', 'print', context, { stall: 0.1, total: 0.3 })
   await vi.advanceTimersByTimeAsync(300)
-  expect((await ran).failure).toMatch(/^Timed out after 0.3 s\nprogress/)
+  expect((await ran).failure).toMatch(/^Timed out after 300ms\nprogress/)
   expect(vi.getTimerCount()).toBe(0)
 })
 
@@ -55,11 +55,11 @@ it('defaults to a 2-minute stall and a 10-minute total cap', async () => {
   hanging()
   const silent = runLanderCheck('.', 'sleep', context)
   await vi.advanceTimersByTimeAsync(2 * 60 * 1000)
-  expect((await silent).failure).toBe('Stalled: no output for 2 min, stopped')
+  expect((await silent).failure).toBe('Stalled: no output for 2m, stopped')
   hanging(60 * 1000)
   const printing = runLanderCheck('.', 'print', context)
   await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
-  expect((await printing).failure).toMatch(/^Timed out after 10 min\nprogress/)
+  expect((await printing).failure).toMatch(/^Timed out after 10m\nprogress/)
   expect(vi.getTimerCount()).toBe(0)
 })
 
@@ -71,7 +71,7 @@ it('stops a printing check at its own timeout, not the default cap', async () =>
   await vi.advanceTimersByTimeAsync(119 * 1000)
   expect(vi.getTimerCount()).toBeGreaterThan(0)
   await vi.advanceTimersByTimeAsync(1000)
-  expect((await ran).failure).toMatch(/^Timed out after 2 min\n/)
+  expect((await ran).failure).toMatch(/^Timed out after 2m\n/)
   // A short timeout also caps the stall limit, and a check without one keeps the defaults.
   expect(limitsFor({ command: 'x', timeout: 30 }, { stall: 120, total: 600 })).toEqual({
     stall: 30,
@@ -93,19 +93,24 @@ it('names the tests that failed before the watchdog fired, even when they left t
   await vi.advanceTimersByTimeAsync(50)
   const failure = (await ran).failure!
   expect(failure).toMatch(
-    /^Timed out after 0.05 s\nFailed tests so far:\nFAIL {2}test\/cloud-lease.test.ts > hangs on a lease\nnoise/,
+    /^Timed out after 50ms\nFailed tests so far:\nFAIL {2}test\/cloud-lease.test.ts > hangs on a lease\nnoise/,
   )
   expect(failure.match(/FAIL/g)).toHaveLength(1)
 })
 
 it('names the failed tests of a check that exits nonzero', async () => {
   vi.mocked(runGroup).mockImplementation(async (_program, _args, options) => {
-    options.onOutput(' × test/models.test.ts > falls back on logout 12ms\n' + 'noise\n'.repeat(600))
+    options.onOutput(
+      ' \u001b[41mFAIL\u001b[49m  \u001b[43m solid-dom \u001b[49m test/models.test.ts > falls back on logout\n' +
+        'noise\n'.repeat(600) +
+        Array.from({ length: 20 }, (_, n) => ` × retry ${n} 12ms\n`).join(''),
+    )
     return { code: 1, outOfMemory: false }
   })
-  const failure = (await runLanderCheck('.', 'pnpm test', context)).failure!
-  expect(failure).toMatch(
-    /^exit 1\nFailed tests:\n× test\/models.test.ts > falls back on logout 12ms\nnoise/,
+  const ran = await runLanderCheck('.', 'pnpm test', context)
+  expect(ran.failure).toMatch(/^exit 1\nFailed tests:\n× retry 0 12ms\n/)
+  expect('cause' in ran && ran.cause).toBe(
+    'exit 1: solid-dom test/models.test.ts > falls back on logout',
   )
 })
 
