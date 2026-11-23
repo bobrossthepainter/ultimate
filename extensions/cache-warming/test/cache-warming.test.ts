@@ -310,6 +310,8 @@ it('re-arms dormant runs on set and after a pause, and records uiChanged', async
   const events = eventHost(() => harness, 'cache-warming')
   const lifecycle = openers()
   const resources = new Map<string, unknown>()
+  // A process that loaded cache-warming before dormant runs existed keeps this shape across a hot reload.
+  resources.set('cache-warming.runs', { sent: new Map(), active: new Map(), stopped: new Map() })
   let paused = false
   const services = apis()
   services.provided.set('conversations', {

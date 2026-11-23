@@ -911,7 +911,7 @@ export default function cacheWarming(host: ExtensionHost) {
 }
 
 const runsOf = (host: ExtensionHost) =>
-  host.resource<Runs>('cache-warming.runs', () => ({
+  host.resource<Runs>('cache-warming.warming', () => ({
     sent: new Map(),
     active: new Map(),
     dormant: new Map(),
