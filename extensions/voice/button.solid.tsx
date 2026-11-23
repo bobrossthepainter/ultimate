@@ -8,6 +8,7 @@ import {
   errorMessage,
   events,
   insertIntoComposer,
+  ROOT,
   useAction,
   useConversationId,
   useEvent,
@@ -106,7 +107,7 @@ function Level(props: { recording: Recording }) {
 
 export function VoiceButton() {
   const id = useConversationId()
-  const status = useAction(StatusAction)
+  const status = useAction(StatusAction, null, { conversation: ROOT })
   useEvent('secrets:changed', () => void status.refetch())
   const system = useSystem()
   const login = useEvents({ events: [LoginChanged], limit: 1 })
