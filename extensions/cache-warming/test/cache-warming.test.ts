@@ -1,8 +1,32 @@
+import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { Api, AssistantMessage, Model } from '@earendil-works/pi-ai'
-import { expect, it } from 'vitest'
+import { createModels } from '@earendil-works/pi-ai/models'
+import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import {
+  configure,
+  createRegistry,
+  defineDoc,
+  Harness,
+  MemoryStorage,
+  ROOT_CONVERSATION_ID,
+} from '@earendil-works/pi-durable'
+import { afterEach, expect, it, vi } from 'vitest'
+import type { ExtensionHost } from '../../../server/extensions.ts'
+import { Metadata } from '../../../server/metadata.ts'
+import { apis, eventHost, openers, temp, until } from '../../../test/helpers.ts'
+import { PauseDoc } from '../../pause/refs.ts'
+import type { PauseDocState } from '../../pause/refs.ts'
+import { Profile, Standing } from '../../subagents/api.ts'
 import { decide, keptBy, lateRefreshCutoff, resolvePolicy, streakAfterPing } from '../due.ts'
 import type { Policy, Situation } from '../due.ts'
-import { cacheTiming, oneTokenPayload, recoverRun, rewriteCost, warmCost } from '../server.ts'
+import cacheWarming, {
+  actions,
+  cacheTiming,
+  oneTokenPayload,
+  recoverRun,
+  rewriteCost,
+  warmCost,
+} from '../server.ts'
 
 const now = Date.parse('2026-11-16T12:00:00Z')
 const minutes = (count: number) => count * 60_000
@@ -252,4 +276,157 @@ it("counts a recovered run's pings only toward that run, never toward an older a
     cost: 0.02,
     pings: 2,
   })
+})
+
+const cleanups: (() => Promise<void>)[] = []
+afterEach(async () => {
+  for (const close of cleanups.splice(0)) await close()
+  vi.useRealTimers()
+})
+
+const PauseStateDoc = defineDoc<PauseDocState>({
+  kind: PauseDoc.kind,
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ paused: false }),
+})
+
+it('re-arms dormant runs on set and after a pause, and records uiChanged', async () => {
+  const dir = await temp('cache-warming-')
+  vi.useFakeTimers({ now, toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+  const models = createModels()
+  const faux = fauxProvider({ provider: 'claude-code', models: [{ id: 'faux-1' }] })
+  models.setProvider(faux.provider)
+  const cachedReply = () => fauxAssistantMessage('ok')
+  faux.setResponses([cachedReply, cachedReply, cachedReply])
+  const registry = createRegistry()
+  const storage = new MemoryStorage()
+  storage.close = async () => {}
+  const harness = await Harness.open(storage, { models, registry }, context)
+  await harness.root(context)
+  const events = eventHost(() => harness, 'cache-warming')
+  const lifecycle = openers()
+  const resources = new Map<string, unknown>()
+  let paused = false
+  const services = apis()
+  services.provided.set('conversations', {
+    accountResponse: async () => {},
+    concluded: async () => new Set(),
+  })
+  services.provided.set('pause', { paused: () => paused })
+  const uiChanges: { key: string; value?: unknown; previous?: unknown }[] = []
+  const modelRuntime = Object.assign(Object.create(models) as typeof models, {
+    streamSimple: (...args: Parameters<typeof models.streamSimple>) => {
+      const stream = models.streamSimple(...args)
+      return {
+        result: async () => {
+          const answer = await stream.result()
+          return { ...answer, usage: { ...answer.usage, cacheRead: 1000 } }
+        },
+      }
+    },
+  })
+  const host = {
+    ...services,
+    ...events,
+    harness: () => harness,
+    metadata: Metadata,
+    modelRuntime,
+    ultimateRoot: dir,
+    projectRoot: dir,
+    userHome: dir,
+    projectSettings: async () => ({}),
+    notice: () => {},
+    resource: <T>(key: string, create: () => T) => {
+      if (!resources.has(key)) resources.set(key, create())
+      return resources.get(key) as T
+    },
+    onOpen: lifecycle.onOpen,
+    onClose: () => {},
+  } as unknown as ExtensionHost
+  registry.install(cacheWarming(host))
+  const branch = await harness.commit(async (tx) => {
+    const { id } = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+    await configure(tx, id, { model: { provider: 'claude-code', modelId: 'faux-1' } })
+    ;(await tx.doc(Metadata, id)).label = 'coordinator'
+    ;(await tx.doc(Profile, id)).definition = 'coordinator'
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ROOT_CONVERSATION_ID
+    return id
+  }, context)
+  await lifecycle.open()
+  await events.start()
+  harness.resume()
+  cleanups.push(async () => {
+    await events.stop()
+    await lifecycle.close()
+    await harness.close(context)
+  })
+  const actionCtx = {
+    host,
+    uiChanged: async (_tx: unknown, change: { key: string; value?: unknown; previous?: unknown }) =>
+      void uiChanges.push(change),
+  } as Parameters<typeof actions.set>[1]
+
+  // Turn warming off via set and verify uiChanged is recorded.
+  await actions.set({ id: branch, warm: false, minutes: 120 }, actionCtx)
+  expect(uiChanges).toEqual([
+    { key: 'cache-warming.warm', value: false },
+    { key: 'cache-warming.minutes', value: 120 },
+  ])
+
+  // Real cached turn starts a run; firing at 54 min while warm=false parks it dormant without pinging.
+  const conversation = (await harness.conversation(branch, context))!
+  await conversation.submit({ type: 'input', content: 'hello' }, context)
+  await conversation.waitForIdle(context)
+  expect(faux.state.callCount).toBe(1)
+  await vi.advanceTimersByTimeAsync(minutes(54))
+  const stopped = await actions.state({ id: branch }, actionCtx)
+  expect(stopped.idle).toBe('Off for this conversation')
+  expect(stopped.pings).toBe(0)
+  expect(faux.state.callCount).toBe(1)
+
+  // Turning warm back on within cutoff re-arms the dormant run and fires the ping.
+  await actions.set({ id: branch, warm: true }, actionCtx)
+  await until(
+    async () => {
+      const current = await actions.state({ id: branch }, actionCtx)
+      return (
+        current.pings === 1 && current.last?.error === undefined && current.next?.step === 'ping'
+      )
+    },
+    5000,
+    () => vi.advanceTimersByTimeAsync(0),
+  )
+  const warmed = await actions.state({ id: branch }, actionCtx)
+  expect(warmed.idle).toBeUndefined()
+  expect(warmed.last?.error).toBeUndefined()
+  expect(faux.state.callCount).toBe(2)
+
+  // Pausing before the next refresh parks the run without writing an interrupted ping, and Play re-arms it.
+  paused = true
+  await harness.commit(async (tx) => {
+    ;(await tx.doc(PauseStateDoc, ROOT_CONVERSATION_ID)).paused = true
+  }, context)
+  await vi.advanceTimersByTimeAsync(minutes(54))
+  const duringPause = await actions.state({ id: branch }, actionCtx)
+  expect(duringPause.idle).toBe('Ultimate is paused')
+  expect(duringPause.pings).toBe(1)
+  expect(faux.state.callCount).toBe(2)
+
+  paused = false
+  await harness.commit(async (tx) => {
+    ;(await tx.doc(PauseStateDoc, ROOT_CONVERSATION_ID)).paused = false
+  }, context)
+  await until(
+    async () => {
+      const current = await actions.state({ id: branch }, actionCtx)
+      return current.pings === 2 && current.last?.error === undefined
+    },
+    5000,
+    () => vi.advanceTimersByTimeAsync(0),
+  )
+  expect(faux.state.callCount).toBe(3)
 })
