@@ -91,7 +91,9 @@ so branches adding divergences in parallel do not edit the same lines.
   local agent tool processes spawn through `workSpawn` so they land in the capped `work` cgroup, 2026-11-18 merge),
   `extensions/info/panel.solid.tsx` (the Execution section re-applied on upstream's Solid Info panel, 2026-11-20
   merge), `vite.config.ts` host-local allowlist (`extensions/antigravity/`: upstream's provider runs the
-  `agy` CLI login on the machine running Ultimate, like Claude Code, 2026-11-22 merge)
+  `agy` CLI login on the machine running Ultimate, like Claude Code, 2026-11-22 merge), `extensions/lineage/catchup.ts`
+  (upstream's untracked-file `ls-files` in `changedFiles` routed through `exec.git`, and
+  `extensions/coding-tools/background.ts` keeps upstream's `dropHostNodeEnv` through `exec.start`, 2026-11-23 merge)
 - Why: Core-tier service running project and worktree commands where their directory lives; `exec.protocol` point for
   remote targets (pod-local proof). The give-back set includes 21b7d4cc: each protocol's `describe` and exec's
   `target` action, so the Info panel shows where a conversation's commands run. Extension actions' `ctx.exec` runs
@@ -118,8 +120,9 @@ so branches adding divergences in parallel do not edit the same lines.
 
 ### Lifecycle extension
 
-- Touches: `extensions/lifecycle/`, `extensions/automations/` (`wakes`, `scripts`, `dueAt`), `shared/extension-api.ts`
-  (`defaultOff`), `test/lifecycle.test.ts`, `extensions/automations/test/e2e/automations-scripts.test.ts`
+- Touches: `extensions/lifecycle/`, `extensions/automations/` (`wakes`, `scripts`, `dueAt` kept alongside upstream's
+  `IdleWaker` and `readByKey`), `shared/extension-api.ts` (`defaultOff`), `test/lifecycle.test.ts`,
+  `extensions/automations/test/e2e/automations-scripts.test.ts`
 - Why: Off-by-default `state` action: whether anything runs and when the instance must wake, for an operator that
   scales idle instances to zero
 - Upstream: candidate
@@ -199,7 +202,10 @@ so branches adding divergences in parallel do not edit the same lines.
   their process exits, ssh-exec recheck). The 2026-11-23 merge brought upstream's Solid-only core
   (`ui-framework-boundaries`: no React in `extensions/`): every fork facet (architect, usage, caddy, cache-warming,
   brave, upstream-sync, plannotator, check-extensions, mermaid) is now `web.solid.tsx` on the ui-sdk kit, with no lint
-  exception, and the fork's contracts are `ui.solid.tsx` (exec, mermaid, review). New fork code follows the same rules
+  exception, and the fork's contracts are `ui.solid.tsx` (exec, mermaid, review). A later 2026-11-23 merge dropped
+  React and its compat layer completely (`extensions/sidebar/ui.tsx` removed), dropped per-file
+  `/** @jsxImportSource @solidjs/web */` pragmas (now in `tsconfig.web.json`), and moved release cleanups onto
+  `host.onOpen(opened => opened.defer(...))`. New fork code follows the same rules
 - Upstream: local-only
 
 ### Cache warming per agent
@@ -218,8 +224,10 @@ so branches adding divergences in parallel do not edit the same lines.
   `ok` ping on the next context, identity after the leading system message); @ultimate's window counts from the
   user's last input (480 min, 90 on caches under an hour), a coordinator's from its last request (30 min).
   Compaction before cold stays, off by default. `branchCache.models` is gone. `keep-warm`'s folder stays untouched
-  so merges stay cheap; re-check on each merge whether upstream changed it or the definition fields. Since the
-  2026-11-23 merge the chips are Solid (`web.solid.tsx`, modelled on keep-warm's chip; minutes save on commit)
+  so merges stay cheap; re-check on each merge whether upstream changed it or the definition fields (the 2026-11-23
+  merge moved `keep-warm` to a sleeping task, still @ultimate + Claude Code only, and moved `cache-warming`'s release
+  cleanup onto `opened.defer`). Since the 2026-11-23 merge the chips are Solid (`web.solid.tsx`, modelled on
+  keep-warm's chip; minutes save on commit)
 - Upstream: candidate (replaces keep-warm; send with the cache findings in memory upstream-cache-feedback)
 
 ### Projects rail over Caddy
@@ -235,8 +243,8 @@ so branches adding divergences in parallel do not edit the same lines.
 
 ### Usage extension
 
-- Touches: `extensions/usage/`, `lib/remote.ts` (`reachable` and `spokesOf`: every other instance this one reaches,
-  once per address), `test/remote-spokes.test.ts`
+- Touches: `extensions/usage/` (`server.ts` unsubscribes its `onCommit` observer via `opened.defer`), `lib/remote.ts`
+  (`reachable` and `spokesOf`: every other instance this one reaches, once per address), `test/remote-spokes.test.ts`
 - Why: Usage surface: list-price cost of this instance's model calls by day, cost type, cache rebuilds (with cause),
   role, model and branch (with cache hit rate and rebuilds), and the same for every other Ultimate it reaches (hub
   and spokes); spokes without the extension show their `pi.usage` totals. Today and custom date ranges (`frame.ts`,
@@ -272,18 +280,20 @@ so branches adding divergences in parallel do not edit the same lines.
 
 - Touches: `extensions/side-chat/` (open from a branch, fork at the newest finished step, read-only branch copies,
   labels naming main), `extensions/lineage/server.ts` (`branchOf` and catch-up skip side chats), `lib/acting-as.ts`
-  (`isSideChat`), `lib/side-chat-guard.ts` and `extensions/codemode/server.ts` (codemode's nested tools and globals
-  get the side-chat guard), `extensions/sidebar/` (`sidebar.under-branch` point; since the 2026-11-22 merge it lives
+  (`isSideChat`), `extensions/sidebar/` (`sidebar.under-branch` point; since the 2026-11-22 merge it lives
   in upstream's `points.ts` with an object input `{ conversation }`, rendered by the Solid in-flight row in
   `root.solid.tsx`), `agents/coordinator.md` (one
   paragraph). Since the 2026-11-18 merge it sits beside upstream's question side chats (`open {message}`, read-only
-  by `question`): branch copies keep `readOnly` and the full `lib/side-chat-guard.ts`, question copies keep upstream's
-  `readOnlyCall` list; `Stage`, `Cut` and the header name the main (`@ultimate`, `#id · title`, or the asker);
-  `isSideChat` in `lib/acting-as.ts` is now upstream's. Since the 2026-11-21 merge the composer frame is upstream's
-  Solid `frame.solid.tsx`, with the fork's branch main re-applied (`mainName`/`shortName` in `logic.ts`). Since the
-  2026-11-23 merge the rest is upstream's Solid `web.solid.tsx` with the fork re-applied: `UnderBranch` rows,
-  the main's name in `Stage`, the header and `Cut`, and `Unlisted` by the `side-chat` label; `UnderBranch` is a
-  Solid point exported from `sidebar/ui.solid.tsx`
+  by `question`): branch copies keep `readOnly`, question copies keep upstream's `readOnlyCall` list; `Stage`, `Cut`
+  and the header name the main (`@ultimate`, `#id · title`, or the asker); `isSideChat` in `lib/acting-as.ts` is now
+  upstream's. Since the 2026-11-21 merge the composer frame is upstream's Solid `frame.solid.tsx`, with the fork's
+  branch main re-applied (`mainName`/`shortName` in `logic.ts`). Since the 2026-11-23 merge the rest is upstream's
+  Solid `web.solid.tsx` with the fork re-applied: `UnderBranch` rows, the main's name in `Stage`, the header and `Cut`,
+  and `Unlisted` by the `side-chat` label; `UnderBranch` is a Solid point exported from `sidebar/ui.solid.tsx`. A later
+  2026-11-23 merge moved upstream's `codemode` onto Pi Durable's `createCodemodeExtension` so nested calls (including
+  `action` and `tell`) run through `ToolTask.beforeTool`, letting the fork drop `lib/side-chat-guard.ts` and all
+  divergence in `extensions/codemode/server.ts` (`blockedInReadOnlySideChat` now lives in `extensions/side-chat/server.ts`
+  blocking `action`, `tell` and `remember`)
 - Why: ask a running branch questions without disturbing it; a branch is usually mid-run, so the fork point moved
   from the last answered input to the newest finished tool round, for @ultimate too
 - Upstream: candidate

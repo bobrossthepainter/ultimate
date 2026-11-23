@@ -39,6 +39,7 @@ async function bash(command: string, dir = cwd) {
   const extension = codingTools({
     ...apis(),
     home,
+    images: undefined as never,
     notice: () => {},
     onOpen: () => {},
     react: () => {},

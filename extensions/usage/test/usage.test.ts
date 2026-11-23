@@ -10,7 +10,7 @@ import type { Started } from '../aggregate.ts'
 import type { Report } from '../refs.ts'
 import type { ExtensionHost } from '../../../server/extensions.ts'
 import { prepareHarness } from '../../../server/harness.ts'
-import { temp } from '../../../test/helpers.ts'
+import { openers, temp } from '../../../test/helpers.ts'
 
 const HOUR = 3600_000
 const START = Date.UTC(2026, 10, 10, 12)
@@ -103,7 +103,7 @@ async function fixture() {
     faux: fauxProvider(),
   })
   const opened = await prepared.open()
-  let open!: () => Promise<void>
+  const lifecycle = openers()
   let close!: () => Promise<void>
   const started = new Map<number, Started & { id: number }>()
   const summaries: { id: ConversationId; title?: string; parentConversationId?: ConversationId }[] =
@@ -111,9 +111,7 @@ async function fixture() {
   const notices: string[] = []
   const host = {
     harness: () => opened.harness,
-    onOpen: (callback: () => Promise<void>) => {
-      open = callback
-    },
+    onOpen: lifecycle.onOpen,
     onClose: (callback: () => Promise<void>) => {
       close = callback
     },
@@ -135,9 +133,10 @@ async function fixture() {
     started,
     summaries,
     notices,
-    open: () => open(),
+    open: lifecycle.open,
     report,
     async cleanup() {
+      await lifecycle.close()
       await close()
       await opened.close()
     },

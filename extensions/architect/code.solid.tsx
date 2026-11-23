@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { ArrowUpRightIcon, FileCodeIcon } from '@lucide/solid'
 import { Match, Show, Switch } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'

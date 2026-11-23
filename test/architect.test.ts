@@ -126,7 +126,7 @@ it('draws versions in one architect under the branch, and sends feedback to the 
         return fauxAssistantMessage(
           [
             fauxToolCall('codemode', {
-              code: `return await ultimate.action('architect', 'draw', { conversation: ${branch} })`,
+              code: `return await tools.action({ extension: 'architect', action: 'draw', args: { conversation: ${branch} } })`,
             }),
           ],
           { stopReason: 'toolUse' },

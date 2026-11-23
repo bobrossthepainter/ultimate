@@ -8,7 +8,7 @@ The user decides each proposal with @ultimate; approved ones become ordinary bra
 itself.
 
 A dream is ordinary work: one branch, its answer, the user's decisions, ordinary branches for what they approve. There
-is no session to track. Dream's actions, called with codemode `ultimate.action('dream', name, args)`: `prepare
+is no session to track. Dream's actions, called with codemode `tools.action({extension: 'dream', action: name, args})`: `prepare
 {chapter, learned, handoff}` and `stats` (tool numbers from the trace, no model). `stats` counts tool calls over the
 whole retained trace: about the last 7 days, or the newest 200,000 calls, whichever ends first. `debug trace` and
 `ultimate.trace` do not read that window whole: they return the newest rows only (the newest 100 by default for
@@ -73,9 +73,9 @@ On `dream.ready`, call `prepare` once:
 
 It puts the Fall asleep card in your conversation and pins it in the status line. Then send the user one message: what
 the chapter carries, and that the card's Fall asleep button switches when they are ready. Only they press it; never
-call `asleep`. Fall asleep refuses while any top-level conversation is busy and names them; a branch still running is
-finished or stopped first, and one waiting on an answer should be named in the handover. `prepare` again replaces the
-card.
+call `asleep`. Fall asleep refuses while any conversation, branches included, is busy and names them; a branch still
+running is finished or stopped first, and one waiting on an answer should be named in the handover. `prepare` again
+replaces the card.
 
 ## For the dream branch
 

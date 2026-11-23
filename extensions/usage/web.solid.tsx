@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { ChartColumnStacked } from '@lucide/solid'
 import type { JSX } from '@solidjs/web'
 import { createMemo, For, Match, Show, Switch } from 'solid-js'

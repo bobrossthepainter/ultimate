@@ -353,7 +353,7 @@ describe('side chats', () => {
       ['plan', { action: 'create' }],
       ['workspace', { action: 'submit' }],
       ['instance', { action: 'start' }],
-      ['ultimate.action', {}],
+      ['action', {}],
       ['edit', {}],
     ] as const)
       expect(blockedInReadOnlySideChat(name, args)).toBe(true)
@@ -366,12 +366,12 @@ describe('side chats', () => {
       ['ultimate.entries', {}],
     ] as const)
       expect(blockedInReadOnlySideChat(name, args)).toBe(false)
-    // Codemode runs nested tools and globals without beforeTool: they are refused too.
+    // Codemode runs nested tools through executeTool so beforeTool refuses them too.
     await f.call(side, 'codemode', {
       code: "await tools.write({path: 'x.txt', content: 'x'})",
     })
     await f.call(side, 'codemode', {
-      code: "await ultimate.action('conversations', 'conclude', {ids: [1]})",
+      code: "await tools.action({extension: 'conversations', action: 'conclude', args: {ids: [1]}})",
     })
     const refusals = JSON.stringify(
       (await entries(f.server, side)).filter((entry) =>
@@ -381,7 +381,7 @@ describe('side chats', () => {
       ),
     )
     expect(refusals).toContain('read-only: write is refused')
-    expect(refusals).toContain('read-only: ultimate.action is refused')
+    expect(refusals).toContain('read-only: action is refused')
     expect((await f.server.harness.snapshot(Side, side, context))!.effects).toBe(false)
     expect((await f.action('discard', { id: side })).status).toBe(200)
   })
@@ -413,7 +413,7 @@ describe('side chats', () => {
   it('refuses side-chat lifecycle actions invoked by an agent', async () => {
     const f = await fixture()
     await f.call(f.main, 'codemode', {
-      code: "return await ultimate.action('side-chat', 'open', {text: 'agent must not open'})",
+      code: "return await tools.action({extension: 'side-chat', action: 'open', args: {text: 'agent must not open'}})",
     })
     expect(JSON.stringify(await entries(f.server, f.main))).toContain(
       'side-chat/open is a user-only action',
@@ -422,17 +422,7 @@ describe('side chats', () => {
   })
 
   it('tracks only the specified tool/actions before execution, including failures, and persists effects across reopen', async () => {
-    for (const name of [
-      'branch',
-      'message',
-      'note',
-      'notify',
-      'remember',
-      'setup',
-      'restart',
-      'edit',
-      'write',
-    ])
+    for (const name of ['branch', 'message', 'note', 'notify', 'setup', 'restart', 'edit', 'write'])
       expect(tracksEffect(name, {})).toBe(true)
     for (const name of ['bash', 'codemode', 'read', 'memory'])
       expect(tracksEffect(name, {})).toBe(false)

@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { MessageSquareIcon, MessagesSquareIcon, SparklesIcon } from '@lucide/solid'
 import type { JSX } from '@solidjs/web'
 import { createEffect, createMemo, createSignal, For, onSettled, Show } from 'solid-js'

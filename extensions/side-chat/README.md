@@ -37,7 +37,7 @@ All three actions are user-only (`userActions`); agents cannot call them. Inputs
   - **Summarize only** sends the summary without answering.
   - Discard always works, since nothing can have effects.
 - **Read-only:** `beforeTool` blocks every tool except read, bash, memory, web search and fetch, and `draft_answers`.
-  - Browser and screenshot are blocked: they load pages that can act. Codemode is blocked too, because its nested calls skip tool hooks.
+  - Browser and screenshot are blocked: they load pages that can act. Codemode is blocked too: it is not in the read-only list, and a script reaches writing tools such as `action` and `tell`.
   - `draft_answers {answers?, note?, text?}` (deferred; the fork enables and loads it) fills in the card's durable draft (`ext.questions.cards` in the UI state) when the user says what to pick. It resolves answers with the card's own rules (`lib/question-cards.ts`), refuses what the card cannot show, and keeps a per-call receipt so a replay writes nothing. It never sends: the user reviews the draft on the pinned card and sends it.
   - Elsewhere it is reachable only through `tool_search`, and it refuses outside a question side chat.
   - Known limit: the UI state stores the cards as one value. If the user edits the card in the 150 ms before their browser saves it, that save can overwrite a fill that landed in between; the side chat's answer still says what it filled in.
@@ -49,15 +49,15 @@ All three actions are user-only (`userActions`); agents cannot call them. Inputs
   - `SideChatDoc` gains `question` and `tokens`: the asker's context at the fork, shown in the sheet header as the cost of the first turn.
   - `SideChatsDoc` sits on the asker.
   - `QuestionSidesDoc` (`sidechat.questions`, on conversation 1) lists every question side chat, so a card or the Inbox finds its own with one subscription.
-- **Lineage:** lineage skips its catch-up note for any side chat, so a branch's copy is not flooded with the tally. Side chats stay out of the sidebar's lists through `Unlisted`.
+- **Lineage:** lineage skips its catch-up note for any side chat, so a quick question is not preceded by the commits that landed since. Side chats stay out of the sidebar's lists through `Unlisted`.
 
 ## Safety and attribution
 
-**@ultimate's side chats** may act. `effects` is sticky and committed **before** a potentially effectful tool executes. It deliberately locks Discard even if that call subsequently fails: a crash must not leave an effect behind while Discard is still permitted. Tracked: branch, message, note, notify, remember, setup, restart, edit, write; todo add/done; automation except list/runs/log. Bash and codemode themselves are not tracked; codemode's nested tools and `ultimate.*` globals skip `beforeTool`, so codemode runs the same guard before each (`guardSideChatCall`, `lib/side-chat-guard.ts`, which reads the sidechat document by kind).
+**@ultimate's side chats** may act. `effects` is sticky and committed **before** a potentially effectful tool executes. It deliberately locks Discard even if that call subsequently fails: a crash must not leave an effect behind while Discard is still permitted. Tracked: branch, message, note, notify, setup, restart, edit, write; todo add/done; automation except list/runs/log. Bash and codemode themselves are not tracked (their nested tracked tools still are).
 
 Message, branch, note, notify and automation create/subscribe act as main via `lib/acting-as.ts`, which reads the sidechat document by kind and adds no dependency from core to this optional extension. Replies, branch reports, notification tasks and default automation subscribers therefore belong to main. A message to user keeps the copy's own identity, so it never speaks as @ultimate. A message to @ultimate is refused as messaging yourself. Branch starts, reply-requesting messages, notifications and automation create/subscribe also leave one deduplicated, non-waking provenance note in main.
 
-**A branch's side chats** are read-only, so asking a question never disturbs the running coordinator or its checkout (the copy inherits its cwd). `beforeTool` blocks, before any tracking, everything tracked above plus subagent, goal, plan except show, workspace except status, instance except list/logs, and codemode's `ultimate.action` and `ultimate.tell` (`blockedInReadOnlySideChat`), also inside codemode; `effects` therefore stays false and Discard stays available. Bash cannot be audited, so it stays, and the copy's hidden reminder forbids commands that write. Its first-input reminder names the branch.
+**A branch's side chats** are read-only, so asking a question never disturbs the running coordinator or its checkout (the copy inherits its cwd). `beforeTool` blocks, before any tracking, everything tracked above plus subagent, goal, remember, plan except show, workspace except status, instance except list/logs, and codemode's `action` and `tell` (`blockedInReadOnlySideChat`), also inside codemode; `effects` therefore stays false and Discard stays available. Bash cannot be audited, so it stays, and the copy's hidden reminder forbids commands that write. Its first-input reminder names the branch.
 
 ## Fork boundary and prompt cache
 

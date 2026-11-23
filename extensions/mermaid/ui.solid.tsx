@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 /**
  * Mermaid for other extensions' browser code: `draw` renders a diagram to an SVG string at its natural size in the
  * theme's colours, one at a time through Mermaid's single global renderer (`id` becomes the SVG's id and its elements'

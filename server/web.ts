@@ -262,8 +262,10 @@ export async function createWeb(options: {
     identity = await appIdentity(projectRoot, userHome)
     inputs = new Set(next.inputs)
     brokenRoots = next.broken
-    const sourceSavedDuringBuild = await savedSince(result.inputs, buildStartedEpochMs)
-    if (sourceSavedDuringBuild) stale = true
+    const staleOnPublish =
+      (await savedSince(result.inputs, buildStartedEpochMs)) ||
+      !(await builtWithCurrentSettings(next))
+    if (staleOnPublish) stale = true
     for (const name of await readdir(folder))
       if (name !== id && !name.startsWith('.') && name !== 'manifest.json' && !retired.has(name))
         await rm(join(folder, name), { recursive: true, force: true })
@@ -361,6 +363,9 @@ export async function createWeb(options: {
       ...(failed ? { error: failed } : {}),
     }),
     facets: () => webFacets(ultimateRoot, projectRoot, userHome),
+    pageConnected() {
+      if (manifest && stale) scheduleUpdate()
+    },
     async rebuild() {
       stale = true
       if (options.pages() > 0 || building) await buildUntilFreshSerially()

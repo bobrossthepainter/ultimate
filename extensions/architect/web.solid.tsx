@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { WorkflowIcon } from '@lucide/solid'
 import { Loading as LoadingBoundary, lazy } from 'solid-js'
 import { api, defineWebExtension, writerNow, writingAs } from '@/sdk/solid'

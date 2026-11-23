@@ -58,7 +58,7 @@ Point `*.ultimate.example.com` at this machine's LAN address in your local DNS (
 ## Other Ultimates
 
 With cloud backups on, each backup registers this project's address: the tailnet URL when the `tailscale` extension
-publishes one, else the HTTPS proxy origin. `ultimate.tell` and codemode's `{ project }` on other machines then find
+publishes one, else the HTTPS proxy origin. `tools.tell` and codemode's `{ project }` on other machines then find
 it through the register. A machine that does not back up (a satellite) is named in `remotes` in the other machines'
 user settings:
 

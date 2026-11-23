@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import type { JSX } from '@solidjs/web'
 import { createMemo, createSignal, For, Match, Show, Switch } from 'solid-js'
 import { Shimmer } from '@/components/ai/shimmer.solid.tsx'

@@ -38,7 +38,11 @@ read back: the sha, the errors, the models, the proof.
 Run it in codemode; it returns steps 1, 2 and 5 as one small object. Add the feature proof by hand.
 
 ```js
-const sh = async (command) => (await tools.bash({ command })).trim()
+const sh = async (command) => {
+  const { output, exitCode } = await tools.bash({ command })
+  if (exitCode !== 0) throw new Error(`${command} exited ${exitCode}: ${output}`)
+  return output.trim()
+}
 const sys = await ultimate.system()
 const clone = await sh(`cd ${sys.code.ultimateRoot} && git log --oneline -1 && git status --short`)
 const claudeCode = JSON.parse(
@@ -47,7 +51,9 @@ const claudeCode = JSON.parse(
   ),
 )
 const ext = await ultimate.extensions()
-const previews = (await ultimate.action('instance', 'list')).filter((i) => i.running)
+const previews = (await tools.action({ extension: 'instance', action: 'list' })).filter(
+  (i) => i.running,
+)
 const busy = (await ultimate.conversations()).filter((c) => c.busy && !c.concluded)
 return {
   clone,

@@ -1,8 +1,6 @@
-/** @jsxImportSource @solidjs/web */
 import type { TaskId } from '@earendil-works/pi-durable'
 import { settle } from '@ui-sdk/core/testing'
 import { createAgent } from '@ui-sdk/solid/agent'
-import { act as actReact, createElement } from 'react'
 import { flush } from 'solid-js'
 import { expect, it, vi } from 'vitest'
 import { ROOT } from '@/sdk/solid'
@@ -262,21 +260,19 @@ it('nests the rows other extensions provide under an in-flight branch', async ({
   onTestFinished,
 }) => {
   await registry.setLoaders({
-    'extensions/sample/web.tsx': async () => ({
+    'extensions/sample/web.solid.tsx': async () => ({
       default: {
         provides: [
-          provide(UnderBranch, ({ conversation }) =>
-            createElement('span', { 'data-under-branch': conversation }, 'side chat'),
-          ),
+          provide(UnderBranch, (props) => (
+            <span data-under-branch={props.conversation}>side chat</span>
+          )),
         ],
       },
     }),
   })
   const { container } = await mount(onTestFinished)
-  await actReact(async () => {
-    await settle()
-    flush()
-  })
+  await settle()
+  flush()
   const row = container.querySelector(`[data-in-flight="${branch}"]`)!.closest('li')!
   expect(row.querySelector(`[data-under-branch="${branch}"]`)?.textContent).toBe('side chat')
   await registry.setLoaders({})

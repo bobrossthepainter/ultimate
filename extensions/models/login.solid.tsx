@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import {
   ArrowLeft,
   Check,
@@ -34,6 +33,7 @@ import {
   cn,
   errorMessage,
   refreshModels,
+  ROOT,
   useConversationId,
   useDialog,
   useDocOf,
@@ -198,7 +198,7 @@ function FlowView(props: {
   pick: () => void
   retry: () => void
 }) {
-  const doc = useDocOf(() => props.attempt.conversationId, LoginDoc)
+  const doc = useDocOf(() => ROOT, LoginDoc)
   const id = () => props.attempt.result()?.flowId
   const flow = () => (id() ? doc()?.flows[id()!] : undefined)
   const failure = () => props.attempt.result()?.error ?? flow()?.error

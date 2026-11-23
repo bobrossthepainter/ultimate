@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { ExternalLink, GlobeLockIcon, LoaderCircle, RefreshCw } from '@lucide/solid'
 import { For, Show, createMemo, createSignal, untrack } from 'solid-js'
 import type { JSX } from '@solidjs/web'

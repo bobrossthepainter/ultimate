@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { Code, Workflow } from '@lucide/solid'
 import { createEffect, createSignal, onSettled, Show } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'

@@ -18,6 +18,7 @@ import { guardToolArguments, modelTrace } from './tool-arguments.ts'
 import { readFamilies } from '../lib/families-settings.ts'
 import { callTrace } from './trace.ts'
 import { projectSkills } from './skills.ts'
+import { writeProject } from './project.ts'
 import { requestSwap } from './supervisor-protocol.ts'
 import { activeChapter, finishChapterSwitch } from '../lib/chapters.ts'
 import { defaultAgent } from '../lib/agents.ts'
@@ -36,6 +37,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
+import { createNodePhotonImages } from '@earendil-works/pi-durable/images/node'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { createBuild } from './build.ts'
 import { execFile, spawn } from '../lib/spawn.ts'
@@ -200,6 +202,7 @@ export async function prepareHarness(options: HostOptions) {
     skills: (cwd: string) => projectSkills({ ultimateRoot, projectRoot, userHome }, cwd).skills,
     restart: (approved: (generation: number) => Promise<void>) =>
       requestSwap(approved, builds.current()),
+    images: await createNodePhotonImages(),
     ultimateRoot,
     projectRoot,
     userHome,
@@ -238,6 +241,7 @@ export async function prepareHarness(options: HostOptions) {
           throw new Error(
             `A reset or restore of ${home} was interrupted; rerun pnpm reset or pnpm restore`,
           )
+        await writeProject(home, projectRoot)
         await finishChapterSwitch(home, async (file) => {
           const created = await openNodeSqliteStorage(file)
           await created.close(context)

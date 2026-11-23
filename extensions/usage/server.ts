@@ -280,8 +280,9 @@ export default function usage(host: Host) {
     current = undefined
   }
   host.onClose(async () => stop())
-  host.onOpen(async () => {
+  host.onOpen(async (stack) => {
     stop()
+    stack.defer(stop)
     const opened = epoch
     const index: Index = {
       ready: Promise.resolve(),

@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { ListChecks } from '@lucide/solid'
 import { For, Show } from 'solid-js'
 import { Tool, ToolContent, ToolHeader, ToolOutput } from '@/components/ai/tool.solid.tsx'

@@ -54,15 +54,16 @@ composer renderers), `commands.md`, `documents.md`, `surfaces.md`, `actions.md`,
   compiler, its CLI) may exist only there, not in Ultimate's own process. Use `ctx.exec` in actions (at most 30 s), and
   `host.need(Exec).run(cwd, …)` from `extensions/exec/api.ts` for longer work. Never `node:child_process` or
   `lib/exec.ts`: lint rejects them in extension code (`ultimate/no-unrouted-exec`). Check where a directory runs with
-  codemode `ultimate.action('exec', 'target', { cwd })` and call your action there before trusting a local run.
+  codemode `tools.action({ extension: 'exec', action: 'target', args: { cwd } })` and call your action there before trusting a local run.
 
 ## 5. Verify
 
-1. Server actions first: call them with codemode `ultimate.action(extension, action, args)`.
-2. `pnpm check` in the clone (format, lint, types, import boundaries, the dependency graph). For an extension outside
+1. Server actions first: call them with codemode `tools.action({ extension, action, args })`.
+2. In the clone, `pnpm check` (format, lint, types, import boundaries, the dependency graph). For an extension outside
    the clone (another project's `.ultimate/extensions/`, `~/.ultimate/extensions/`), call the `check_extensions` tool
-   on its folder instead; never guess with `npx prettier` or `tsc`, and never copy an extension into the clone to check
-   it: the running host would load it.
+   on its folder instead (or run `node <clone>/scripts/check-extension.ts [folder…]` to type-check it against the clone);
+   never guess with `npx prettier` or `tsc`, and never copy an extension into the clone to check it: the running host
+   would load it.
 3. Tests for behaviour behind it: fast tests in the extension's own `test/` folder (`extensions/<name>/test/`), no
    real waits; run them alone with `pnpm test extensions/<name>/` (see "Tests" in `extensions/README.md`).
 4. Look at it: follow the `verify-ui` skill (a preview of your checkout for anything outside the running host).

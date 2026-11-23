@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 /** Review for other extensions' browser code: the recipient picker and the actions behind the Review surface. */
 export { Recipient } from './recipient.solid.tsx'
 export type { ReviewTarget } from './link-state.ts'

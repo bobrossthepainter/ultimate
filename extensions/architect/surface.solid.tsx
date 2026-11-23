@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { parseConversationId } from '../../lib/ids.ts'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import {

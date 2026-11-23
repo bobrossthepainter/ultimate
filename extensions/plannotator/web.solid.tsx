@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { ExternalLink, MessageSquareCode } from '@lucide/solid'
 import { createMemo, For, Show } from 'solid-js'
 import {

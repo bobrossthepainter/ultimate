@@ -4,8 +4,9 @@ import { dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { arr, bool, int, lit, map, obj, opt, str, union, unknown } from '@earendil-works/pi-schema'
 import { strEnum } from '../../lib/schema.ts'
-import { formatDimensionNote, resizeImage } from '@earendil-works/pi-coding-agent'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
+import { fitImage } from '@earendil-works/pi-durable/images/fit'
+import { DEFAULT_IMAGE_LIMITS, type ImageProcessor } from '@earendil-works/pi-durable/tools'
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core'
 import { groupTarget, identify } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -14,6 +15,13 @@ import { watchSteer } from '../../lib/steer.ts'
 import { within as withinDeadline } from '../../lib/timers.ts'
 import { safeToRerun } from '../../lib/replay.ts'
 import { errnoCode, inProcess, ignoring, meansNone } from '../../lib/errors.ts'
+import type { TestHook } from '../../web/src/sdk/test-hook.ts'
+
+declare global {
+  interface Window {
+    ultimate?: TestHook
+  }
+}
 
 export async function playwrightChromiums(
   home: string,
@@ -73,7 +81,8 @@ export function screenshotFile(home: string, cwd: string, path?: string) {
 }
 
 const stepTimeoutMs = 30_000
-const untilTimeoutMs = 300_000
+const untilTimeoutMs = 10_000
+const maxUntilTimeoutMs = 120_000
 const closeTimeoutMs = 5_000
 
 function timeout(ms: number) {
@@ -107,6 +116,27 @@ function killDisconnectedBrowserGroup(owner: { pid: number; start: string } | un
   }
 }
 
+async function namingMatches(page: Page, selector: string, error: unknown): Promise<never> {
+  if (!String(error).includes('strict mode violation')) throw error
+  const matches = page.locator(selector)
+  const count = await matches.count()
+  const shown = await Promise.all(
+    Array.from({ length: Math.min(count, 5) }, (_, index) =>
+      matches
+        .nth(index)
+        .ariaSnapshot()
+        .then((snapshot) => snapshot.split('\n')[0].replace(/^- /, '').slice(0, 120)),
+    ),
+  )
+  throw new Error(
+    [
+      `${JSON.stringify(selector)} matches ${count} elements; a step needs exactly one. Scope it to one card or panel ('[data-entry-id="42"] button:has-text("Retry")'), or find the control with a ui query step. The matches:`,
+      ...shown.map((match, index) => `  ${index + 1}) ${match}`),
+      ...(count > shown.length ? [`  … and ${count - shown.length} more`] : []),
+    ].join('\n'),
+  )
+}
+
 function waitForCompositorSurface(page: Page) {
   return page.evaluate(
     () =>
@@ -116,7 +146,13 @@ function waitForCompositorSurface(page: Page) {
   )
 }
 
-async function capture(page: Page, file: string, selector?: string, fullPage = false) {
+async function capture(
+  images: ImageProcessor,
+  page: Page,
+  file: string,
+  selector?: string,
+  fullPage = false,
+) {
   await waitForCompositorSurface(page)
   await mkdir(dirname(file), { recursive: true })
   const target = selector ? page.locator(selector) : page
@@ -125,16 +161,15 @@ async function capture(page: Page, file: string, selector?: string, fullPage = f
     type: 'png',
     ...(selector ? {} : { fullPage }),
   })
-  const resized = await resizeImage(png, 'image/png', { maxWidth: 1600, maxHeight: 1600 })
-  return {
-    file,
-    image: resized
-      ? { type: 'image' as const, mimeType: resized.mimeType, data: resized.data }
-      : undefined,
-    note: resized
-      ? formatDimensionNote(resized)
-      : '[Image omitted: could not be resized below the inline image size limit.]',
-  }
+  const fitted = await fitImage(
+    new Uint8Array(png),
+    'image/png',
+    { ...DEFAULT_IMAGE_LIMITS, maxWidth: 1600, maxHeight: 1600 },
+    images,
+  )
+  return fitted.kind === 'fitted'
+    ? { file, image: fitted.image, note: fitted.notes.join(' ') }
+    : { file, image: undefined, note: fitted.note }
 }
 
 export default function browserExtension(host: ExtensionHost) {
@@ -153,6 +188,13 @@ export default function browserExtension(host: ExtensionHost) {
           'Where to save the PNG, relative to your cwd; default: a new file in the home.',
       }),
     ),
+    width: opt(
+      int({
+        minimum: 1,
+        description: 'Viewport width in CSS pixels; default 1440, 375 for a phone.',
+      }),
+    ),
+    height: opt(int({ minimum: 1, description: 'Viewport height in CSS pixels; default 900.' })),
     timeoutMs: opt(
       int({ minimum: 1, description: 'Limit per step, load and capture; default 30000.' }),
     ),
@@ -176,8 +218,6 @@ export default function browserExtension(host: ExtensionHost) {
         ),
         parameters: obj({
           ...base,
-          width: opt(int({ minimum: 1 })),
-          height: opt(int({ minimum: 1 })),
           fullPage: opt(bool()),
           selector: opt(str()),
           waitMs: opt(int({ minimum: 0 })),
@@ -187,14 +227,14 @@ export default function browserExtension(host: ExtensionHost) {
           const waitMs = args.waitMs ?? 1500
           return run(args, waitMs, api, context, async (page, _outcomes, png, guard) => {
             await guard(page.waitForTimeout(waitMs), waitMs)
-            return guard(capture(page, png, args.selector, args.fullPage))
+            return guard(capture(host.images, page, png, args.selector, args.fullPage))
           })
         },
       }),
       defineTool({
         name: 'browser',
         description:
-          "Drive a fresh browser page and report each step's outcome, then an image unless screenshot: false. Each step times out after 30 s. On an Ultimate page (this UI or a preview) every control is a ui-sdk component: drive it with `ui` steps, not selectors. {ui: 'query', text} finds controls by label or row text, with their ref, state and actions; {ui: 'act', steps: [{ref, action, args?}]} runs actions as the agent (ref: the exact label or a ref) and returns what changed and what appeared, like [{ref: 'System', action: 'press'}] to switch surface or [{ref: 'Keep warm', action: 'setChecked', args: [false]}]; {ui: 'snapshot'} lists the page's controls (long pages stop at 100: prefer query). `send` submits a prompt and `until` waits on state, never a guessed time: 'idle' (that conversation's turn is done), 'quiet' (nothing is busy, branches and subagents included), {entry: kind}, {event: name, where} or {ui: label, is: {checked: false}} (that control has that state; is omitted: it is on the page); until defaults to 5 min (timeoutMs) and on timeout says what it saw. click, fill, press and a selector wait are for testing the interaction itself or pages without ui-sdk; scope them to one card or panel ('[data-entry-id=\"42\"] button:has-text(\"Retry\")'). eval reads what no control holds: transcript text, layout, styles.",
+          "Drive a fresh browser page and report each step's outcome, then an image unless screenshot: false. Each step times out after 30 s. On an Ultimate page (this UI or a preview) every control is a ui-sdk component: drive it with `ui` steps, not selectors. {ui: 'query', text} finds controls by label or row text, with their ref, state and actions; {ui: 'act', steps: [{ref, action, args?}]} runs actions as the agent (ref: the exact label or a ref) and returns what changed and what appeared, like [{ref: 'System', action: 'press'}] to switch surface or [{ref: 'Keep warm', action: 'setChecked', args: [false]}]; {ui: 'snapshot'} lists the page's controls (long pages stop at 100: prefer query). `send` submits a prompt and `until` waits on state, never a guessed time: 'idle' (that conversation's turn is done), 'quiet' (nothing is busy, branches and subagents included), {entry: kind}, {event: name, where} or {ui: label, is: {checked: false}} (that control has that state; is omitted: it is on the page); until fails after 10 s and says what it saw: a control, a state or an event that takes longer is a bug to report. Only waiting on a model turn ('idle', 'quiet' or {entry: 'assistant'} after a send) passes a longer timeoutMs, at most 120000. eval is not for waiting: no setTimeout sleeps in it; use until. click, fill, press and a selector wait are for testing the interaction itself or pages without ui-sdk; scope them to one card or panel ('[data-entry-id=\"42\"] button:has-text(\"Retry\")'). eval reads what no control holds: transcript text, layout, styles.",
         parameters: obj({
           ...base,
           steps: arr(
@@ -254,7 +294,7 @@ export default function browserExtension(host: ExtensionHost) {
                   }),
                 ]),
                 conversation: opt(int({ minimum: 1 })),
-                timeoutMs: opt(int({ minimum: 1 })),
+                timeoutMs: opt(int({ minimum: 1, maximum: maxUntilTimeoutMs })),
               }),
             ]),
           ),
@@ -288,10 +328,13 @@ export default function browserExtension(host: ExtensionHost) {
                 let value: unknown
                 if ('click' in step || 'fill' in step || 'press' in step)
                   await ultimateControlsMounted()
-                if ('click' in step) await guard(page.locator(step.click).click())
-                else if ('fill' in step) await guard(page.locator(step.fill[0]).fill(step.fill[1]))
+                const one = (selector: string, work: Promise<void>) =>
+                  guard(work.catch((error: unknown) => namingMatches(page, selector, error)))
+                if ('click' in step) await one(step.click, page.locator(step.click).click())
+                else if ('fill' in step)
+                  await one(step.fill[0], page.locator(step.fill[0]).fill(step.fill[1]))
                 else if ('press' in step) await guard(page.keyboard.press(step.press))
-                else if ('wait' in step) await guard(page.locator(step.wait).waitFor())
+                else if ('wait' in step) await one(step.wait, page.locator(step.wait).waitFor())
                 else if ('send' in step || 'until' in step || 'ui' in step) {
                   const waitForLoadedSdk = () =>
                     guard(
@@ -403,11 +446,11 @@ export default function browserExtension(host: ExtensionHost) {
                 throw error
               }
             }
-            return args.screenshot === false ? undefined : guard(capture(page, png))
+            return args.screenshot === false ? undefined : guard(capture(host.images, page, png))
           })
         },
       }),
-    ].map((tool) => ({ ...tool, outputSchema: { type: 'object' } })),
+    ].map((tool) => ({ ...tool, structuredOutputSchema: { type: 'object' } })),
   })
   async function run(
     args: {
@@ -548,7 +591,7 @@ export default function browserExtension(host: ExtensionHost) {
       )
       context.abortSignal?.throwIfAborted()
       return {
-        structuredContent: {
+        structuredOutput: {
           title,
           ...(result
             ? {

@@ -28,6 +28,8 @@ export type AutomationsService = {
   wakes(now: number): Promise<{ at: number; reason: string }[]>
   /** Ids of the automations whose script process is alive. */
   scripts(): Promise<string[]>
+  /** Like `read`, the record `create` made with this `key`. */
+  readByKey(tx: Tx, key: string): Promise<Automation | undefined>
 }
 /** The automations service. */
 export const AutomationsApi = defineApi<AutomationsService>()('automations')

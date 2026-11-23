@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
-import { afterEach, expect, it } from 'vitest'
+import { afterAll, beforeAll, expect, it } from 'vitest'
 import browserExtension from '../../server.ts'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { context } from '../../../../server/harness.ts'
@@ -12,12 +12,11 @@ import { UiState } from '../../../../shared/ui-state.ts'
 import { fauxServer, removeTemp, temp } from '../../../../test/helpers.ts'
 
 const cleanup: (() => Promise<void>)[] = []
-afterEach(async () => {
+afterAll(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close()
 })
 
-const panel = `/** @jsxImportSource @solidjs/web */
-import { createSignal } from 'solid-js'
+const panel = `import { createSignal } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover.solid.tsx'
 import { Switch } from '@/components/ui/switch.solid.tsx'
@@ -60,14 +59,13 @@ export default defineWebExtension({ slots: { 'statusline.left': Digest } })
 
 type Component = { ref: string; label?: string; component: string }
 
-async function serve(settings?: object) {
+async function boot() {
   const home = await temp('ultimate-browser-ui-')
   cleanup.push(() => removeTemp(home))
   const folder = join(home, '.ultimate/extensions/digest')
   await mkdir(folder, { recursive: true })
   await writeFile(join(folder, 'digest.solid.tsx'), panel)
   await writeFile(join(folder, 'web.solid.tsx'), web)
-  if (settings) await writeFile(join(home, '.ultimate/settings.json'), JSON.stringify(settings))
   const server = await fauxServer({
     ultimateRoot: resolve('.'),
     projectRoot: resolve('.'),
@@ -94,8 +92,8 @@ async function serve(settings?: object) {
       context,
     )
     if (result.isError) throw new Error(JSON.stringify(result.output))
-    const { outcomes } = (result as unknown as { structuredContent: { outcomes: string[] } })
-      .structuredContent
+    const { outcomes } = (result as unknown as { structuredOutput: { outcomes: string[] } })
+      .structuredOutput
     return (n: number) => {
       const prefix = `Step ${n}: OK `
       const line = outcomes.find((outcome) => outcome.startsWith(prefix))
@@ -103,14 +101,29 @@ async function serve(settings?: object) {
       return JSON.parse(line.slice(prefix.length)) as unknown
     }
   }
-  const changes = async () =>
+  const allChanges = async () =>
     ((await server.harness.snapshot(EventFeed, ROOT_CONVERSATION_ID, context))?.events ?? [])
       .filter((event) => ChangedEvent.is(event))
       .map((event) => event.data)
-  const recorded = changes
   const uiState = async () =>
     (await server.harness.snapshot(UiState, ROOT_CONVERSATION_ID, context)) ?? {}
-  return { drive, changes, recorded, uiState }
+  return { drive, allChanges, uiState, server }
+}
+
+let shared: Awaited<ReturnType<typeof boot>>
+beforeAll(async () => {
+  shared = await boot()
+}, 60_000)
+
+/** The tests share one server and its one UI state: each starts from an unset digest and sees only its own changes. */
+async function serve() {
+  const { drive, allChanges, uiState, server } = shared
+  await server.harness.commit(async (tx) => {
+    delete (await tx.doc(UiState, ROOT_CONVERSATION_ID))['ext.digest.digest']
+  }, context)
+  const seen = (await allChanges()).length
+  const changes = async () => (await allChanges()).slice(seen)
+  return { drive, changes, recorded: changes, uiState }
 }
 
 const digest = { component: 'switch', label: 'Weekly digest', checked: false }
@@ -302,6 +315,17 @@ it('until a control’s state wakes on its change, by label or by ref, and a mis
     error: { step: 0, message: 'No component c9999 on the page.' },
   })
   expect(value(4)).toBe('none')
+})
+
+// An until on an event that never came held a browser call for 3 minutes; without timeoutMs it fails after 10 s.
+it('fails an until without timeoutMs after 10 s, saying what it saw', async () => {
+  const { drive } = await serve()
+  const begin = performance.now()
+  await expect(drive([{ until: { event: 'workspaces.landed' } }])).rejects.toThrow(
+    /Timed out after [\d.]+s: no matching workspaces.landed event/,
+  )
+  expect(performance.now() - begin).toBeGreaterThan(9_000)
+  expect(performance.now() - begin).toBeLessThan(30_000)
 })
 
 it('records nothing from the agent when it opens and closes a popover', async () => {

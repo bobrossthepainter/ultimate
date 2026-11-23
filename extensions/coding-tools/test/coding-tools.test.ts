@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { crc32, deflateSync } from 'node:zlib'
 import { createBashTool } from '@earendil-works/pi-durable/tools'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
+import { createNodePhotonImages } from '@earendil-works/pi-durable/images/node'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import codingTools from '../server.ts'
@@ -15,6 +16,8 @@ afterEach(() => vi.unstubAllEnvs())
 
 const inertHost = {
   ...apis(),
+  home: '',
+  images: undefined as never,
   notice: () => {},
   onOpen: () => {},
   react: () => {},
@@ -79,6 +82,7 @@ it('reads an image past the 2000 px limit shrunk to fit, keeping its aspect rati
     const read = codingTools({
       ...inertHost,
       home: dir,
+      images: await createNodePhotonImages({ worker: false }),
       emit: vi.fn<ExtensionHost['emit']>() as ExtensionHost['emit'],
     }).tools!.find((tool) => tool.name === 'read')!
     const api = {

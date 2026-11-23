@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { getState, ROOT, useConversations, useDocOf } from '@/sdk/solid'
 import type { ConversationSummary } from '@/sdk/solid'

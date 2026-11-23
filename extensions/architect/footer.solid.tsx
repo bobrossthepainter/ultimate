@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { ArrowRightIcon, CheckIcon, CircleAlertIcon, MessageSquareIcon, XIcon } from '@lucide/solid'
 import { createSignal } from 'solid-js'

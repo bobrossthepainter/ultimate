@@ -723,7 +723,8 @@ export default function cacheWarming(host: ExtensionHost) {
     },
     { from: 'now' },
   )
-  host.onOpen(async () => {
+  host.onOpen(async (opened) => {
+    opened.defer(() => stopAll('Ultimate restarted'))
     rebuiltOnOpen(
       'warming runs are rebuilt from the stored answers and pings each time the extension opens',
       resume(host, runs, facet).catch((error: unknown) =>
@@ -731,7 +732,6 @@ export default function cacheWarming(host: ExtensionHost) {
       ),
     )
   })
-  host.onRelease(async () => stopAll('Ultimate restarted'))
   host.onClose(async () => {
     facet.closed = true
     stopAll('Cache warming reloaded')

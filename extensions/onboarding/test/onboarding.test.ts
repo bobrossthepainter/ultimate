@@ -141,7 +141,9 @@ it('gates project resources until the local setup is chosen, and remembers the c
     expect((await web()).some((path) => path.endsWith('/x/web.solid.tsx'))).toBe(true)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(true)
     expect(projectDecision(project, home)).toBe(true)
-    await server.close()
+    const first = server
+    server = undefined
+    await first.close()
     server = await fauxServer(options)
     expect(server.system.current().project.decision).toBe(true)
     expect(drive(server).enabled('x')).toBe(true)
@@ -249,7 +251,9 @@ it('withdraws the local setup, adopts it into user settings, and remembers the f
     expect(await action('status')).toMatchObject({ firstRun: true, off: false })
     await action('firstRunDone')
     expect((await action('status')).firstRun).toBe(false)
-    await server.close()
+    const first = server
+    server = undefined
+    await first.close()
     server = await fauxServer(options)
     expect(server.system.current().project.decision).toBe(false)
     expect(drive(server).enabled('x')).toBe(false)
@@ -419,20 +423,22 @@ it('offers setup only to named definitions, refuses inapplicable cards, and dedu
     expect(
       JSON.stringify(
         await run('codemode', {
-          code: `return await ultimate.action('onboarding', 'choose', ${JSON.stringify(choice)});`,
+          code: `return await tools.action({extension: 'onboarding', action: 'choose', args: ${JSON.stringify(choice)}});`,
         }),
       ),
     ).toContain('onboarding/choose is a user-only action')
     expect(
       JSON.stringify(
         await run('codemode', {
-          code: "return await ultimate.action('onboarding', 'start', {root: 1});",
+          code: "return await tools.action({extension: 'onboarding', action: 'start', args: {root: 1}});",
         }),
       ),
     ).toContain('onboarding/start is a user-only action')
     expect(
       JSON.stringify(
-        await run('codemode', { code: "return await ultimate.action('workspaces', 'setupGit');" }),
+        await run('codemode', {
+          code: "return await tools.action({extension: 'workspaces', action: 'setupGit'});",
+        }),
       ),
     ).toContain('workspaces/setupGit is a user-only action')
     // Absence is checked independently of the remembered project decision.

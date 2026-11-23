@@ -23,7 +23,6 @@ export const actions = {
 ```
 
 ```tsx
-/** @jsxImportSource @solidjs/web */
 // web.solid.tsx
 import { actionRef, useAction } from '@/sdk/solid'
 
@@ -100,7 +99,7 @@ Call actions from the UI in one of two ways:
 </Button>
 ```
 
-Agents call actions in codemode with `await ultimate.action('todos', 'list', args)`, returning the result directly
+Agents call actions in codemode with `await tools.action({extension: 'todos', action: 'list', args})`, returning the result directly
 or throwing the action's error. Calls run in-process on behalf of the calling conversation, with the sandbox abort
 signal; omitted args become null. `ultimate.extensions()` lists actions; document their args in your README.
 
@@ -113,6 +112,9 @@ export const userActions = ['decide']
 ```
 
 Codemode rejects these calls with `<extension>/<action> is a user-only action`; the HTTP path still calls them.
+`userActions` restrict codemode and tools, not pages: a page an agent drives with the browser tool may press the
+control that calls one, by design. To have the UI ask a person, mark that control `data-agent-confirm="what it does"`:
+the browser tool's step on it fails with "Needs a person" (`skills/solid-ui/SKILL.md`).
 
 Likewise `pollActions: string[]` names read-only actions a surface polls with changing arguments (cursors, windows):
 the call trace counts their successful calls in `host.trace.polls()` instead of writing them, with the plain action
@@ -120,4 +122,4 @@ and service calls they make; a failure, a model call or a tool call under one is
 This is an explicit opt-out from agent action dispatch, not a security sandbox against arbitrary agent code.
 
 The HTTP endpoint remains browser-only: requests require `Sec-Fetch-Site: same-origin` or a loopback `Origin`
-matching the server's port. A plain agent `curl` receives 403; use `ultimate.action` instead of forging browser headers.
+matching the server's port. A plain agent `curl` receives 403; use `tools.action` instead of forging browser headers.

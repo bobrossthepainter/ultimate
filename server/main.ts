@@ -23,7 +23,6 @@ import { realpath } from 'node:fs/promises'
 import { extensionModules } from './vite-extensions.ts'
 import { createWeb } from './web.ts'
 import { admit, createAccess, proxied } from './request-security.ts'
-import { writeProject } from './project.ts'
 import { reportCore } from './supervisor-protocol.ts'
 import { viteLogger } from './vite-logger.ts'
 import type { Notice } from '../shared/protocol.ts'
@@ -253,7 +252,9 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     )
     await extensions.opened()
     await system.changed()
-    api = await createApi(host, harness, events, system, extensions, access)
+    api = await createApi(host, harness, events, system, extensions, access, () =>
+      web.pageConnected(),
+    )
     harness.harness.resume()
     return { ...harness, api, system }
   }
@@ -279,7 +280,6 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     go: (activationError?: string) =>
       serial(async () => {
         processInfo.activationError = activationError
-        await writeProject(host.home, host.projectRoot)
         const served = await openExtensionsThenServeApi(await host.open(false))
         reportCore({ type: 'web', state: 'ready' })
         return served

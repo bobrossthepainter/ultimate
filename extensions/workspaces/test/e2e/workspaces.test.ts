@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -11,6 +12,8 @@ import workspaceExtension from '../../server.ts'
 import { workspaces } from '../../workspaces.ts'
 import { git } from '../../../../lib/git.ts'
 import { Exec } from '../../../exec/api.ts'
+import { ignoring, isNoProcess } from '../../../../lib/errors.ts'
+import { groupTarget } from '../../../../lib/process-group.ts'
 import { localExec, temp, until } from '../../../../test/helpers.ts'
 
 const cleanup: (() => Promise<void>)[] = []
@@ -67,6 +70,17 @@ async function reopen(
   })
   return workspaces(host)
 }
+/** Kill a child spawned `detached` with every process it started, as a crash of its machine would. */
+async function crash(child: ChildProcess) {
+  const exited =
+    child.exitCode === null && child.signalCode === null ? once(child, 'exit') : undefined
+  try {
+    process.kill(groupTarget(child.pid!), 'SIGKILL')
+  } catch (error) {
+    ignoring(isNoProcess)(error)
+  }
+  await exited
+}
 it('clears and reruns a configured add command a crash interrupted', async () => {
   const paths = await repository()
   const started = join(paths.directory, 'started')
@@ -99,6 +113,7 @@ it('clears and reruns a configured add command a crash interrupted', async () =>
   `
   const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
     cwd: process.cwd(),
+    detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
@@ -113,8 +128,7 @@ it('clears and reruns a configured add command a crash interrupted', async () =>
         () => false,
       )
     })
-    child.kill('SIGKILL')
-    await once(child, 'exit')
+    await crash(child)
     const id = Number(await readFile(idFile, 'utf8')) as ConversationId
     await writeFile(gate, '')
     const service = await reopen(paths, [], worktree)
@@ -131,10 +145,7 @@ it('clears and reruns a configured add command a crash interrupted', async () =>
     expect((await readFile(started, 'utf8')).trim().split('\n')).toHaveLength(2)
     expect(await git(workspace.path, 'branch', '--show-current')).toBe(workspace.branch)
   } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGKILL')
-      await once(child, 'exit')
-    }
+    await crash(child)
   }
 })
 it.each(['symlinked home mid-setup', 'branch creation before registration'])(
@@ -186,6 +197,7 @@ exec git "$@"
     )
     const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
       cwd: process.cwd(),
+      detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
@@ -206,8 +218,7 @@ exec git "$@"
           () => false,
         )
       })
-      child.kill('SIGKILL')
-      await once(child, 'exit')
+      await crash(child)
       const id = Number(await readFile(idFile, 'utf8')) as ConversationId
       await writeFile(gate, '')
       const service = await reopen(paths, commands)
@@ -218,10 +229,7 @@ exec git "$@"
       expect((await readFile(started, 'utf8')).trim().split('\n')).toHaveLength(2)
       expect(await git(workspace.path, 'branch', '--show-current')).toBe(workspace.branch)
     } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill('SIGKILL')
-        await once(child, 'exit')
-      }
+      await crash(child)
     }
   },
 )
