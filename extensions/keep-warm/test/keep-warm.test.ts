@@ -304,6 +304,8 @@ it('re-arms dormant runs on set and after a pause, and records uiChanged', async
   const events = eventHost(() => harness, 'keep-warm')
   const lifecycle = openers()
   const resources = new Map<string, unknown>()
+  // A process that loaded keep-warm before dormant runs existed keeps this shape across a hot reload.
+  resources.set('keep-warm.runs', { sent: new Map(), active: new Map(), stopped: new Map() })
   let paused = false
   const services = apis()
   services.provided.set('conversations', {

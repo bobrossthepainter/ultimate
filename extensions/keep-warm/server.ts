@@ -918,7 +918,7 @@ export default function keepWarm(host: ExtensionHost) {
 }
 
 const runsOf = (host: ExtensionHost) =>
-  host.resource<Runs>('keep-warm.runs', () => ({
+  host.resource<Runs>('keep-warm.warming', () => ({
     sent: new Map(),
     active: new Map(),
     dormant: new Map(),
