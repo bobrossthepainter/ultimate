@@ -22,20 +22,42 @@ import type { CoreReport } from '../server/supervisor-protocol.ts'
 import { dashboard } from './dashboard.ts'
 
 const ultimateRoot = resolvePath(fileURLToPath(new URL('..', import.meta.url)))
-const { values, positionals } = parseArgs({
-  options: {
-    port: { type: 'string' },
-    host: { type: 'string' },
-    'allowed-origin': { type: 'string' },
-    'proxy-origin': { type: 'string' },
-    'no-open': { type: 'boolean' },
-  },
-  allowPositionals: true,
-})
-if (positionals.length > 1)
-  throw new Error(
-    'Usage: ultimate [dir] [--port N] [--host 127.0.0.1|0.0.0.0] [--allowed-origin URL] [--proxy-origin URL] [--no-open]',
-  )
+const usage = `Usage: ultimate [dir] [--port N] [--host 127.0.0.1|0.0.0.0] [--allowed-origin URL] [--proxy-origin URL] [--no-open]
+
+Starts Ultimate for the project in dir (default: the current directory), or opens a window of it when it already runs.
+
+  --port N               serve on port N (default: ULTIMATE_PORT, the project's settings port, or the first free from 4747)
+  --host H               listen on 127.0.0.1 (default, also ULTIMATE_HOST) or 0.0.0.0
+  --allowed-origin URL   with --host 0.0.0.0, the HTTP origin other devices use (also ULTIMATE_ALLOWED_ORIGIN)
+  --proxy-origin URL     the HTTPS origin of a loopback TLS reverse proxy (also ULTIMATE_PROXY_ORIGIN)
+  --no-open              do not open a window (also ULTIMATE_NO_OPEN=1)
+  -h, --help             print this help`
+function usageError(message: string): never {
+  console.error(`${message}\n\n${usage}`)
+  process.exit(1)
+}
+const { values, positionals } = (() => {
+  try {
+    return parseArgs({
+      options: {
+        port: { type: 'string' },
+        host: { type: 'string' },
+        'allowed-origin': { type: 'string' },
+        'proxy-origin': { type: 'string' },
+        'no-open': { type: 'boolean' },
+        help: { type: 'boolean', short: 'h' },
+      },
+      allowPositionals: true,
+    })
+  } catch (error) {
+    return usageError((error as Error).message)
+  }
+})()
+if (values.help) {
+  console.log(usage)
+  process.exit(0)
+}
+if (positionals.length > 1) usageError('Expected at most one project directory')
 const host = values.host ?? process.env.ULTIMATE_HOST ?? '127.0.0.1'
 if (host !== '127.0.0.1' && host !== '0.0.0.0')
   throw new Error('Invalid host: expected 127.0.0.1 or 0.0.0.0')

@@ -12,7 +12,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { hostname } from 'node:os'
+import { machineHostname } from '../../../lib/machine.ts'
 import { join, resolve } from 'node:path'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -39,7 +39,7 @@ import { Metadata } from '../../../server/metadata.ts'
 import { emit } from '../../../server/events.ts'
 import messagesExtension, { actions } from '../server.ts'
 import { sendResult } from '../delivery.ts'
-import { Serving } from '../addresses.ts'
+import { Serving, Started } from '../addresses.ts'
 import pauseExtension, { actions as pauseActions } from '../../pause/server.ts'
 import { AskedCalls, Judge, Judgements, Messages, MessageSent } from '../api.ts'
 import type { JudgeService, JudgeState } from '../api.ts'
@@ -1558,6 +1558,33 @@ it('lets a branch ask the user directly and leaves passive question and answer n
   expect(await entries('board.asked')).toHaveLength(1)
   expect(await entries('board.answered')).toHaveLength(1)
 })
+it('points a branch question and its answer at the standing agent that started the branch', async () => {
+  const f = await fixture()
+  const b = await branched(f)
+  const triage = f.recipient
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).triage = triage.id
+    ;(await tx.doc(Started, b.id as ConversationId)).by = triage.id
+  }, context)
+  const kinds = async (id: ConversationId) =>
+    (await (await f.opened.harness.conversation(id, context))!.context(context)).entries.map(
+      (entry) => entry.kind,
+    )
+  await b.later(
+    'SEND ' +
+      JSON.stringify({
+        to: 'user',
+        text: 'Pick one',
+        questions: [{ text: 'A?', kind: 'confirm' }],
+      }),
+  )
+  const question = (await f.log())!.messages.find((m) => m.from === b.id && m.to === 'user')!
+  await f.service().answer(question.id, 'Q: A?\nA: Yes', context)
+  await until(async () => (await kinds(triage.id)).includes('board.answered'))
+  expect(await kinds(triage.id)).toContain('board.asked')
+  expect(await kinds(ROOT_CONVERSATION_ID)).not.toContain('board.asked')
+  expect(await kinds(ROOT_CONVERSATION_ID)).not.toContain('board.answered')
+})
 it('forwards images into a new branch with its prompt', async () => {
   const f = await fixture()
   const tool = (await f.opened.root.agent(context)).deferred.find((t) => t.name === 'branch')!
@@ -2381,7 +2408,7 @@ async function remoteFixture(url?: string) {
   return f
 }
 // The sender runs on this machine, so its answer routes back to the local poe2-rust instance.
-const from = { project: 'poe2-rust', machine: hostname() }
+const from = { project: 'poe2-rust', machine: machineHostname() }
 it("delivers another Ultimate's message to @ultimate only, labelled as it, once per key", async () => {
   const other = await otherUltimate(() => [200, { result: 7 }])
   const f = await remoteFixture(other.url)
@@ -2398,7 +2425,7 @@ it("delivers another Ultimate's message to @ultimate only, labelled as it, once 
   expect(f.observed.filter((text) => text.includes('Start a branch that adds X'))).toHaveLength(1)
   const delivered = f.observed.find((text) => text.includes('Start a branch'))!
   expect(delivered).toContain(
-    `Message from @ultimate@poe2-rust on ${hostname()} (another project's Ultimate, not the user):`,
+    `Message from @ultimate@poe2-rust on ${machineHostname()} (another project's Ultimate, not the user):`,
   )
   expect(f.observed.some((text) => text.includes('Start a branch') && text !== delivered)).toBe(
     false,
@@ -3173,7 +3200,7 @@ it('fails a tell at once when the other Ultimate has no route back for its answe
   const tell = (reply: boolean) =>
     asker.service().tell(ROOT_CONVERSATION_ID, { project: 'my-app', text: 'Probe', reply }, context)
   await expect(tell(true)).rejects.toThrow(
-    `my-app on ${hostname()} cannot answer: add asker on ${hostname()} to remotes in its user settings, or tell with reply: false.`,
+    `my-app on ${machineHostname()} cannot answer: add asker on ${machineHostname()} to remotes in its user settings, or tell with reply: false.`,
   )
   expect((await asker.log())!.messages.at(-1)).toMatchObject({ reply: true, state: 'failed' })
   expect((await replier.log())?.messages ?? []).toEqual([])

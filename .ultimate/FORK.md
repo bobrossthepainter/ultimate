@@ -17,7 +17,8 @@ so branches adding divergences in parallel do not edit the same lines.
 - Touches: `bin/ultimate.ts`, `server/main.ts`, `extensions/instance/server.ts`, `extensions/review/file-diff.solid.tsx` (comment ids without
   `crypto.randomUUID`, missing on plain-HTTP LAN pages; re-applied on upstream's Solid review in the 2026-11-23 merge),
   `test/e2e/supervisor-*`
-- Why: `--host`/`--allowed-origin` for private-network access, `--proxy-origin` for a loopback TLS reverse proxy (HTTP
+- Why: `--host`/`--allowed-origin` for private-network access (since the 2026-11-24 merge listed in upstream's
+  `--help` usage), `--proxy-origin` for a loopback TLS reverse proxy (HTTP
   and SSE; no HMR socket)
 - Upstream: candidate
 
@@ -95,7 +96,9 @@ so branches adding divergences in parallel do not edit the same lines.
   (upstream's untracked-file `ls-files` in `changedFiles` routed through `exec.git`, and
   `extensions/coding-tools/background.ts` keeps upstream's `dropHostNodeEnv` through `exec.start`, 2026-11-23 merge;
   `extensions/subagents/server.ts` keeps its stop-time `git diff` on the `Exec` service, dropping upstream's
-  `lib/exec.ts` import, second 2026-11-23 merge)
+  `lib/exec.ts` import, second 2026-11-23 merge), `vite.config.ts` host-local allowlist (`extensions/video/server.ts`:
+  upstream's ffmpeg/ffprobe on uploaded videos in Ultimate's own home, 2026-11-24 merge; `lib/machine.ts` runs
+  `scutil` for this machine's own name and stays local)
 - Why: Core-tier service running project and worktree commands where their directory lives; `exec.protocol` point for
   remote targets (pod-local proof). The give-back set includes 21b7d4cc: each protocol's `describe` and exec's
   `target` action, so the Info panel shows where a conversation's commands run. Extension actions' `ctx.exec` runs
@@ -295,7 +298,9 @@ so branches adding divergences in parallel do not edit the same lines.
   2026-11-23 merge moved upstream's `codemode` onto Pi Durable's `createCodemodeExtension` so nested calls (including
   `action` and `tell`) run through `ToolTask.beforeTool`, letting the fork drop `lib/side-chat-guard.ts` and all
   divergence in `extensions/codemode/server.ts` (`blockedInReadOnlySideChat` now lives in `extensions/side-chat/server.ts`
-  blocking `action`, `tell` and `remember`)
+  blocking `action`, `tell` and `remember`). The 2026-11-24 merge moved upstream's fork helpers into
+  `lib/settled-answer.ts`; the fork imports `answerIncludingClosingToolResults` from there (question side chats) and
+  keeps only `newestClosedRound`
 - Why: ask a running branch questions without disturbing it; a branch is usually mid-run, so the fork point moved
   from the last answered input to the newest finished tool round, for @ultimate too
 - Upstream: candidate
@@ -308,14 +313,6 @@ so branches adding divergences in parallel do not edit the same lines.
   fork's SVG `extensions/mermaid`, which the user approved; one renderer per job. `lovely-mermaid` stays installed
   but unused. Re-check on each merge whether upstream changed either renderer
 - Upstream: local-only
-
-### Store test queues only the flush microtask
-
-- Touches: `test/web/store.test.ts` ("still dispatches valid opens … when one local 413 callback throws")
-- Why: upstream's test mocks every `queueMicrotask` into an array; on Node 26.13 undici's body reads use
-  `queueMicrotask` too, so they never ran and the worker died out of heap. The mock now holds only the store's
-  `flush` and passes other microtasks through (2026-11-23 merge)
-- Upstream: candidate
 
 ### Cloud identity for any Git host
 

@@ -1,3 +1,4 @@
+import { answerIncludingClosingToolResults } from '../../lib/settled-answer.ts'
 import { parseConversationId, offsetEntryId } from '../../lib/ids.ts'
 import type { ConversationId, Cursor, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
@@ -116,37 +117,6 @@ export async function newestClosedRound(tx: Tx, main: ConversationId): Promise<E
   } while (cursor)
   if (newest === undefined || skipOpenRound) throw new Error(`#${main} has nothing to fork yet`)
   return newest
-}
-
-async function answerIncludingClosingToolResults(
-  tx: Tx,
-  main: ConversationId,
-  answer: EntryId,
-): Promise<EntryId> {
-  const entry = (await tx.entry(answer))!
-  const pending = new Set(
-    entry.model?.flatMap((message) =>
-      message.role === 'assistant'
-        ? message.content.flatMap((part) => (part.type === 'toolCall' ? [part.id] : []))
-        : [],
-    ) ?? [],
-  )
-  if (!pending.size) return answer
-  let cursor: Cursor | undefined
-  do {
-    const page = await tx.scanEntries(
-      { conversationId: main, minEntryId: answer, order: 'ascending' },
-      100,
-      cursor,
-    )
-    for (const result of page.items) {
-      for (const message of result.model ?? [])
-        if (message.role === 'toolResult') pending.delete(message.toolCallId)
-      if (!pending.size) return result.id
-    }
-    cursor = page.next
-  } while (cursor)
-  throw new Error(`Finished answer #${main}/${answer} is missing its tool results`)
 }
 
 function sideId(args: unknown): ConversationId {
