@@ -53,6 +53,8 @@ async function context(login: boolean, subscription: boolean) {
       configured: login && provider === 'openai-codex',
     }),
     isUsingOAuth: () => true,
+    getProvider: () => undefined,
+    getAllModels: () => [],
     getAuth: async (provider: string) =>
       login && provider === 'openai-codex' ? { auth: { apiKey: token } } : undefined,
   }

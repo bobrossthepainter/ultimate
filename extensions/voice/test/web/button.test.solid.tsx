@@ -173,9 +173,9 @@ it('says to log in, without opening Secrets, while voice-chatgpt has no subscrip
   onTestFinished(events.on('secrets:open', opened))
   const container = await mount(20, { available: false, reason })
   expect(container.querySelector('button[data-voice="blocked"]')?.getAttribute('aria-label')).toBe(
-    reason,
+    `Dictate into conversation #20: ${reason}`,
   )
-  await press(reason)
+  await press(`Dictate into conversation #20: ${reason}`)
   expect(opened).not.toHaveBeenCalled()
   expect(container.querySelector('[role="alert"]')?.textContent).toBe(reason)
 })
