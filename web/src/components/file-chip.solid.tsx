@@ -33,6 +33,8 @@ export function FileChip(props: {
   title?: string
   busy?: boolean
   gone?: boolean
+  progress?: number
+  image?: string
   children?: JSX.Element
 }) {
   const Icon = dynamic(() => icons[fileKind(props.name, props.mimeType)])
@@ -45,7 +47,22 @@ export function FileChip(props: {
       <div class="flex h-14 w-full items-center justify-center text-muted-foreground">
         <Show
           when={props.busy}
-          fallback={<Icon aria-hidden="true" class="size-7" stroke-width={1.5} />}
+          fallback={
+            <Show
+              when={props.image}
+              fallback={<Icon aria-hidden="true" class="size-7" stroke-width={1.5} />}
+            >
+              {(src) => (
+                <img
+                  alt=""
+                  class="h-14 w-full rounded-sm object-cover"
+                  data-ui="file-chip-image"
+                  decoding="async"
+                  src={src()}
+                />
+              )}
+            </Show>
+          }
         >
           <LoaderCircle aria-hidden="true" class="size-6 motion-safe:animate-spin" />
         </Show>
@@ -56,6 +73,17 @@ export function FileChip(props: {
       <p class="mt-0.5 w-full truncate pb-0.5 text-center text-[11px] leading-4 text-muted-foreground">
         {props.note}
       </p>
+      <Show when={props.progress !== undefined}>
+        <span
+          aria-hidden="true"
+          class="absolute inset-x-1 bottom-0.5 h-0.5 overflow-hidden rounded-full bg-border"
+        >
+          <span
+            class="block h-full origin-left bg-brand transition-transform"
+            style={{ transform: `scaleX(${props.progress})` }}
+          />
+        </span>
+      </Show>
       {props.children}
     </div>
   )

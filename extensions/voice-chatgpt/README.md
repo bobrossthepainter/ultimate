@@ -2,12 +2,12 @@ Dictation through your ChatGPT subscription: the composer's mic transcribes with
 
 This built-in is off by default. Turn it on with `"extensions": { "enable": ["voice-chatgpt"] }` in your user or
 project `.ultimate/settings.json`, or in the Extensions panel; turning it off goes back to `OPENAI_API_KEY`. Either
-applies at once, without a restart. It needs the `voice` extension, whose mic button it uses unchanged.
+applies at once, without a restart. It needs the `dictation` extension, whose mic button it uses unchanged.
 
 ## How it works
 
-- It provides voice's `voice.transcriber` point (`extensions/voice/api.ts`). While it is enabled, voice's `status`
-  and `transcribe` go through it; while it is off, voice uses the API key as before.
+- It provides dictation's `dictation.transcriber` point (`extensions/dictation/api.ts`). While it is enabled,
+  dictation's `status` and `transcribe` go through it; while it is off, dictation uses the API key as before.
 - **Login:** Pi's `openai-codex` login, shown as **OpenAI (ChatGPT Plus/Pro)** in the model picker: the same
   sign-in Codex uses. Pi refreshes the token. The OpenAI provider's "Sign in with ChatGPT" login does not work here:
   OpenAI's API rejects its token for transcription. Without the login the mic is dimmed and says so.

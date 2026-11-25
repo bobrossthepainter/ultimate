@@ -8,10 +8,21 @@ import { fitImage } from '@/components/image-resize.ts'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { errorMessage, formatBytes } from '../sdk/hooks.ts'
 import type { FileUpload } from '../sdk/hooks.ts'
+import type { ConversationId } from '@earendil-works/pi-durable'
+import type { UploadSource } from '../sdk/types.ts'
 import { imageMimeTypes, maxImages } from '../../../shared/protocol.ts'
+import { attached, uploadFor } from './attachments.ts'
 import type { DraftFile, PastedImage } from './attachments.ts'
 
 export type Upload = NonNullable<typeof FileUpload.value>
+
+const limit = (bytes: number) => formatBytes(bytes).replace('.0 ', ' ')
+const inFlight = new Map<string, AbortController>()
+
+export function cancelUpload(id: string) {
+  inFlight.get(id)?.abort(new Error('Removed'))
+  inFlight.delete(id)
+}
 
 export function createAttach(options: {
   images: Accessor<readonly PastedImage[]>
@@ -19,8 +30,9 @@ export function createAttach(options: {
   setFiles: (change: (files: DraftFile[]) => DraftFile[]) => void
   setError: (message: string | undefined) => void
   disabled: () => boolean
-  upload: Accessor<Upload | undefined>
+  uploads: Accessor<readonly Upload[]>
   inlineImages: Accessor<boolean>
+  conversation: Accessor<ConversationId | undefined>
 }) {
   const [reading, setReading] = createSignal(false)
   let pending = false
@@ -29,50 +41,72 @@ export function createAttach(options: {
     alive = false
   })
 
-  function send(files: readonly File[], { upload: put, maxBytes }: Upload) {
-    const fitting = files.filter((file) => file.size <= maxBytes)
-    for (const file of fitting) {
-      const id = crypto.randomUUID()
-      const mimeType = file.type || 'application/octet-stream'
-      const name = file.name || 'file'
-      options.setFiles((current) => [
-        ...current,
-        { id, name, size: formatBytes(file.size), mimeType, path: '' },
-      ])
-      put(file).then(
-        (path) =>
-          options.setFiles((current) =>
-            current.map((item) => (item.id === id ? { ...item, path } : item)),
-          ),
+  const change = (id: string, update: Partial<DraftFile>) =>
+    options.setFiles((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...update } : item)),
+    )
+
+  function send(file: File, upload: Upload, source: UploadSource) {
+    const id = crypto.randomUUID()
+    const mimeType = file.type || 'application/octet-stream'
+    const name = file.name || 'file'
+    options.setFiles((current) => [
+      ...current,
+      { id, name, size: formatBytes(file.size), mimeType, path: '' },
+    ])
+    const controller = new AbortController()
+    inFlight.set(id, controller)
+    return upload
+      .upload(file, {
+        source,
+        conversation: options.conversation(),
+        status: (note, progress) => change(id, { note, progress }),
+        signal: controller.signal,
+      })
+      .then(
+        ({ path, line, note, image }) =>
+          change(id, { path, line, note, image, progress: undefined }),
         (failure: unknown) => {
           options.setFiles((current) => current.filter((item) => item.id !== id))
-          options.setError(`${name}: ${errorMessage(failure)}`)
+          if (!controller.signal.aborted) options.setError(`${name}: ${errorMessage(failure)}`)
         },
       )
-    }
-    return fitting.length < files.length
-      ? [`Files up to ${formatBytes(maxBytes).replace('.0 ', ' ')} attach.`]
-      : []
+      .finally(() => inFlight.delete(id))
   }
 
-  async function attach(dropped: readonly File[]) {
-    if (pending || options.disabled()) return
-    const upload = options.upload()
-    const files = !options.inlineImages()
-      ? []
-      : upload
-        ? dropped.filter((file) => imageMimeTypes.includes(file.type))
-        : dropped
-    const others = dropped.filter((file) => !files.includes(file))
+  function sendAll(files: readonly File[], source: UploadSource) {
+    const tooLarge = new Set<number>()
+    const sent: Promise<void>[] = []
+    for (const file of files) {
+      const upload = uploadFor(options.uploads(), file.type)!
+      if (file.size <= upload.maxBytes) sent.push(send(file, upload, source))
+      else tooLarge.add(upload.maxBytes)
+    }
+    return { sent, problems: [...tooLarge].map((bytes) => `Files up to ${limit(bytes)} attach.`) }
+  }
+
+  async function attach(dropped: readonly File[], source: UploadSource = 'file') {
+    const busyBoxRefuses = source !== 'recording' && (pending || options.disabled())
+    if (busyBoxRefuses) return false
+    const uploads = options.uploads()
+    const uploadable = (file: File) =>
+      !!uploadFor(uploads, file.type) &&
+      !(options.inlineImages() && imageMimeTypes.includes(file.type))
+    const files = options.inlineImages() ? dropped.filter((file) => !uploadable(file)) : []
+    const others = dropped.filter(uploadable)
     const supported = files.filter((file) => imageMimeTypes.includes(file.type))
     const accepted = supported.slice(0, Math.max(0, maxImages - options.images().length))
+    const uploading = sendAll(others, source)
     const problems = [
-      ...(upload && others.length ? send(others, upload) : []),
+      ...uploading.problems,
       ...(supported.length < files.length ? ['Only PNG, JPEG, WebP and GIF images attach.'] : []),
       ...(accepted.length < supported.length ? [`Attach up to ${maxImages} images.`] : []),
     ]
     options.setError(problems.join(' ') || undefined)
-    if (!accepted.length) return
+    if (!accepted.length) {
+      await Promise.all(uploading.sent)
+      return true
+    }
     pending = true
     setReading(true)
     try {
@@ -83,17 +117,20 @@ export function createAttach(options: {
       const failed = results.flatMap((result) =>
         result.status === 'rejected' ? [result.reason] : [],
       )
-      if (!alive) return
+      if (!alive) return true
       options.setImages((current) => [...current, ...added])
       if (failed.length) options.setError([...problems, ...failed.map(errorMessage)].join(' '))
     } finally {
       pending = false
       if (alive) setReading(false)
     }
+    await Promise.all(uploading.sent)
+    return true
   }
 
   const accepts = (file: { type: string }) =>
-    !!options.upload() || (options.inlineImages() && file.type.startsWith('image/'))
+    !!uploadFor(options.uploads(), file.type) ||
+    (options.inlineImages() && file.type.startsWith('image/'))
 
   async function paste(event: ClipboardEvent) {
     if (options.disabled()) {
@@ -108,12 +145,12 @@ export function createAttach(options: {
       })
     if (!files.length) return
     event.preventDefault()
-    await attach(files)
+    await attach(files, 'paste')
   }
 
   async function drop(event: DragEvent) {
     const files = Array.from(event.dataTransfer?.files ?? []).filter(accepts)
-    if (files.length) await attach(files)
+    if (files.length) await attach(files, 'drop')
   }
 
   return { paste, drop, attach, reading, busy: () => pending }
@@ -144,6 +181,7 @@ const removeClass =
 export function Attached(props: {
   images: readonly PastedImage[]
   files: readonly DraftFile[]
+  name?: string
   disabled: boolean
   remove: (index: number) => void
   removeFile: (id: string) => void
@@ -172,7 +210,7 @@ export function Attached(props: {
                 )}
               </Show>
               <Button
-                aria-label={`Remove image ${index() + 1}`}
+                aria-label={`Remove image ${index() + 1}${props.name ? ` from ${props.name}` : ''}`}
                 class={removeClass}
                 disabled={props.disabled}
                 onClick={() => props.remove(index())}
@@ -187,18 +225,21 @@ export function Attached(props: {
         <For each={props.files} keyed={(file) => file.id}>
           {(file, index) => (
             <FileChip
-              busy={!file().path}
+              busy={!attached(file())}
+              image={file().image}
               mimeType={file().mimeType}
               name={file().name}
               note={
-                file().path
+                file().note ??
+                (attached(file())
                   ? `${file().size} · ${typeLabel(file().name, file().mimeType)}`
-                  : 'Uploading…'
+                  : 'Uploading…')
               }
+              progress={file().progress}
               title={file().path || file().name}
             >
               <Button
-                aria-label={`Remove file ${index() + 1}: ${file().name}`}
+                aria-label={`Remove file ${index() + 1}: ${file().name}${props.name ? ` from ${props.name}` : ''}`}
                 class={removeClass}
                 disabled={props.disabled}
                 onClick={() => props.removeFile(file().id)}

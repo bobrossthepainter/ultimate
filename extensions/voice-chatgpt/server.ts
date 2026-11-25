@@ -1,8 +1,8 @@
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { failure, loggedIn, NO_LOGIN, postTranscribe } from './chatgpt.ts'
-import { Transcriber } from '../voice/api.ts'
-import type { TranscriberService } from '../voice/api.ts'
+import { Transcriber } from '../dictation/api.ts'
+import type { TranscriberService } from '../dictation/api.ts'
 
 export const transcriber = (host: Pick<ExtensionHost, 'modelRuntime'>): TranscriberService => ({
   status: async () =>

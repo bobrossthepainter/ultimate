@@ -1,32 +1,40 @@
-Voice mode: hold to talk, and a fork of @ultimate thinks it through with you, speaks its answer and hands the outcome
+Voice mode: talk into its prompt box, and a fork of @ultimate thinks it through with you, speaks its answer and hands the outcome
 back to @ultimate when you agree.
 
 It is off by default. Enable it with `"extensions": { "enable": ["voice-live"] }` in your user or project
-`.ultimate/settings.json`. It needs the voice model's login (by default Antigravity, `agy`, for
-`antigravity/gemini-4-neon-low`) and an OpenAI API key for transcription (`OPENAI_API_KEY` in ⌘K → Secrets, the key
+`.ultimate/settings.json`. It needs the voice model's login (by default Claude Code's, for
+`claude-code/claude-opus-5-5`) and an OpenAI API key for transcription (`OPENAI_API_KEY` in ⌘K → Secrets, the key
 dictation uses). Pick another model with `"voice": { "model": "provider/model" }` in `~/.ultimate/settings.json`.
+In an open session, the prompt box's model and thinking chip sets both for that session, and the next session starts
+from the last pick (`model` and `thinking` in `voice.session`); the thinking level defaults to `low`, and a model
+without the picked level uses its closest one.
 
-The empty voice panel shows this setup as a checklist from `status`: the voice model's login (Gemini 4 Neon through
-Antigravity recommended, since it hears the recording), OpenAI transcription (required) and Jev for hands-free send in
+The empty voice panel shows this setup as a checklist from `status`: the voice model's login, OpenAI transcription (required) and Jev for hands-free send in
 collect mode (optional), each with what to do when it is missing.
 
 ## Flow
 
 1. **Open** Voice from the title bar's `voice` button or `Ctrl/⌘+Shift+V`, on any surface. The panel floats over the
-   page: drag it by its header, fold it to a one-line talk bar; it says whether the session is hot or cold.
-2. **Hold** the talk bar, or the talk shortcut (`Ctrl/⌘+Shift+Space`, set in Voice settings) from anywhere. It is the
-   only key that talks, so Space always types. The page records Opus with a live waveform; a press cue confirms it
-   hears you. Release sends. A press shorter than 0.6 s or without voice sends nothing. With Talk set to **Tap** in
-   Voice settings (for VR controllers and phones), one tap of the bar or the shortcut starts recording and the next
-   tap sends; the bar says "tap to send" while it records, closing Voice discards the recording, and a held key's autorepeat never counts as a second tap.
+   page: drag it by its header, fold it to its prompt box; it says whether the session is hot or cold.
+2. **Talk** with the mic in the dock's prompt box, which talks to the voice conversation instead of typing (its
+   `dictation` is the voice sink), or use the talk shortcut (`Ctrl/⌘+Shift+Space` by default) while that box is
+   focused or no other dictation-enabled prompt box is. The page records Opus; a press cue confirms it hears you, and
+   a status line above the box shows the live waveform. Release (or the mic's stop button) sends; its X or Esc
+   cancels. A press shorter than 0.6 s or without voice sends nothing. The cog next to the mic changes the shortcut
+   and the Hold/Tap setting. With Talk set to **Tap** (for VR controllers and phones), one tap of the shortcut starts
+   recording and the next tap sends; closing Voice discards the recording, and a held key's autorepeat never counts
+   as a second tap. The status line shows only while voice has something to say: recording, sending, thinking, the
+   working line, speaking, an error or collected clips.
 3. **The turn**: the recording goes to the server (`record`), which keeps it for the session under
    `<home>/voice/` and starts a durable `voice-live.transcribe` task. Its result lands in the fork's `voice.fork`
    document (`transcripts`, or `failed` with the error), so a reload or restart shows the real state.
-   - A model that hears audio (Gemini) gets the turn at once: `turn` submits the transcript placeholder as the input,
+   - A model that hears audio (any Gemini model you configure) gets the turn at once: `turn` submits the transcript placeholder as the input,
      and a `beforeRequest` hook adds the recording to that request only. Stored history stays text, so compaction,
      renderers and other models never see audio. The transcript arrives in parallel and shows as your message.
-   - Any other model waits for that transcript; the trace shows the transcribe stage on the critical path.
+   - Any other model, the default Claude Opus included, waits for that transcript; the trace shows the transcribe stage on the critical path.
    - Typed text, pasted text and pasted or dropped screenshots go through the same `turn`, with Enter in the prompt box.
+     A video in the box (pasted, or recorded with its screen-record button) goes with the next spoken or typed turn as its
+     `Attached video` line once it is ready, so the fork can ask about it and name its id in a handoff.
 4. **The session** is a fork of @ultimate, made on the first turn from its last finished answer, like a side chat:
    ownerless, its automatic summaries off. Every fork is recorded in `voice.session` `forks` and kept out of the
    sidebar's lists (`Unlisted`); while a session is open, one live row under @ultimate (`UnderUltimate`) shows it
@@ -43,7 +51,7 @@ collect mode (optional), each with what to do when it is missing.
    `ext.voice-live.voice`, the voice in `ext.voice-live.openai-voice`, cedar by default; it needs `OPENAI_API_KEY`).
    Then `speak` reads each sentence on the server through one Realtime connection to `gpt-realtime-2.1-mini`, which
    the first turn opens early, and returns WAV the page plays at the chosen speed. While one sentence plays the next
-   is already being read; a cut-in pauses the audio and aborts every request in flight, which cancels its response. Folded, the talk bar shows the whole paragraph being read with that
+   is already being read; a cut-in pauses the audio and aborts every request in flight, which cancels its response. Folded, the status line shows the whole paragraph being read with that
    sentence highlighted, and grows to fit it. The playback bar shows the paragraph, sentence and time left, and skips by sentence or paragraph; any
    sentence plays on click and each reply has replay. Thinking shows open while the model thinks, with a token count
    in the trace, and folds once the reply has played.
@@ -78,7 +86,7 @@ or more sends the whole draft as a steer without a command, and the turn shows "
 was tuned on past voice turns, where answers cut mid-thought stayed below it. Enter in the prompt box, or the box's send and follow-up
 buttons, send it too; discard drops it. The collected clips go out as one turn (`clips`): a model that hears audio gets
 every recording, a text model their joined transcripts. The panel shows a Collecting box with the clips, their length
-and their transcripts so far; folded, the talk bar shows "N collected" and the phone button a count badge.
+and their transcripts so far; folded, the status line shows "N collected".
 
 ## Trace and cues
 

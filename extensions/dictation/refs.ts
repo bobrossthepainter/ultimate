@@ -10,9 +10,9 @@ export type VoiceStatus =
   | { available: false; reason: string; secret?: string }
 
 /** No arguments → whether voice input can transcribe now. */
-export const StatusAction = actionRef<null, VoiceStatus>('voice', 'status')
+export const StatusAction = actionRef<null, VoiceStatus>('dictation', 'status')
 /** `{ audio: base64, mimeType }` → the transcribed text. Fails with a message the composer shows as is. */
 export const TranscribeAction = actionRef<{ audio: string; mimeType: string }, { text: string }>(
-  'voice',
+  'dictation',
   'transcribe',
 )

@@ -162,6 +162,8 @@ export type ComposerRenderer = Component<SolidComposerProps>
 /** Where a `ComposerRedirect` sends what the composer inside it submits, and what its empty composer says. */
 export interface ComposerTarget {
   placeholder: string
+  /** Names the redirected prompt box in its controls' labels. */
+  name?: string
   /** `images` are the pasted ones, given only to a target with `images: true`; any other refuses them. */
   send: (text: string, images: readonly { data: string; mimeType: string }[]) => Promise<unknown>
   images?: true
@@ -172,8 +174,8 @@ export interface ComposerTarget {
    * cold voice session): the composer then shows none of the scoped conversation's run, queue, toolbar or status.
    */
   draft?: string
-  /** `false` hides the box's dictation control, for a target that takes voice its own way. */
-  dictation?: false
+  /** `false` hides dictation; a sink replaces the box's default transcription and insertion. */
+  dictation?: false | DictationSink
 }
 
 /** What a document renderer receives: the shown conversation's document of its kind, live. */
@@ -351,26 +353,61 @@ export const ErrorReport = definePoint<
   { title: string; send: (report: string) => void } | undefined
 >('ultimate.errorReport')
 
+/** How a file reached a prompt box. */
+export type UploadSource = 'paste' | 'drop' | 'file' | 'recording'
+
 /**
- * Where the composer puts a file that is not an inline image (`attachments` provides it): `upload` stores it on the
- * host and resolves with its absolute path, which the prompt references; files up to `maxBytes` attach, and the host
- * keeps them `keptMs`. Without a provider only images attach.
+ * Where the composer puts a file that is not an inline image. A provider with `accepts` (a MIME prefix such as
+ * `video/`) takes the files it names (`video` provides one); the last provider without it takes the rest
+ * (`attachments`). `upload` stores the file, may report a short `status` and a `progress` from 0 to 1 while it
+ * works, stops when `signal` aborts (the chip was removed), and resolves with what the prompt references: `path`, the
+ * prompt `line` when the provider writes its own (otherwise the standard attached-file line), the chip's `note`, and
+ * an `image` URL the chip shows instead of its file icon (a video's first frame).
+ * Files up to `maxBytes` attach, and the host keeps them `keptMs`. Without a provider only images attach.
  */
 export const FileUpload = definePoint<
   null,
   | {
-      upload: (file: File) => Promise<string>
+      accepts?: string
+      upload: (
+        file: File,
+        options: {
+          source: UploadSource
+          conversation: ConversationId | undefined
+          status: (note: string, progress?: number) => void
+          signal: AbortSignal
+        },
+      ) => Promise<{ path: string; line?: string; note?: string; image?: string }>
       maxBytes: number
       keptMs: number
     }
   | undefined
 >('ultimate.fileUpload')
 
+/** One microphone take: audio, duration, whether it contained speech, and its sampled levels. */
+export type DictationTake = { blob: Blob; seconds: number; spoke: boolean; envelope: number[] }
+
+/** Receives microphone takes instead of transcribing and inserting them into a prompt box. */
+export type DictationSink = {
+  /** The lifetime of a take, read when the take claims the microphone. */
+  readonly signal?: AbortSignal
+  /** The take has claimed the microphone and is preparing to record. */
+  start?(): void
+  /** The microphone is recording. */
+  recording?(): void
+  /** The take was discarded or could not start. */
+  cancel?(): void
+  /** Reports why the microphone could not start. */
+  error?(message: string): void
+  /** Receives a completed take; `retaking` means this sink already owns another take. */
+  finish(recorded: DictationTake, retaking: boolean): Promise<void>
+}
+
 /**
- * What a prompt box's dictation control gets (`voice` provides it, a mic button): `name` names the box for the control's
+ * What a prompt box's dictation control gets (`dictation` provides it, a mic button): `name` names the box for the control's
  * agent label, `conversation` is the box's conversation or undefined for a draft-only box, `insert` puts words into that
  * same box at its cursor, and `level` drives the box's hairline with the live voice level, 0 to 1, until `undefined`
- * ends dictation. No control while nothing provides it.
+ * ends dictation. `sink` replaces transcription and insertion when supplied. No control while nothing provides it.
  */
 export const Dictation = definePoint<
   {
@@ -378,17 +415,22 @@ export const Dictation = definePoint<
     conversation: ConversationId | undefined
     insert: (text: string) => void
     level: (value: number | undefined) => void
+    sink?: DictationSink
   },
   JSX.Element
 >('ultimate.dictation')
 /**
- * What a prompt box's record control gets, beside its attach button: `attach` adds recorded files to that box like a
- * drop, `recording` turns the box's hairline red while true. Nothing shows while nothing provides it.
+ * What a prompt box's record control gets, beside its attach button: `draft` is the box's draft key (boxes showing one
+ * conversation share it; a box without one is keyed by its `name`, so give such boxes distinct names), `attach` adds recorded files to that box like a drop (as `source`, `recording` by default; a
+ * recording waits for a send in flight, then attaches even to a busy box) and resolves once their uploads settle, false
+ * when the box refused them or moved to another draft meanwhile, and
+ * `recording` turns the box's hairline red while true. Nothing shows while nothing provides it.
  */
 export const PromptRecorder = definePoint<
   {
     name: string
-    attach: (files: readonly File[]) => void
+    draft: number | string | undefined
+    attach: (files: readonly File[], source?: UploadSource) => Promise<boolean>
     recording: (on: boolean) => void
   },
   JSX.Element
@@ -424,6 +466,8 @@ export interface PromptBoxProps {
   ready?: () => boolean
   /** Before the box's own keys; true when it handled the key. */
   onKeyDown?: (event: KeyboardEvent & { currentTarget: HTMLTextAreaElement }) => boolean
+  /** The send button's label; default `Send prompt to <name>`. */
+  sendLabel?: string
   /** The send button's tooltip; default `Send (Enter)`. */
   sendTitle?: string
   /** Controls at the start of the box's row (model, thinking). */
@@ -436,8 +480,32 @@ export interface PromptBoxProps {
   pageDrop?: boolean
   /** Focuses the box when it mounts, except behind a touch keyboard. */
   autofocus?: boolean
-  /** `false` hides the dictation control. */
-  dictation?: false
+  /** `false` hides dictation; a sink replaces the box's default transcription and insertion. */
+  dictation?: false | DictationSink
+  /**
+   * A light box in one line, text · attach · mic · send, inside its owner's own form, with the error under it.
+   */
+  minimal?: boolean
+  /**
+   * The text the owner keeps, attachment lines included, instead of a `draft`: the box shows it, splits the
+   * attachment lines off as chips and calls `onValue` with the next text; `false` refuses that change. The owner
+   * clears it after a send.
+   */
+  value?: string
+  onValue?: (value: string) => boolean | void
+  /** The textarea's label; default `Prompt for <name>`. */
+  label?: string
+  /** Greys the box out: no typing, attaching, dictating or sending. */
+  disabled?: boolean
+  /** `false` leaves sending to the owner's own button; Enter still calls `onSubmit`. */
+  sendButton?: false
+  /** The textarea element, for the owner to focus it. */
+  ref?: (element: HTMLTextAreaElement) => void
+  /**
+   * With `value`/`onValue`: whether a file is still uploading, for an owner whose own button sends; hold the send until
+   * it is false. A box that unmounts while uploading reports false.
+   */
+  onUploading?: (busy: boolean) => void
 }
 
 /** What a facet provides for a point. */

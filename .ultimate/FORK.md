@@ -24,9 +24,10 @@ so branches adding divergences in parallel do not edit the same lines.
 
 ### voice-chatgpt extension
 
-- Touches: `extensions/voice-chatgpt/`, `extensions/voice/` (transcriber extension point; since the 2026-11-20 merge
-  the mic is upstream's Solid `button.solid.tsx`, re-checking status on extension or login changes and opening Secrets
-  only for a named `secret`), `shared/extension-api.ts`, voice tests. Since the 2026-11-17 merge, `extensions/voice/server.ts` reads the key with upstream's shared
+- Touches: `extensions/voice-chatgpt/`, `extensions/dictation/` (upstream renamed `voice` to `dictation` in the
+  2026-11-25 merge; the fork's `api.ts` with the `dictation.transcriber` point, `refs.ts` `secret`, and in upstream's
+  `button.solid.tsx` the status re-check on extension or login changes and opening Secrets only for a named `secret`),
+  `shared/extension-api.ts`, voice tests. Since the 2026-11-17 merge, `extensions/dictation/server.ts` reads the key with upstream's shared
   `openaiSecretOrNonOAuthKey` from `lib/openai.ts`; the fork keeps only its `VoiceHost` type with `want`
 - Why: Dictation through the ChatGPT (openai-codex) subscription
 - Upstream: candidate

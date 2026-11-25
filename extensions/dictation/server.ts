@@ -57,7 +57,7 @@ const transcriber = (host: VoiceHost) => host.want(Transcriber) ?? byKey(host)
 
 export default (host: ExtensionHost) => {
   host.want(Transcriber)
-  return defineExtension({ name: 'voice' })
+  return defineExtension({ name: 'dictation' })
 }
 
 export const actions = {

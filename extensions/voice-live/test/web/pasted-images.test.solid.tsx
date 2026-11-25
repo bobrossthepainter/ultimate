@@ -12,10 +12,10 @@ import {
   dock,
   draftOf,
   endSession,
-  release,
   sendDraft,
   sendTyped,
   settleTranscripts,
+  voiceSink,
 } from '../../dock.solid.tsx'
 
 const harness = vi.hoisted(() => ({
@@ -198,8 +198,7 @@ it('a turn after a recording that opened the session belongs to that session', a
     spoke: true,
     envelope: [],
   }
-  vi.spyOn(dock.mic, 'stop').mockResolvedValueOnce(recorded)
-  await release()
+  await voiceSink.finish(recorded, false)
   await settle()
   expect(harness.turns).toEqual([expect.objectContaining({ session: 41 })])
 })
@@ -312,6 +311,16 @@ it('a file upload finishing during a spoken turn still clears the text that turn
     text: '',
     files: [expect.objectContaining({ path: '/uploads/spec.pdf' })],
   })
+})
+
+it('a spoken turn carries a finished video from the live box and clears its chip', async () => {
+  const line =
+    'Attached video: `Screen recording.webm` (12 s), id `v_ab12`; ask about it with video_ask'
+  const video = { id: 'v', name: 'Screen recording.webm', size: '1 MB', mimeType: 'video/webm' }
+  getDraft(session).set({ files: [{ ...video, path: '', line }], images: [] })
+  await sendDraft('steer', '', true, [clip])
+  expect(harness.turns).toEqual([expect.objectContaining({ text: line })])
+  expect(getDraft(session).get()).toMatchObject({ files: [], sending: false })
 })
 
 it('a spoken turn that takes nothing from the live box leaves it open for typing', async () => {
