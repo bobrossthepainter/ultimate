@@ -34,8 +34,10 @@ import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import { ClassifyApi } from '../classify/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { Family } from '../models/api.ts'
 import { Branch } from '../lineage/api.ts'
 import { Standing } from '../subagents/api.ts'
+import { VideoApi } from '../video/api.ts'
 import { VoiceHandoffEntry, VoiceTurnEntry } from './entries.ts'
 import {
   EndAction,
@@ -45,13 +47,11 @@ import {
   StopAction,
   DiscardAction,
   IntentAction,
-  SpeakAction,
   TurnAction,
   UiAnswerAction,
   UiClaimAction,
 } from './refs.ts'
 import type {
-  OpenAiVoice,
   VoiceDelivery,
   VoiceFork,
   VoiceHandoff,
@@ -61,8 +61,6 @@ import type {
   VoiceUi,
 } from './refs.ts'
 import { voicePrompt } from './prompt.ts'
-import { createRealtimeVoice } from './openai-voice.ts'
-import { MAX_SPOKEN, VOICES } from './voices.ts'
 
 const DEFAULT_MODEL = { provider: 'claude-code', modelId: 'claude-opus-5-5' }
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -82,7 +80,6 @@ const VOICE_TOOLS = [
   'voice_handoff',
 ]
 const UI_TIMEOUT_MS = 15_000
-const SPEAK_TIMEOUT_MS = 20_000
 
 export const userActions = [
   'open',
@@ -94,7 +91,6 @@ export const userActions = [
   'ui-answer',
   'discard',
   'intent',
-  'speak',
 ]
 
 export const Session = defineDoc<VoiceSession>({
@@ -292,6 +288,7 @@ async function openSession(host: ExtensionHost, expected?: ConversationId) {
     const agent = await tx.doc(AgentDoc, fork.id)
     agent.model = model
     agent.thinkingLevel = thinkingFor(host, model, session.thinking)
+    ;(await tx.doc(Family, fork.id)).name = null
     const own = ['ui', 'voice_handoff']
     const tools = agent.tools
     if (Array.isArray(tools))
@@ -414,19 +411,6 @@ async function wordsOf(tx: Tx, session: ConversationId, fork: VoiceFork) {
   while (kept < said.length && (kept === 0 || size + said.at(-1 - kept)!.length <= MAX_WORDS))
     size += said.at(-1 - kept++)!.length
   return { words: said.slice(said.length - kept), earlier: said.length - kept }
-}
-
-const voices = new WeakMap<ExtensionHost, ReturnType<typeof createRealtimeVoice>>()
-const realtimeVoice = (host: ExtensionHost) => {
-  const known = voices.get(host)
-  if (known) return known
-  const made = createRealtimeVoice()
-  voices.set(host, made)
-  host.onClose(async () => {
-    voices.delete(host)
-    made.close()
-  })
-  return made
 }
 
 const unwrap = <T extends object>(args: unknown) =>
@@ -667,22 +651,6 @@ export const actions = {
     }, context)
     return {}
   }),
-  speak: implementAction(SpeakAction, async (args, { host, signal }) => {
-    const { voice, text } = unwrap<{ voice: unknown; text: unknown }>(args)
-    if (!VOICES.includes(voice as OpenAiVoice)) throw new Error(`Unknown voice: ${String(voice)}`)
-    if (
-      text !== undefined &&
-      (typeof text !== 'string' || !text.trim() || text.length > MAX_SPOKEN)
-    )
-      throw new Error(`Expected text of at most ${MAX_SPOKEN} characters`)
-    const key = await openaiSecretOrNonOAuthKey(host, signal)
-    if (!key) throw new Error('OpenAI voice needs OPENAI_API_KEY in ⌘K → Secrets')
-    const realtime = realtimeVoice(host)
-    const bounded = AbortSignal.any([signal, AbortSignal.timeout(SPEAK_TIMEOUT_MS)])
-    if (text === undefined) return await realtime.connect(key, bounded).then(() => ({}))
-    const wav = await realtime.speak(key, text, voice as OpenAiVoice, bounded)
-    return { audio: wav.toString('base64') }
-  }),
   intent: implementAction(IntentAction, async (args, { host, signal }) => {
     const { audio } = unwrap<{ audio: unknown }>(args)
     if (typeof audio !== 'string') throw new Error('Expected { audio }')
@@ -898,7 +866,7 @@ export default function voiceExtension(host: ExtensionHost) {
               model: [
                 {
                   role: 'user' as const,
-                  content: voicePrompt(conversationId, fork.of),
+                  content: voicePrompt(conversationId, fork.of, !!host.want(VideoApi)),
                   timestamp: Date.now(),
                 },
               ],

@@ -1,10 +1,9 @@
 import { X } from '@lucide/solid'
 import { createSignal, For, onCleanup, Show } from 'solid-js'
 import type { Accessor } from 'solid-js'
-import { ToolImage } from '@/components/ai/tool.solid.tsx'
 import { FileChip } from '@/components/file-chip.solid.tsx'
 import { typeLabel } from '@/components/file-kind.ts'
-import { fitImage } from '@/components/image-resize.ts'
+import { fitImage, thumbnail } from '@/components/image-resize.ts'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { errorMessage, formatBytes } from '../sdk/hooks.ts'
 import type { FileUpload } from '../sdk/hooks.ts'
@@ -18,10 +17,33 @@ export type Upload = NonNullable<typeof FileUpload.value>
 
 const limit = (bytes: number) => formatBytes(bytes).replace('.0 ', ' ')
 const inFlight = new Map<string, AbortController>()
+const keptFileThumbnails = 40
+const uploadingThumbnails = new Map<string, Promise<Blob | undefined>>()
+const uploadedThumbnails = new Map<string, Promise<Blob | undefined>>()
+const fileThumbnail = (file: DraftFile) =>
+  uploadingThumbnails.get(file.id) ?? uploadedThumbnails.get(file.path)
+const imageThumbnails = new WeakMap<PastedImage, Promise<Blob | undefined>>()
+const noThumbnail = (failure: unknown) => {
+  console.warn('Could not make a thumbnail', failure)
+  return undefined
+}
+
+function imageThumbnail(image: PastedImage) {
+  let made = imageThumbnails.get(image)
+  if (!made) {
+    made = fetch(`data:${image.mimeType};base64,${image.data}`)
+      .then((response) => response.blob())
+      .then(thumbnail)
+      .catch(noThumbnail)
+    imageThumbnails.set(image, made)
+  }
+  return made
+}
 
 export function cancelUpload(id: string) {
   inFlight.get(id)?.abort(new Error('Removed'))
   inFlight.delete(id)
+  uploadingThumbnails.delete(id)
 }
 
 export function createAttach(options: {
@@ -56,6 +78,8 @@ export function createAttach(options: {
     ])
     const controller = new AbortController()
     inFlight.set(id, controller)
+    const small = mimeType.startsWith('image/') ? thumbnail(file).catch(noThumbnail) : undefined
+    if (small) uploadingThumbnails.set(id, small)
     return upload
       .upload(file, {
         source,
@@ -64,9 +88,17 @@ export function createAttach(options: {
         signal: controller.signal,
       })
       .then(
-        ({ path, line, note, image }) =>
-          change(id, { path, line, note, image, progress: undefined }),
+        ({ path, line, note, image }) => {
+          if (small && path) {
+            uploadedThumbnails.set(path, small)
+            if (uploadedThumbnails.size > keptFileThumbnails)
+              uploadedThumbnails.delete(uploadedThumbnails.keys().next().value!)
+          }
+          change(id, { path, line, note, image, progress: undefined })
+          uploadingThumbnails.delete(id)
+        },
         (failure: unknown) => {
+          uploadingThumbnails.delete(id)
           options.setFiles((current) => current.filter((item) => item.id !== id))
           if (!controller.signal.aborted) options.setError(`${name}: ${errorMessage(failure)}`)
         },
@@ -85,7 +117,7 @@ export function createAttach(options: {
     return { sent, problems: [...tooLarge].map((bytes) => `Files up to ${limit(bytes)} attach.`) }
   }
 
-  async function attach(dropped: readonly File[], source: UploadSource = 'file') {
+  async function attach(dropped: readonly File[], source: UploadSource = 'file', refused?: string) {
     const busyBoxRefuses = source !== 'recording' && (pending || options.disabled())
     if (busyBoxRefuses) return false
     const uploads = options.uploads()
@@ -98,6 +130,7 @@ export function createAttach(options: {
     const accepted = supported.slice(0, Math.max(0, maxImages - options.images().length))
     const uploading = sendAll(others, source)
     const problems = [
+      ...(refused ? [refused] : []),
       ...uploading.problems,
       ...(supported.length < files.length ? ['Only PNG, JPEG, WebP and GIF images attach.'] : []),
       ...(accepted.length < supported.length ? [`Attach up to ${maxImages} images.`] : []),
@@ -137,20 +170,34 @@ export function createAttach(options: {
       event.preventDefault()
       return
     }
-    const files = Array.from(event.clipboardData?.items ?? [])
-      .filter((item) => item.kind === 'file' && accepts(item))
-      .flatMap((item) => {
-        const file = item.getAsFile()
-        return file ? [file] : []
-      })
-    if (!files.length) return
+    const items = Array.from(event.clipboardData?.items ?? []).filter(
+      (item) => item.kind === 'file',
+    )
+    const files = items.filter(accepts).flatMap((item) => {
+      const file = item.getAsFile()
+      return file ? [file] : []
+    })
+    const refused = refusal(items)
+    if (!files.length) return refused && options.setError(refused)
     event.preventDefault()
-    await attach(files, 'paste')
+    await attach(files, 'paste', refused)
   }
 
   async function drop(event: DragEvent) {
-    const files = Array.from(event.dataTransfer?.files ?? []).filter(accepts)
-    if (files.length) await attach(files, 'drop')
+    const dropped = Array.from(event.dataTransfer?.files ?? [])
+    const files = dropped.filter(accepts)
+    const refused = refusal(dropped)
+    if (files.length) await attach(files, 'drop', refused)
+    else if (refused) options.setError(refused)
+  }
+
+  function refusal(items: readonly { type: string }[]) {
+    if (items.every(accepts)) return undefined
+    const kinds = [
+      ...(options.inlineImages() ? ['images'] : []),
+      ...options.uploads().flatMap((upload) => (upload.accepts ? [`${upload.accepts}s`] : [])),
+    ].map((kind) => kind.replace('/', ''))
+    return kinds.length ? `Only ${kinds.join(' and ')} attach.` : 'Files do not attach here.'
   }
 
   return { paste, drop, attach, reading, busy: () => pending }
@@ -191,24 +238,16 @@ export function Attached(props: {
       <div class="flex flex-wrap gap-2 px-3 pt-3">
         <For each={props.images}>
           {(image, index) => (
-            <div class="relative w-38 rounded-md border border-border/80 bg-terminal p-1">
-              <ToolImage
-                alt={`Pasted image ${index() + 1}`}
-                class="flex h-24 w-full items-center justify-center border-0 [&_img]:max-h-24"
-                image={image}
-              />
-              <Show when={image.note}>
-                {(note) => (
-                  <p
-                    class="mt-1 pb-0.5 text-center text-[11px] leading-4 text-muted-foreground"
-                    title={note()}
-                  >
-                    <For each={note().split(' · ')}>
-                      {(line) => <span class="block whitespace-nowrap">{line}</span>}
-                    </For>
-                  </p>
-                )}
-              </Show>
+            <FileChip
+              mimeType={image.mimeType}
+              name={`Image ${index() + 1}`}
+              note={
+                image.note ??
+                `${formatBytes(Math.floor((image.data.length * 3) / 4))} · ${typeLabel('', image.mimeType)}`
+              }
+              thumbnail={imageThumbnail(image)}
+              title={image.note}
+            >
               <Button
                 aria-label={`Remove image ${index() + 1}${props.name ? ` from ${props.name}` : ''}`}
                 class={removeClass}
@@ -219,7 +258,7 @@ export function Attached(props: {
               >
                 <X class="size-3" />
               </Button>
-            </div>
+            </FileChip>
           )}
         </For>
         <For each={props.files} keyed={(file) => file.id}>
@@ -227,6 +266,7 @@ export function Attached(props: {
             <FileChip
               busy={!attached(file())}
               image={file().image}
+              thumbnail={fileThumbnail(file())}
               mimeType={file().mimeType}
               name={file().name}
               note={

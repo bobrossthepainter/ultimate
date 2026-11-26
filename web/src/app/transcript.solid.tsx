@@ -42,6 +42,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible.solid.tsx'
 import {
+  AnswerSpeaker,
   covered,
   createTranscriptFrame,
   elidePath,
@@ -86,6 +87,7 @@ import type { AsideGroup, BetweenGroup, CompactPart, WorkRun } from './compact.t
 import { ContributionError } from './contribution-error.solid.tsx'
 import { reportedFailure } from './error-stack.solid.tsx'
 import { foldKey, readFold, writeFold } from './fold-state.ts'
+import { keepAcrossReload, takeFromLastPage } from '../sdk/resume.ts'
 import { follow } from './follow.ts'
 import type { Follow } from './follow.ts'
 import { createHistory } from './history.solid.tsx'
@@ -165,6 +167,8 @@ function SkeletonUntilLoaded(props: { dock?: boolean; loading: boolean }) {
   )
 }
 
+type Reading = { entryId: number; last?: number; top: number }
+
 const rowGap = (content: Element | undefined) =>
   content ? Number.parseFloat(getComputedStyle(content).rowGap) || 0 : 0
 const preloadOneViewportBeforeTop = '100% 0px 0px 0px'
@@ -214,9 +218,49 @@ function TranscriptView(props: {
     setScroller(controller)
     if (id !== undefined && !restored() && !covered() && hasRows() && !reducedMotion())
       fadeInRowsNearTheEnd(scroll, content)
-    return () => controller.dispose()
+    const release =
+      id === undefined
+        ? undefined
+        : keepAcrossReload(`transcript:${id}`, () =>
+            controller.following() ? undefined : readingRow(),
+          )
+    return () => {
+      release?.()
+      controller.dispose()
+    }
   })
   const hasRows = () => history.entries().length > 0
+
+  const readingRow = (): Reading | undefined => {
+    const viewTop = scroll.getBoundingClientRect().top
+    const row = [...content.querySelectorAll(':scope > [data-entry-id]')].find(
+      (element) => element.getBoundingClientRect().bottom > viewTop,
+    )
+    if (!row) return undefined
+    return {
+      entryId: Number(row.getAttribute('data-entry-id')),
+      last: Number(row.getAttribute('data-run-last')) || undefined,
+      top: row.getBoundingClientRect().top - viewTop,
+    }
+  }
+  let reading =
+    id === undefined ? undefined : (takeFromLastPage(`transcript:${id}`) as Reading | undefined)
+  createEffect(
+    () => ({ rows: history.entries().length, controller: scroller() }),
+    ({ rows, controller }) => {
+      if (!reading || !controller || rows === 0) return
+      const { entryId, last, top } = reading
+      reading = undefined
+      const entry = parseEntryId(entryId)
+      const row =
+        content.querySelector(anchorSelector({ entryId: entry, last })) ??
+        content.querySelector(anchorSelector({ entryId: entry }))
+      if (!row) return
+      controller.stop()
+      const viewTop = scroll.getBoundingClientRect().top
+      controller.place(scroll.scrollTop + row.getBoundingClientRect().top - viewTop - top)
+    },
+  )
 
   const toEnd = (instant = false) => {
     held = null
@@ -1007,11 +1051,9 @@ function EmptyState() {
     },
     {
       label: 'ext',
-      value:
-        system()
-          ?.extensions.filter((extension) => extension.enabled)
-          .map((extension) => extension.name)
-          .join(' · ') ?? '…',
+      value: system()
+        ? `${system()!.extensions.filter((extension) => extension.enabled).length} enabled`
+        : '…',
     },
     {
       label: 'host',
@@ -1158,6 +1200,14 @@ function CoreEntry(props: {
   )
 }
 
+function FinalAnswerHeading() {
+  return (
+    <span class="inline-flex items-center gap-1.5 text-success">
+      <Check aria-hidden="true" class="size-3.5" /> Final answer
+    </span>
+  )
+}
+
 function AssistantView(props: {
   entry?: EntryRecord
   message: AssistantMessage
@@ -1202,20 +1252,26 @@ function AssistantView(props: {
   const cutOff = () =>
     !streaming() && props.message.stopReason === 'length' && ownsNoticeAndActions()
   return (
-    <Message
-      class={cn(
-        'group/message gap-3',
-        final() && 'rounded-lg border border-success/40 bg-success/5 px-3.5 py-2.5',
-      )}
-      data-final={final() || undefined}
-      from="assistant"
-    >
+    <Message class="group/message gap-3" data-final={final() || undefined} from="assistant">
       <Show when={final()}>
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-success">
-          <span class="inline-flex items-center gap-1.5">
-            <Check aria-hidden="true" class="size-3.5" /> Final answer
-          </span>
-          <Show when={props.entry}>{(entry) => answerLabels(entry())}</Show>
+        <div class="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]">
+          <Show when={props.entry} fallback={<FinalAnswerHeading />}>
+            {(entry) => (
+              <>
+                <RenderedPoint
+                  core={() => <FinalAnswerHeading />}
+                  fallback={(extension, error, inner) => (
+                    <ContributionError error={error} extension={extension} inline>
+                      {inner()}
+                    </ContributionError>
+                  )}
+                  input={{ entry: entry() }}
+                  point={AnswerSpeaker}
+                />
+                {answerLabels(entry())}
+              </>
+            )}
+          </Show>
         </div>
       </Show>
       <Show when={cutOff() ? props.entry : undefined}>

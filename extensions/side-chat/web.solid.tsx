@@ -42,6 +42,7 @@ import {
   useDocOf,
   useExternal,
   useSurface,
+  useEnabled,
   useUiState,
   useViewport,
   writerNow,
@@ -262,6 +263,7 @@ function SidePane(props: {
     )
   }
   const question = () => state()?.question
+  const questionCards = useEnabled('questions')
   const asker = () => state()?.of
   const owner = () => (question() === undefined ? 'main' : 'the question')
   return (
@@ -288,7 +290,7 @@ function SidePane(props: {
       <Show when={openedAt()}>
         {(at) => <Cut at={at()} from={question() === undefined ? props.name : `#${asker()}`} />}
       </Show>
-      <Show when={question()}>
+      <Show when={questionCards() && question()}>
         {(id) => (
           <PinnedQuestion
             answerWith={(answer, keepalive) =>

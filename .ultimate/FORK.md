@@ -182,7 +182,9 @@ so branches adding divergences in parallel do not edit the same lines.
   (`defaultOff`), `test/architect.test.ts`. Its refs and props use upstream's branded `ConversationId` (2026-11
   merge). Since the 2026-11-22 merge a source chip opens Review with upstream's `review:open` page event (upstream
   dropped `openReview`). Since the 2026-11-23 merge the whole extension is Solid (`*.solid.tsx`, kit controls,
-  an `architect:open` page event for its chips; Discard and Delete comment carry `data-agent-confirm`)
+  an `architect:open` page event for its chips; Discard and Delete comment carry `data-agent-confirm`). Since the
+  2026-11-26 merge `extensions/architect/api.ts` declares `export const requires = ['mermaid', 'review']` for
+  upstream's `declared-requires` lint: it runs mermaid's `draw` and review's `Recipient`)
 - Why: Off-by-default Architecture tab: an architect agent draws a branch's architectural change as Mermaid versions;
   the user's comments on parts go to the coordinator as input
 - Upstream: local-only
