@@ -16,6 +16,9 @@ import { context } from '../../../server/harness.ts'
 import { Family } from '../../models/api.ts'
 import { Fork, Session, Ui } from '../server.ts'
 import { fauxServer, post, sourceCopy, temp, until } from '../../../test/helpers.ts'
+import { EventFeed } from '../../../server/events.ts'
+import { ChangedEvent } from '../../../shared/events.ts'
+import { SOURCE_HEADER } from '../../../shared/protocol.ts'
 import { writeSecret } from '../../secrets/store.ts'
 
 let ultimateRoot: string
@@ -160,7 +163,7 @@ it('forks @ultimate once per session, hears the newest recording and keeps histo
   )
   expect(audioParts).toEqual([])
   expect(JSON.stringify(later.messages)).toContain(
-    'by voice (his recording follows): what about the sidebar',
+    'by voice (their recording follows): what about the sidebar',
   )
   expect(
     later.messages.filter(
@@ -377,6 +380,51 @@ it('a recording or turn sent for a session that ended is refused and opens no ne
   ).toBeUndefined()
 })
 
+it('a pick in the cold prompt box is what status, the setup card and the next session use', async () => {
+  const f = await fixture()
+  const status = async () => (await f.action('status', null)).data.result
+  expect(await status()).toMatchObject({ model: 'faux/gemini-faux', thinking: 'low' })
+  const picked = await f.action('pick', {
+    model: { provider: 'faux', modelId: 'main-faux' },
+    thinkingLevel: 'high',
+  })
+  expect([picked.status, picked.data.error]).toEqual([200, undefined])
+  expect(await status()).toMatchObject({
+    model: 'faux/main-faux',
+    thinking: 'off',
+    route: 'text',
+    setup: { model: { ready: true, detail: 'faux/main-faux: reads the transcript' } },
+  })
+  expect((await f.action('pick', { model: { provider: 'faux', modelId: 'gone' } })).status).toBe(
+    500,
+  )
+  const byAgent = await fetch(`${f.server.url}/api/extensions/voice-live/actions/pick`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: f.server.url,
+      [SOURCE_HEADER]: 'agent',
+    },
+    body: JSON.stringify({
+      args: { model: { provider: 'faux', modelId: 'gemini-faux' } },
+      conversationId: f.main,
+    }),
+  })
+  expect(byAgent.status).toBe(200)
+  expect(await status()).toMatchObject({ model: 'faux/gemini-faux', thinking: 'high' })
+  const changes = (
+    (await f.server.harness.snapshot(EventFeed, ROOT_CONVERSATION_ID, context))?.events ?? []
+  )
+    .filter((event) => ChangedEvent.is(event) && event.data.key === 'voice-live.pick')
+    .map((event) => (event.data as { source: string }).source)
+  expect(changes).toEqual(['person', 'agent'])
+  const first = await f.turn({ key: 'one', text: 'start' })
+  expect(f.requests.at(-1)!.model).toBe('gemini-faux')
+  expect((await f.server.harness.snapshot(AgentDoc, first.id, context))?.thinkingLevel).toBe('high')
+  const open = await f.action('pick', { model: { provider: 'faux', modelId: 'main-faux' } })
+  expect(open.data.error).toContain('A voice session is open')
+})
+
 it('a model picked in the fork itself carries over to the next session', async () => {
   const f = await fixture()
   const first = await f.turn({ key: 'one', text: 'start' })
@@ -412,7 +460,16 @@ it('other tools are blocked, voice_handoff starts @ultimate with a card and the 
   })
   const blockedResult = f.requests.at(-1)!.messages.at(-1)!
   expect(blockedResult.role).toBe('toolResult')
-  expect(JSON.stringify(blockedResult)).toContain('Voice mode reads, drives the UI and hands off')
+  expect(JSON.stringify(blockedResult)).toContain('Voice mode reads, runs commands, drives the UI')
+
+  await f.turn({
+    key: 'bash',
+    text: `CALL ${JSON.stringify({ name: 'bash', args: { command: 'echo voice-ran-bash' } })}`,
+    session: blocked.id,
+  })
+  const bashResult = f.requests.at(-1)!.messages.at(-1)!
+  expect(bashResult.role).toBe('toolResult')
+  expect(JSON.stringify(bashResult)).toContain('voice-ran-bash')
 
   await f.turn({
     key: 'video',
@@ -492,7 +549,7 @@ it("voice_handoff carries the user's own turns of this session in order, without
     words: ['make the sidebar quieter', 'and keep the badges', 'ship it today', call('First')],
   })
   expect(JSON.stringify(card.model)).toContain(
-    "Daniel's words in voice mode, oldest first:\\n> make the sidebar quieter\\n> and keep the badges",
+    "The user's words in voice mode, oldest first:\\n> make the sidebar quieter\\n> and keep the badges",
   )
 
   const next = await f.turn({ key: 'fresh', text: 'a new thought', session: first.id })
@@ -587,7 +644,7 @@ it('voice_handoff with `to` reaches a real branch on screen and refuses one off 
     })
   await send('elsewhere', f.main)
   expect(JSON.stringify(f.requests.at(-1)!.messages.at(-1))).toContain(
-    `#${branch.id} is not on Daniel's screen`,
+    `#${branch.id} is not on the user's screen`,
   )
   // A handoff to #964145 queued as a follow-up while it was busy; it now steers the current run.
   const busy = await (await f.server.harness.conversation(branch.id, context))!.submit(
@@ -676,7 +733,7 @@ it('a clip that completely answers the question voice just asked sends as a stee
     },
     answer: {
       state: {
-        assistantLastReply: 'echo Daniel, typed: Which one, the first or the second?',
+        assistantLastReply: 'echo The user, typed: Which one, the first or the second?',
         collectedSoFar: '',
         latestRecording: 'the second one',
       },

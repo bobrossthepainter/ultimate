@@ -18,9 +18,10 @@ import type { Dictation } from '@/sdk/solid'
 import { LoginChanged } from '../models/refs.ts'
 import { deadline } from '../../lib/timers.ts'
 import { base64, capture, unsupported } from './capture.ts'
+import { startCue, stopCue } from '../../lib/cues.ts'
 import type { Sink, Take } from './capture.ts'
 import { StatusAction, TranscribeAction } from './refs.ts'
-import { registerBox, talkMode } from './routing.solid.tsx'
+import { registerBox, soundCues, talkMode } from './routing.solid.tsx'
 import { DictationSettings } from './settings.solid.tsx'
 import { createTalk } from './talk.ts'
 
@@ -79,6 +80,9 @@ export function VoiceButton(props: DictationProps) {
       pending = { conversation: id() ?? ROOT, insert: props.insert, source: 'app' }
       setError(undefined)
     },
+    recording() {
+      if (soundCues()) startCue()
+    },
     cancel() {
       pending = undefined
     },
@@ -86,6 +90,7 @@ export function VoiceButton(props: DictationProps) {
     async finish({ blob }) {
       const take = pending
       pending = undefined
+      if (soundCues()) stopCue()
       if (take && blob.size) await transcribe(take.conversation, blob, take.source, take.insert)
     },
   }

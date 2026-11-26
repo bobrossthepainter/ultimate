@@ -17,7 +17,7 @@ import { isolatable } from '../../lib/git.ts'
 import { meansNone, overshadowed, settled } from '../../lib/errors.ts'
 import { needsRestart as restartNeeded } from '../../lib/layers.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { ConversationsApi } from '../conversations/api.ts'
+import { ConversationsApi, ExternalSessions } from '../conversations/api.ts'
 import { Exec } from '../exec/api.ts'
 import type { ExecService } from '../exec/api.ts'
 import { Branches } from './api.ts'
@@ -49,10 +49,11 @@ import type {
   WorkspaceStats,
 } from './types.ts'
 import type { KeptWork } from '../conversations/types.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 export const Workspaces = defineDoc<WorkspaceIndex>({
   kind: WorkspacesDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 4,
   scope: 'conversation',
   history: 'latest',
@@ -286,7 +287,13 @@ export function workspaces(host: Host) {
     const path =
       source &&
       target &&
-      (await landerCheckout(exec, host.home, source, await host.projectSettings()))
+      (await landerCheckout(
+        exec,
+        host.home,
+        source,
+        await host.projectSettings(),
+        serializeSourceWrites,
+      ))
     await host.harness().commit(async (tx) => {
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       const landers: ConversationId[] = []
@@ -632,6 +639,8 @@ export function workspaces(host: Host) {
           kept.push(item)
           return
         }
+        using external = await host.want(ExternalSessions)?.stop([id])
+        void external
         if (
           !present &&
           !(await lstat(workspace.source).catch((error: NodeJS.ErrnoException) => {
@@ -1048,24 +1057,29 @@ export function workspaces(host: Host) {
       }
     },
     async discard(id: ConversationId, context: Context) {
-      await idle(id, context)
-      const workspace = await get(id, context)
-      if (!workspace) throw new Error('Conversation has no workspace')
-      if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
-      if (workspace.state !== 'removed') {
-        if (await listedBySource(exec, workspace))
-          await removeCheckoutWithoutForce(
-            exec,
-            await host.projectSettings(),
-            workspace.source,
-            workspace.path,
-            treeName(workspace.branch),
-          )
-        await host.harness().commit(async (tx) => {
-          ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
-        }, context)
-      }
-      return { text: `Discarded isolate; kept branch ${workspace.branch}.` }
+      const record = await get(id, context)
+      if (!record) throw new Error('Conversation has no workspace')
+      return serializeSourceWrites(record.source, async () => {
+        const workspace = (await get(id, context))!
+        await idle(id, context)
+        if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
+        if (workspace.state !== 'removed') {
+          using external = await host.want(ExternalSessions)?.stop([id])
+          void external
+          if (await listedBySource(exec, workspace))
+            await removeCheckoutWithoutForce(
+              exec,
+              await host.projectSettings(),
+              workspace.source,
+              workspace.path,
+              treeName(workspace.branch),
+            )
+          await host.harness().commit(async (tx) => {
+            ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
+          }, context)
+        }
+        return { text: `Discarded isolate; kept branch ${workspace.branch}.` }
+      })
     },
     async stats(context: Context): Promise<WorkspaceStats> {
       const items = Object.values(

@@ -49,6 +49,7 @@ export const defaultOff: readonly string[] = [
   'sounds',
   'voice-live',
   'voice-chatgpt',
+  'acp',
   'push',
   'wire',
   'diagrams',

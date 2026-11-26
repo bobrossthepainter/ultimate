@@ -9,12 +9,13 @@ import { isMissing, inProcess } from '../../lib/errors.ts'
 import { readPidFile, stopGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ExecService } from '../exec/api.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 export type Started = { conversation: ConversationId; name: string }
 
 export const BackgroundGroups = defineDoc<{ started: Record<string, string[]> }>({
   kind: 'coding-tools.background',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',

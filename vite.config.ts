@@ -77,12 +77,12 @@ export default defineConfig({
       },
       {
         // Project commands go through the exec service. Ultimate's own host-local work spawns here: the exec service and
-        // its ssh protocol, Caddy, Tailscale, updates, previews, automation scripts, Claude Code, the Antigravity CLI, the editor launcher,
+        // its ssh protocol, Caddy, Tailscale, updates, previews, automation scripts, Claude Code, the Antigravity CLI and its ACP server, the editor launcher,
         // the lander's checks and disk usage, Plannotator sessions, the sounds narrator, ffmpeg on uploaded videos in
         // Ultimate's home, and checking extension code with the clone's tools (extensions/exec/README.md).
         files: ['extensions/**', '**/.ultimate/extensions/**'],
         excludeFiles: [
-          'extensions/{antigravity,automations,caddy,check-extensions,claude-code,exec,instance,lineage,plannotator,ssh-exec,tailscale,update,upstream-sync,workspaces}/**',
+          'extensions/{acp,antigravity,automations,caddy,check-extensions,claude-code,exec,instance,lineage,plannotator,ssh-exec,tailscale,update,upstream-sync,workspaces}/**',
           'extensions/sounds/command.ts',
           'extensions/video/server.ts',
           // An extension's test/ folder is not part of the extension: tests set up their fixtures on this machine.

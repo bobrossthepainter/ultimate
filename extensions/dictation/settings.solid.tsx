@@ -4,7 +4,16 @@ import { Button, buttonVariants } from '@/components/ui/button.solid.tsx'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover.solid.tsx'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control.solid.tsx'
 import { cn, formatKeys } from '@/sdk/solid'
-import { keyChord, setShortcut, setTalkMode, shortcut, talkMode } from './routing.solid.tsx'
+import { Switch } from '@/components/ui/switch.solid.tsx'
+import {
+  keyChord,
+  setShortcut,
+  setSoundCues,
+  setTalkMode,
+  shortcut,
+  soundCues,
+  talkMode,
+} from './routing.solid.tsx'
 
 export function DictationSettings(props: { name: string }) {
   return (
@@ -27,25 +36,40 @@ export function DictationSettings(props: { name: string }) {
         initialFocus="none"
         side="top"
       >
-        <div class="px-3 pt-2.5 pb-1 section-label">Dictation</div>
-        <div class="flex flex-col gap-2.5 px-3 pt-1 pb-2.5 text-muted-foreground">
-          <div class="flex items-center justify-between gap-3">
-            Talk
-            <SegmentedControl
-              aria-label={`Talk mode for ${props.name}`}
-              bind={[talkMode, setTalkMode]}
-            >
-              <SegmentedControlItem value="hold">Hold</SegmentedControlItem>
-              <SegmentedControlItem value="tap">Tap</SegmentedControlItem>
-            </SegmentedControl>
-          </div>
-          <div class="flex items-center justify-between gap-3">
-            Talk shortcut
-            <ShortcutRecorder name={props.name} />
-          </div>
-        </div>
+        <DictationOptions name={props.name} />
       </PopoverContent>
     </Popover>
+  )
+}
+
+export function DictationOptions(props: { name: string }) {
+  return (
+    <>
+      <div class="px-3 pt-2.5 pb-1 section-label">Dictation</div>
+      <div class="flex flex-col gap-2.5 px-3 pt-1 pb-2.5 text-muted-foreground">
+        <div class="flex items-center justify-between gap-3">
+          Talk
+          <SegmentedControl
+            aria-label={`Talk mode for ${props.name}`}
+            bind={[talkMode, setTalkMode]}
+          >
+            <SegmentedControlItem value="hold">Hold</SegmentedControlItem>
+            <SegmentedControlItem value="tap">Tap</SegmentedControlItem>
+          </SegmentedControl>
+        </div>
+        <div class="flex items-center justify-between gap-3">
+          Talk shortcut
+          <ShortcutRecorder name={props.name} />
+        </div>
+        <div class="flex items-center justify-between gap-3">
+          Sound cues
+          <Switch
+            aria-label={`Dictation sound cues for ${props.name}`}
+            bind={[soundCues, setSoundCues]}
+          />
+        </div>
+      </div>
+    </>
   )
 }
 

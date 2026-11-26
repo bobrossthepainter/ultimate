@@ -31,6 +31,7 @@ import { DEFAULT_FAMILY } from '../../lib/families.ts'
 import { familiesView, saveFamilies, setDefault } from './families.ts'
 import { fallback } from './fallback.ts'
 import { inProcess } from '../../lib/errors.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 type MutableJson<T> = T extends readonly (infer U)[]
   ? MutableJson<U>[]
@@ -48,7 +49,7 @@ export type LoginFlow = {
 }
 export const Logins = defineDoc<{ flows: Record<string, LoginFlow> }>({
   kind: LoginDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -117,6 +118,11 @@ export const actions = {
     return null
   }),
   setDefault: implementAction(SetDefaultAction, async (args, { host, conversationId }) => {
+    if (
+      conversationId !== undefined &&
+      (await host.harness().snapshot(host.metadata, conversationId, context))?.external
+    )
+      throw new Error('Set the model through Antigravity’s ACP controls')
     const change = await setDefault(host, text(args, 'model'))
     if (conversationId !== undefined)
       await host.harness().commit(async (tx) => {

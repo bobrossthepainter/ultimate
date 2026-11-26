@@ -43,6 +43,7 @@ import {
   EndAction,
   RecordAction,
   OpenAction,
+  PickAction,
   StatusAction,
   StopAction,
   DiscardAction,
@@ -61,6 +62,7 @@ import type {
   VoiceUi,
 } from './refs.ts'
 import { voicePrompt } from './prompt.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 const DEFAULT_MODEL = { provider: 'claude-code', modelId: 'claude-opus-5-5' }
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -74,17 +76,28 @@ const VOICE_TOOLS = [
   'web_search',
   'web_fetch',
   'video_ask',
+  'bash',
   'codemode',
   'action',
   'ui',
   'voice_handoff',
 ]
 const UI_TIMEOUT_MS = 15_000
+const THINKING_LEVELS: readonly ModelThinkingLevel[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]
 
 export const userActions = [
   'open',
   'record',
   'turn',
+  'pick',
   'stop',
   'end',
   'ui-claim',
@@ -95,7 +108,7 @@ export const userActions = [
 
 export const Session = defineDoc<VoiceSession>({
   kind: 'voice.session',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -105,7 +118,7 @@ export const Session = defineDoc<VoiceSession>({
 
 export const Fork = defineDoc<VoiceFork & { seen?: EntryId; introduced?: true; ended?: true }>({
   kind: 'voice.fork',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -115,7 +128,7 @@ export const Fork = defineDoc<VoiceFork & { seen?: EntryId; introduced?: true; e
 
 export const Ui = defineDoc<VoiceUi>({
   kind: 'voice.ui',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -230,7 +243,7 @@ async function checkBranch(
 ) {
   if (id !== screen)
     throw new Error(
-      `#${id} is not on Daniel's screen; send to the conversation he has open, or to @ultimate`,
+      `#${id} is not on the user's screen; send to the conversation they have open, or to @ultimate`,
     )
   if (!(await tx.conversation(id))) throw new Error(`#${id} does not exist`)
   if (!(await tx.doc(Branch, id)).branch)
@@ -418,12 +431,13 @@ const unwrap = <T extends object>(args: unknown) =>
 
 export const actions = {
   status: implementAction(StatusAction, async (_args, { host }) => {
-    const open = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
-    const model =
-      (open === undefined
+    const session = await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context)
+    const agent =
+      session?.id === undefined
         ? undefined
-        : (await host.harness().snapshot(AgentDoc, open, context))?.model) ??
-      (await voiceModel(host))
+        : await host.harness().snapshot(AgentDoc, session.id, context)
+    const model = agent?.model ?? (await voiceModel(host))
+    const thinking = agent?.thinkingLevel ?? thinkingFor(host, model, session?.thinking)
     const available = host.modelRuntime
       .getAvailableSnapshot()
       .some((listed) => listed.provider === model.provider && listed.id === model.modelId)
@@ -433,6 +447,7 @@ export const actions = {
       !!host.want(ClassifyApi) && !!(await readSecret(host.userHome, 'TYPESAFE_API_KEY'))
     return {
       model: name,
+      thinking,
       route: hearsAudio(model) ? ('audio' as const) : ('text' as const),
       transcribes,
       ...(available ? {} : { reason: `${name} has no login` }),
@@ -447,7 +462,7 @@ export const actions = {
           : {
               ready: false,
               detail: `${name} has no login`,
-              fix: 'Log in to its provider, or type a first message to open a session and pick another model in its prompt box.',
+              fix: 'Log in to its provider, or pick another model in the prompt box below.',
             },
         transcription: transcribes
           ? {
@@ -518,6 +533,31 @@ export const actions = {
     }, context)
     host.harness().resume()
     return { audio: id, session }
+  }),
+  pick: implementAction(PickAction, async (args, action) => {
+    const { host } = action
+    const { model, thinkingLevel } = unwrap<{ model: unknown; thinkingLevel: unknown }>(args)
+    const { provider, modelId } = unwrap<{ provider: unknown; modelId: unknown }>(model)
+    if (
+      model !== undefined &&
+      (typeof provider !== 'string' ||
+        typeof modelId !== 'string' ||
+        !host.modelRuntime.getModel(provider, modelId))
+    )
+      throw new Error('Expected model as a known { provider, modelId }')
+    if (thinkingLevel !== undefined && !THINKING_LEVELS.includes(thinkingLevel as never))
+      throw new Error(`Expected thinkingLevel as one of ${THINKING_LEVELS.join(', ')}`)
+    await host.harness().commit(async (tx) => {
+      const session = await tx.doc(Session, ROOT_CONVERSATION_ID)
+      if (session.id !== undefined)
+        throw new Error('A voice session is open: pick its model in its own prompt box')
+      const picked = () => `${session.model ?? ''}:${session.thinking ?? ''}`
+      const previous = picked()
+      if (model !== undefined) session.model = `${provider as string}/${modelId as string}`
+      if (thinkingLevel !== undefined) session.thinking = thinkingLevel as ModelThinkingLevel
+      await action.uiChanged(tx, { key: 'voice-live.pick', value: picked(), previous })
+    }, context)
+    return {}
   }),
   open: implementAction(OpenAction, async (_args, { host }) => ({
     conversation: await openSession(host),
@@ -597,9 +637,9 @@ export const actions = {
     const words =
       typeof audio === 'string'
         ? route === 'audio'
-          ? `Daniel, by voice (his recording follows): ${PLACEHOLDER}${data.text ? `\n\nAnd typed: ${data.text}` : ''}`
-          : `Daniel, by voice (transcribed): ${data.text || PLACEHOLDER}`
-        : `Daniel, typed: ${data.text}`
+          ? `The user, by voice (their recording follows): ${PLACEHOLDER}${data.text ? `\n\nAnd typed: ${data.text}` : ''}`
+          : `The user, by voice (transcribed): ${data.text || PLACEHOLDER}`
+        : `The user, typed: ${data.text}`
     const content = [
       ...(data.hint ? [{ type: 'text' as const, text: data.hint }] : []),
       { type: 'text' as const, text: words },
@@ -914,7 +954,7 @@ export default function voiceExtension(host: ExtensionHost) {
           if (fork.ended) return { block: 'This voice session has ended' }
           if (VOICE_TOOLS.includes(call.name)) return undefined
           return {
-            block: `Voice mode reads, drives the UI and hands off: ${call.name} is blocked. Use voice_handoff to ask @ultimate to do it.`,
+            block: `Voice mode reads, runs commands, drives the UI and hands off: ${call.name} is blocked. Use voice_handoff to ask @ultimate to do it.`,
           }
         },
       }),
@@ -923,7 +963,7 @@ export default function voiceExtension(host: ExtensionHost) {
       defineTool({
         name: 'ui',
         description:
-          "Drive Daniel's own Ultimate page through its ui-sdk agent bridge: `snapshot` lists the controls on screen with their state, `query` finds controls by label or row text (`text`, optional `within` a list, `kind`), `act` runs steps in order as the agent ([{ref, action, args?}], ref is a label or a ref from query, like {ref: 'System', action: 'press'} to switch surface). Each change is recorded as made by an agent. Say in one short line what you are about to do before calling it.",
+          "Drive the user's own Ultimate page through its ui-sdk agent bridge: `snapshot` lists the controls on screen with their state, `query` finds controls by label or row text (`text`, optional `within` a list, `kind`), `act` runs steps in order as the agent ([{ref, action, args?}], ref is a label or a ref from query, like {ref: 'System', action: 'press'} to switch surface). Each change is recorded as made by an agent. Say in one short line what you are about to do before calling it.",
         parameters: union([
           obj({ op: lit('snapshot') }),
           obj({ op: lit('query'), text: opt(str()), within: opt(str()), kind: opt(str()) }),
@@ -964,8 +1004,8 @@ export default function voiceExtension(host: ExtensionHost) {
                 {
                   type: 'text',
                   text: claimed
-                    ? "Daniel's page took the request but did not answer in time: it may or may not have run. Look before repeating it."
-                    : "Daniel's page did not answer: the voice panel must be open in his browser.",
+                    ? "The user's page took the request but did not answer in time: it may or may not have run. Look before repeating it."
+                    : "The user's page did not answer: the voice panel must be open in their browser.",
                 },
               ],
             }
@@ -991,10 +1031,10 @@ export default function voiceExtension(host: ExtensionHost) {
         name: 'voice_handoff',
         deferred: true,
         description:
-          "Hand the agreed outcome of this voice conversation to the main @ultimate as a message it acts on, or with `to` to the branch conversation on Daniel's screen (its coordinator), which a busy coordinator reads after its current tool round. Write it the way you would brief yourself.",
+          "Hand the agreed outcome of this voice conversation to the main @ultimate as a message it acts on, or with `to` to the branch conversation on the user's screen (its coordinator), which a busy coordinator reads after its current tool round. Write it the way you would brief yourself.",
         parameters: obj({
           to: opt(
-            num({ description: "A branch conversation on Daniel's screen; omit for @ultimate" }),
+            num({ description: "A branch conversation on the user's screen; omit for @ultimate" }),
           ),
           title: str({ minLength: 1 }),
           outcome: str({ minLength: 1 }),
@@ -1012,18 +1052,18 @@ export default function voiceExtension(host: ExtensionHost) {
           const target = branch ?? fork.of
           const handoff: VoiceHandoff = { ...brief, from: api.conversationId }
           const lines = [
-            `Handoff from voice mode (#${api.conversationId}, a fork of @ultimate where Daniel talked it through): ${args.title}`,
+            `Handoff from voice mode (#${api.conversationId}, a fork of @ultimate where the user talked it through): ${args.title}`,
             `Outcome: ${args.outcome}`,
             ...(args.decided?.length ? ['Decided:', ...args.decided.map((d) => `- ${d}`)] : []),
             ...(args.open?.length ? ['Open:', ...args.open.map((o) => `- ${o}`)] : []),
             ...(args.attachments?.length
-              ? ['Screenshots he shared:', ...args.attachments.map((a) => `- ${a}`)]
+              ? ['Screenshots they shared:', ...args.attachments.map((a) => `- ${a}`)]
               : []),
             `Instruction: ${args.instruction}`,
           ]
           const quoted = (words: string[], earlier: number) => [
             '',
-            `Daniel's words in voice mode, oldest first${earlier ? ` (${earlier} earlier turns left out)` : ''}:`,
+            `The user's words in voice mode, oldest first${earlier ? ` (${earlier} earlier turns left out)` : ''}:`,
             ...words.map((said) => `> ${said.replaceAll('\n', '\n> ')}`),
           ]
           const receiver = await host.harness().conversation(target, ctx)

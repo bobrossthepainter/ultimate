@@ -15,7 +15,7 @@ import type { Context } from '@earendil-works/chord/context'
 import { withAbortSignal } from '@earendil-works/chord/context'
 import { defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { debounce, deadline } from '../../lib/timers.ts'
-import { overshadowed, retriedLater, settled } from '../../lib/errors.ts'
+import { overshadowed, retriedLater } from '../../lib/errors.ts'
 import { needsRestart as restartNeeded } from '../../lib/layers.ts'
 import { formatDuration } from '../../lib/format.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
@@ -40,16 +40,17 @@ export async function landerPath(home: string, source: string, settings: JsonObj
 const landerHash = (source: string) =>
   createHash('sha256').update(source).digest('hex').slice(0, 12)
 const landerName = (source: string) => `ult-lander-${landerHash(source)}`
-const checkoutCreationQueues = new Map<string, Promise<string>>()
+type SerializeSourceWrites = <T>(source: string, operation: () => Promise<T>) => Promise<T>
 export async function landerCheckout(
   exec: ExecService,
   home: string,
   source: string,
   settings: JsonObject,
+  serializeSourceWrites: SerializeSourceWrites,
   tip = 'HEAD',
 ) {
   const path = await landerPath(home, source, settings)
-  const queued = settled(checkoutCreationQueues.get(path) ?? Promise.resolve()).then(async () => {
+  return serializeSourceWrites(source, async () => {
     const registered = (await exec.git(source, 'worktree', 'list', '--porcelain'))
       .split('\n\n')
       .some((entry) => entry.split('\n').includes(`worktree ${path}`))
@@ -60,12 +61,6 @@ export async function landerCheckout(
     }
     return path
   })
-  checkoutCreationQueues.set(path, queued)
-  try {
-    return await queued
-  } finally {
-    if (checkoutCreationQueues.get(path) === queued) checkoutCreationQueues.delete(path)
-  }
 }
 export const log = (
   tx: Tx,
@@ -366,7 +361,7 @@ export async function activeLandingCards(tx: Tx, index: WorkspaceIndex) {
 export function createLander(
   host: Host,
   Workspaces: ConversationDocToken<WorkspaceIndex>,
-  serializeSourceWrites: <T>(source: string, operation: () => Promise<T>) => Promise<T>,
+  serializeSourceWrites: SerializeSourceWrites,
   after: {
     starter: (id: ConversationId, context: Context) => Promise<ConversationId | undefined>
     working: (tx: Tx, id: ConversationId) => Promise<boolean>
@@ -380,7 +375,14 @@ export function createLander(
 ) {
   const exec = host.need(Exec)
   async function resetTrackedIntegration(source: string, tip: string) {
-    const path = await landerCheckout(exec, host.home, source, await host.projectSettings(), tip)
+    const path = await landerCheckout(
+      exec,
+      host.home,
+      source,
+      await host.projectSettings(),
+      serializeSourceWrites,
+      tip,
+    )
     await exec.git(path, 'reset', '--hard', '-q')
     await exec.git(path, 'checkout', '-q', '--detach', '--force', tip)
     await exec.git(path, 'clean', '-fdq')

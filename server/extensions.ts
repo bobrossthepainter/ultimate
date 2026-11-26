@@ -42,6 +42,7 @@ import { secretMetadata } from '../lib/secrets.ts'
 import { ChangedEvent } from '../shared/events.ts'
 import type { Device, UiSource } from '../shared/events.ts'
 import { inProcess, isMissing, meansNone } from '../lib/errors.ts'
+import { closeOnWatchError } from '../lib/watch.ts'
 
 export type ExtensionHost = Pick<
   PreparedHost,
@@ -330,6 +331,8 @@ export async function loadExtensions(
     device?: Device,
     source: UiSource = { source: 'person' },
   ) {
+    if (caller === 'agent' && userActions.get(name)?.includes(action))
+      throw new Error(`${name}/${action} is a user-only action`)
     const table = actions.get(name)
     const fn = table && Object.hasOwn(table, action) ? table[action] : undefined
     if (!fn) throw new Error(`Unknown extension action: ${name}/${action}`)
@@ -346,6 +349,7 @@ export async function loadExtensions(
         host: facetHosts.get(name)!,
         conversationId,
         ...(device ? { device } : {}),
+        by,
         uiChanged: async (tx, change) => {
           const data = uiChange(by, { ...change, conversation: conversationId })
           if (data) await log.emit(tx, ChangedEvent, data)
@@ -366,11 +370,8 @@ export async function loadExtensions(
     )
   }
   const extensionHost: ExtensionHost = {
-    invoke: async (name, action, args, signal, conversationId) => {
-      if (userActions.get(name)?.includes(action))
-        throw new Error(`${name}/${action} is a user-only action`)
-      return invoke(name, action, args, signal, conversationId, 'agent')
-    },
+    invoke: (name, action, args, signal, conversationId) =>
+      invoke(name, action, args, signal, conversationId, 'agent'),
     emit: log.emit,
     react: () => {
       throw new Error('Reactors require a facet scope')
@@ -802,11 +803,12 @@ export async function loadExtensions(
   const structure = ['add', 'unlink', 'addDir', 'unlinkDir'] as const
   const watchRemovals = (directory: string) => {
     try {
-      return watchDirectory(directory, (_event, name) => {
+      const watcher = watchDirectory(directory, (_event, name) => {
         if (closed || !name || records.get(name)?.path !== join(directory, name)) return
         if (lstatSync(join(directory, name), { throwIfNoEntry: false })) return
         enqueue(() => reload(new Set([name])))
       })
+      return closeOnWatchError(watcher, directory)
     } catch (error) {
       if (!isMissing(error)) throw error
       return undefined

@@ -39,6 +39,7 @@ import { SubmitAfter, submitAfter } from './submit.ts'
 import {
   ContextUsageDoc,
   ConversationsApi,
+  ExternalSessions,
   Marks,
   Overview,
   Previews,
@@ -55,10 +56,11 @@ import {
   SummariesAction,
   SummaryModelAction,
 } from './refs.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 const Fixed = defineDoc<{ fixed?: true }>({
   kind: 'conversations.fixed',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -70,7 +72,7 @@ export const docs = [Summaries, Overview, Fixed, ContextUsageDoc, Marks]
 
 const IdentityAtContextHead = defineDoc<{ head?: number }>({
   kind: 'conversations.identity',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -194,6 +196,8 @@ async function concludeAndStopOtherTrees(
     const owned = await concludeIn(host, tx, ids, from ?? 'user')
     return { tree: owned, callerWouldWaitForItself: from !== undefined && owned.has(from) }
   }, context)
+  using external = await host.want(ExternalSessions)?.stop([...tree])
+  void external
   const stopped: ConversationId[] = []
   if (!callerWouldWaitForItself) {
     const busy = new Set(
@@ -324,6 +328,7 @@ export default (host: ExtensionHost) => {
   host.want(Trees)
   host.want(Release)
   host.want(Previews)
+  host.want(ExternalSessions)
   host.implement(ConversationsApi, {
     subject: (id, caller) => subject(host, id, caller),
     concludeIn: (tx, ids, by) => concludeIn(host, tx, ids, by),

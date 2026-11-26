@@ -96,6 +96,10 @@ so branches adding divergences in parallel do not edit the same lines.
   `agy` CLI login on the machine running Ultimate, like Claude Code, 2026-11-22 merge), `extensions/lineage/catchup.ts`
   (upstream's untracked-file `ls-files` in `changedFiles` routed through `exec.git`, and
   `extensions/coding-tools/background.ts` keeps upstream's `dropHostNodeEnv` through `exec.start`, 2026-11-23 merge;
+  `extensions/workspaces/` takes upstream's `serializeSourceWrites` queue for lander checkouts and discard with
+  `exec.git`, and `server/actions.ts` keeps the routed `actionExec(run, cwd, signal)` beside upstream's `by`; the
+  `vite.config.ts` host-local allowlist gains `extensions/acp/` (upstream's `agy acp` session over stdio pipes, like
+  the Antigravity login), 2026-11-26 merge;
   `extensions/subagents/server.ts` keeps its stop-time `git diff` on the `Exec` service, dropping upstream's
   `lib/exec.ts` import, second 2026-11-23 merge), `vite.config.ts` host-local allowlist (`extensions/video/server.ts`:
   upstream's ffmpeg/ffprobe on uploaded videos in Ultimate's own home, 2026-11-24 merge; `lib/machine.ts` runs
@@ -234,7 +238,7 @@ so branches adding divergences in parallel do not edit the same lines.
   Compaction before cold stays, off by default. `branchCache.models` is gone. `keep-warm`'s folder stays untouched
   so merges stay cheap; re-check on each merge whether upstream changed it or the definition fields (the 2026-11-23
   merge moved `keep-warm` to a sleeping task, still @ultimate + Claude Code only, and moved `cache-warming`'s release
-  cleanup onto `opened.defer`). Since the 2026-11-23 merge the chips are Solid (`web.solid.tsx`, modelled on
+  cleanup onto `opened.defer`; the 2026-11-26 merge only gave its doc `checkpointEvery(100)`, #410 still open). Since the 2026-11-23 merge the chips are Solid (`web.solid.tsx`, modelled on
   keep-warm's chip; minutes save on commit)
 - Upstream: given back as PR #410 (https://github.com/HazAT/ultimate/pull/410; supersedes closed #275)
 - Follow-up: #410's hybrid design (upstream's `keep-warm.ping` task: durable transcript `ok` pings while idle,
@@ -329,3 +333,10 @@ so branches adding divergences in parallel do not edit the same lines.
 - Why: projects whose origin is a Gitea/Forgejo or GitLab host get backed up as `<host>/<owner>/<repo>`; GitHub keys
   stay byte-identical
 - Upstream: candidate
+
+### Worker on the lead family
+
+- Touches: `.ultimate/agents/worker.md` (`family: lead` in upstream's project overlay, 2026-11-26 merge)
+- Why: the user runs workers on the lead family; this was an untracked local override until upstream began tracking
+  the overlay file
+- Upstream: local-only
