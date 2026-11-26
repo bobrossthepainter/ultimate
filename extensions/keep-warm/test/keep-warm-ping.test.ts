@@ -103,6 +103,7 @@ async function fixture(options: { short?: boolean } = {}) {
     },
   })
   let release: (() => void) | undefined
+  let resources: unknown
   const registry = createRegistry()
   registry.install(
     defineExtension({
@@ -152,7 +153,7 @@ async function fixture(options: { short?: boolean } = {}) {
     userHome: dir,
     projectSettings: async () => ({}),
     notice: () => {},
-    resource: <T>(_key: string, create: () => T) => create(),
+    resource: <T>(_key: string, create: () => T) => (resources ??= create()) as T,
     onOpen: lifecycle.onOpen,
     onClose: () => {},
   } as unknown as ExtensionHost
@@ -238,7 +239,9 @@ async function fixture(options: { short?: boolean } = {}) {
       )
       if (wait) await submission.wait(context)
     },
+    forgetReplay: () => (resources as Map<unknown, unknown>).clear(),
     reopen: async () => {
+      ;(resources as Map<unknown, unknown>).clear()
       await events.stop()
       await lifecycle.close()
       await harness.close(context)
@@ -343,4 +346,26 @@ it('ends the waker when warming is turned off, and arms it again when turned bac
   await f.warm(true)
   await until(async () => (await f.doc()).pings === 1 && (await f.doc()).last?.read === 1000)
   expect(f.requests).toHaveLength(2)
+})
+
+it('wakes a waker that waits for a run at the next tool round, and replays its request', async () => {
+  const f = await fixture({ short: true })
+  await f.warm(true)
+  f.nextCallsTool()
+  await f.input(f.id, false)
+  await f.holding()
+  f.forgetReplay()
+  await f.advance(minutes(4.5))
+  await until(async () => (await f.tasks()).some((task) => task.state.status === 'waiting'))
+  expect(f.requests).toHaveLength(1)
+  f.nextCallsTool()
+  f.release()
+  await f.holding()
+  const sentAt = Date.now()
+  await until(async () => (await f.doc()).request?.at === sentAt)
+  const [waker] = await f.sleeping()
+  expect(waker.state).toMatchObject({ until: sentAt + minutes(4.5) })
+  await f.advance(minutes(4.5))
+  await until(async () => (await f.doc()).pings === 1 && (await f.doc()).last?.read === 1000)
+  expect(f.bodies.at(-1)).toEqual({ ...f.bodies[1], max_tokens: 1 })
 })

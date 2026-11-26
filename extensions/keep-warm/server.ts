@@ -232,7 +232,7 @@ async function withinMaxWarm(
     .some((entry) => entry.id === id)
 }
 
-type Plan =
+type Planned =
   | { stop: string }
   | {
       model: Model<Api>
@@ -241,9 +241,10 @@ type Plan =
       dueStep: ReturnType<typeof decide>
       nextAt: number
       warmUntil: number
-      renewal: string
       replay?: Sent
     }
+
+type Plan = Planned & { renewal: string }
 
 async function planFor(
   host: ExtensionHost,
@@ -252,6 +253,17 @@ async function planFor(
   now: number | 'due',
   definitions: Definitions,
 ): Promise<Plan> {
+  const renewal = await renewalOf(host, replay, id)
+  return { ...(await planOf(host, replay, id, now, definitions)), renewal }
+}
+
+async function planOf(
+  host: ExtensionHost,
+  replay: Replay,
+  id: ConversationId,
+  now: number | 'due',
+  definitions: Definitions,
+): Promise<Planned> {
   const kind = await warmedKind(host, id)
   if (!kind || (await host.need(ConversationsApi).concluded(context)).has(id))
     return { stop: 'Not a standing agent or an open branch' }
@@ -289,13 +301,34 @@ async function planFor(
     dueStep: decide({ ...situation, now: nextAt }, effective),
     nextAt,
     warmUntil: warmWindowEnd(situation, effective),
-    renewal: renewalKey(doc, sent),
     ...(sent?.payload !== undefined ? { replay: sent } : {}),
   }
 }
 
-const renewalKey = (doc: WarmDocState, sent: Sent | undefined) =>
-  `${doc.request?.at}:${doc.last?.at}:${doc.last?.error}:${sent?.at}`
+const renewalKey = (
+  doc: WarmDocState,
+  agent: { model?: { provider: string; modelId: string }; thinkingLevel?: string } | undefined,
+  sent: Sent | undefined,
+) =>
+  JSON.stringify([
+    doc.request,
+    doc.last,
+    doc.warm,
+    doc.compact,
+    doc.minutes,
+    doc.inputAt,
+    agent?.model,
+    agent?.thinkingLevel,
+    sent?.at,
+  ])
+
+async function renewalOf(host: ExtensionHost, replay: Replay, id: ConversationId) {
+  return renewalKey(
+    await readDoc(host, id),
+    await host.harness().snapshot(AgentDoc, id, context),
+    replay.get(id),
+  )
+}
 
 function receipt(answer: AssistantMessage): ResponseReceipt {
   return {
@@ -448,12 +481,8 @@ function pinger(host: ExtensionHost, replay: Replay) {
             until: runtime.now(),
             checkpoint: { phase: 'plan' },
           }
-          const latest = replay.get(id)
-          const renewed =
-            !('stop' in planned) &&
-            renewalKey(doc, latest?.model.id === planned.model.id ? latest : undefined) !==
-              planned.renewal
-          if (renewed) return again
+          const current = renewalKey(doc, await tx.doc(AgentDoc, id), replay.get(id))
+          if (current !== planned.renewal) return again
           const end = () => {
             delete doc.waker
             return stopped
