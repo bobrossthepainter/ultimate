@@ -12,7 +12,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { hostname } from 'node:os'
+import { machineHostname } from '../../../lib/machine.ts'
 import { join, resolve } from 'node:path'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -39,9 +39,10 @@ import { Metadata } from '../../../server/metadata.ts'
 import { emit } from '../../../server/events.ts'
 import messagesExtension, { actions } from '../server.ts'
 import { sendResult } from '../delivery.ts'
-import { Serving } from '../addresses.ts'
+import { Serving, Started } from '../addresses.ts'
 import pauseExtension, { actions as pauseActions } from '../../pause/server.ts'
-import { AskedCalls, Messages, MessageSent } from '../api.ts'
+import { AskedCalls, Judge, Judgements, Messages, MessageSent } from '../api.ts'
+import type { JudgeService, JudgeState } from '../api.ts'
 import { send as sendMessage } from '../send.ts'
 import { UserInputEvent } from '../../../shared/events.ts'
 import type { MessagesService } from '../api.ts'
@@ -1557,6 +1558,33 @@ it('lets a branch ask the user directly and leaves passive question and answer n
   expect(await entries('board.asked')).toHaveLength(1)
   expect(await entries('board.answered')).toHaveLength(1)
 })
+it('points a branch question and its answer at the standing agent that started the branch', async () => {
+  const f = await fixture()
+  const b = await branched(f)
+  const triage = f.recipient
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).triage = triage.id
+    ;(await tx.doc(Started, b.id as ConversationId)).by = triage.id
+  }, context)
+  const kinds = async (id: ConversationId) =>
+    (await (await f.opened.harness.conversation(id, context))!.context(context)).entries.map(
+      (entry) => entry.kind,
+    )
+  await b.later(
+    'SEND ' +
+      JSON.stringify({
+        to: 'user',
+        text: 'Pick one',
+        questions: [{ text: 'A?', kind: 'confirm' }],
+      }),
+  )
+  const question = (await f.log())!.messages.find((m) => m.from === b.id && m.to === 'user')!
+  await f.service().answer(question.id, 'Q: A?\nA: Yes', context)
+  await until(async () => (await kinds(triage.id)).includes('board.answered'))
+  expect(await kinds(triage.id)).toContain('board.asked')
+  expect(await kinds(ROOT_CONVERSATION_ID)).not.toContain('board.asked')
+  expect(await kinds(ROOT_CONVERSATION_ID)).not.toContain('board.answered')
+})
 it('forwards images into a new branch with its prompt', async () => {
   const f = await fixture()
   const tool = (await f.opened.root.agent(context)).deferred.find((t) => t.name === 'branch')!
@@ -1723,30 +1751,190 @@ it("leaves a branch's answer as a note while a subagent's report is still on its
   expect((await b.from())[1].report).toBeUndefined()
   await f.opened.harness.abortTask(pending, context)
 })
-it("leaves a branch's answer to the user's own input as a note that does not wake @ultimate", async () => {
+it("lets the judge leave a branch's back-and-forth with the user as a note, and reports when it cannot judge", async () => {
   // The user talked with a branch in its conversation; each answer woke @ultimate for a turn that did nothing.
   const f = await fixture()
   const b = await branched(f)
+  const asked: JudgeState[] = []
+  let verdict: () => Promise<number> = async () => 0.2
+  f.provided.set(Judge.name, {
+    report: async (state) => {
+      asked.push(state)
+      return verdict()
+    },
+  } satisfies JudgeService)
+  const delivered = async (id: number) =>
+    (await f.opened.root.context(context)).entries.find(
+      (e) => e.kind === 'board.message' && (e.data as { id?: number })?.id === id,
+    )
+  const judgements = async () =>
+    (await f.opened.harness.snapshot(Judgements, b.id as ConversationId, context))?.answers
+  const say = async (content: string) => {
+    await (await b.branch.submit({ type: 'input', content }, context)).wait(context)
+    await b.settled()
+    const message = (await b.from()).findLast((m) => m.to === 1)!
+    const answer = (await b.branch.context(context)).entries.findLast(
+      (e) => e.kind === 'pi.assistant',
+    )!.id
+    return { message, answer, entry: await delivered(message.id) }
+  }
   const generations = async () =>
     (await f.opened.root.context(context)).entries.filter((e) => e.kind === 'pi.assistant').length
   const before = await generations()
-  await (
-    await b.branch.submit({ type: 'input', content: 'What does + Legacy mean?' }, context)
-  ).wait(context)
-  await b.settled()
-  const toStarter = (await b.from()).filter((m) => m.to === 1)
-  expect(toStarter.slice(1)).toEqual([
-    expect.objectContaining({ text: 'Answer: What does + Legacy mean?', reply: false }),
-  ])
-  expect(toStarter[1].report).toBeUndefined()
-  const note = (await f.opened.root.context(context)).entries.find(
-    (e) => e.kind === 'board.message' && (e.data as { id?: number })?.id === toStarter[1].id,
-  )
-  expect([note?.data, note?.input]).toEqual([
-    expect.objectContaining({ delivery: 'note' }),
+
+  const note = await say('What does + Legacy mean?')
+  expect(note.message).toMatchObject({
+    text: 'Answer: What does + Legacy mean?',
+    reply: false,
+    judged: { answer: note.answer, report: 0.2 },
+  })
+  expect(note.message.report).toBeUndefined()
+  expect(asked.at(-1)).toEqual({
+    branch_said_before: expect.stringMatching(/^Answer: Message from #1 \(@ultimate\):\nExplore/),
+    inputs: [{ from: 'user typed in the branch', text: 'What does + Legacy mean?' }],
+    final_answer: 'Answer: What does + Legacy mean?',
+  })
+  expect([note.entry?.data, note.entry?.input]).toEqual([
+    expect.objectContaining({ delivery: 'note', judged: note.message.judged }),
     undefined,
   ])
   expect(await generations()).toBe(before)
+
+  // A failed or malformed verdict (no key, a 402 pause, a bad score) must not swallow an answer the starter needed,
+  // and a provider's error body stays out of the transcript.
+  const wakes = async (content: string, error: string) => {
+    const { message, answer, entry } = await say(content)
+    expect(message).toMatchObject({ report: true, judged: { answer, error } })
+    expect([entry?.data, entry?.input]).toEqual([
+      expect.objectContaining({ delivery: 'followUp' }),
+      true,
+    ])
+    expect((await judgements())?.[answer]).toEqual(message.judged)
+  }
+  verdict = async () => {
+    throw new Error('TypeSafe 402')
+  }
+  await wakes('1a 2b, go', 'TypeSafe 402')
+  verdict = async () => -1
+  await wakes('ship it', 'invalid verdict')
+
+  // A verdict that comes late holds back the branch's newer answer: both reach the starter in answer order.
+  let releaseGo: ((p: number) => void) | undefined
+  verdict = async () => new Promise<number>((done) => (releaseGo = done))
+  await (await b.branch.submit({ type: 'input', content: 'go' }, context)).wait(context)
+  await until(async () => releaseGo !== undefined)
+  verdict = async () => 0.9
+  await (await b.branch.submit({ type: 'input', content: 'hold' }, context)).wait(context)
+  const sent = async (text: string) => (await b.from()).find((m) => m.text === `Answer: ${text}`)
+  releaseGo!(0.95)
+  await b.settled()
+  const go = (await sent('go'))!
+  const hold = (await sent('hold'))!
+  expect([go.report, hold.report, go.id < hold.id]).toEqual([true, true, true])
+  // A note the judge chose is never promoted into a report when the branch later answers another's question.
+  verdict = async () => 0.1
+  await say('chat')
+  verdict = async () => 0.9
+  await sendMessage(
+    f.host,
+    f.recipient.id,
+    { to: `#${b.id}`, text: 'Which port?', reply: true },
+    context,
+  )
+  await until(async () =>
+    (await f.log())!.messages.some(
+      (m) => m.from === b.id && m.to === f.recipient.id && m.text.includes('Which port?'),
+    ),
+  )
+  await b.settled()
+  expect((await b.from()).filter((m) => m.text === 'Answer: chat')).toEqual([
+    expect.objectContaining({ judged: expect.objectContaining({ report: 0.1 }) }),
+  ])
+
+  // A reply that only answers a sibling's question while the judge weighs a result leaves that result a report.
+  let releaseResult: ((p: number) => void) | undefined
+  verdict = async () => new Promise<number>((done) => (releaseResult = done))
+  await (await b.branch.submit({ type: 'input', content: 'result' }, context)).wait(context)
+  await until(async () => releaseResult !== undefined)
+  await sendMessage(
+    f.host,
+    f.recipient.id,
+    { to: `#${b.id}`, text: 'Which host?', reply: true },
+    context,
+  )
+  await until(async () =>
+    (await f.log())!.messages.some(
+      (m) => m.from === b.id && m.to === f.recipient.id && m.text.includes('Which host?'),
+    ),
+  )
+  releaseResult!(0.9)
+  await b.settled()
+  expect((await sent('result'))!).toMatchObject({ report: true, judged: { report: 0.9 } })
+
+  // A crash while Jev answers never asks it again: the restarted route reports without a verdict.
+  const calls = asked.length
+  let hung!: () => void
+  const hanging = new Promise<void>((done) => (hung = done))
+  verdict = async () => {
+    hung()
+    return new Promise<number>(() => {})
+  }
+  await b.branch.submit({ type: 'input', content: 'all done?' }, context)
+  await hanging
+  await f.opened.close()
+  verdict = async () => 0
+  await f.open()
+  await until(async () => (await b.from()).at(-1)?.text === 'Answer: all done?')
+  await f.opened.harness.waitForIdle(context)
+  expect(asked).toHaveLength(calls + 1)
+  expect((await b.from()).at(-1)).toMatchObject({ report: true, judged: { error: 'interrupted' } })
+})
+it("judges and sends a branch's answers in answer order, and a report judged while it is busy waits for its next report", async () => {
+  const f = await fixture()
+  const b = await branched(f)
+  const pending: ((p: number) => void)[] = []
+  f.provided.set(Judge.name, {
+    report: async () => new Promise<number>((done) => pending.push(done)),
+  } satisfies JudgeService)
+  const say = async (content: string) =>
+    (await b.branch.submit({ type: 'input', content }, context)).wait(context)
+  const sent = async (text: string) => (await b.from()).find((m) => m.text === `Answer: ${text}`)
+
+  // The newer answer is not judged until the older one is sent, so verdicts cannot come back out of order.
+  await say('nice')
+  await until(async () => pending.length === 1)
+  await say('result')
+  const waitsOnOlderRoute = async () =>
+    (await f.opened.harness.inspect(context)).tasks.some(
+      (t) =>
+        t.record.kind === 'board.route' &&
+        t.record.conversationId === b.id &&
+        t.record.state.status === 'waiting' &&
+        t.record.state.on.length === 2,
+    )
+  await until(async () => pending.length === 2 || (await waitsOnOlderRoute()))
+  expect(pending).toHaveLength(1)
+  pending[0](0.1)
+  await until(async () => pending.length === 2)
+  pending[1](0.9)
+  await b.settled()
+  const [nice, newer] = [(await sent('nice'))!, (await sent('result'))!]
+  expect([nice.report, newer.report, nice.id < newer.id]).toEqual([undefined, true, true])
+
+  // A result judged while the branch answers a sibling goes as a note, and is promoted once that reply is sent.
+  await say('late result')
+  await until(async () => pending.length === 3)
+  await sendMessage(f.host, f.recipient.id, { to: `#${b.id}`, text: 'HOLD', reply: true }, context)
+  await until(f.holding)
+  pending[2](0.9)
+  await until(async () => (await sent('late result')) !== undefined)
+  expect((await sent('late result'))!.report).toBeUndefined()
+  f.hold.release()
+  await b.settled()
+  const toStarter = (await b.from()).filter((m) => m.to === 1)
+  expect(toStarter.filter((m) => m.text === 'Answer: late result' && m.report)).toEqual([
+    expect.objectContaining({ judged: expect.objectContaining({ report: 0.9 }) }),
+  ])
 })
 it("places a branch's one-way message to its starter as a note", async () => {
   const f = await fixture()
@@ -1805,6 +1993,48 @@ it("leaves a branch's answer to @ultimate's routed answer as a note that does no
     undefined,
   ])
   expect(view.entries.filter((e) => e.id > note.id && e.kind === 'pi.assistant')).toHaveLength(0)
+})
+async function branchWorkedOnRequest(f: Awaited<ReturnType<typeof fixture>>) {
+  await enableBranch(f)
+  const branch = 'BRANCH ' + JSON.stringify({ prompt: 'Build\nHOLD', isolated: false })
+  await f.send('@scout', 'SEND ' + JSON.stringify({ to: '#1', text: branch }), { reply: false })
+  await until(async () => (await f.log())!.messages.some((m) => m.from === 1 && m.re !== undefined))
+  await f.opened.root.waitForIdle(context)
+  await until(f.reactorsSettled)
+  const log = (await f.log())!.messages
+  const asked = log.find((m) => m.from === f.recipient.id && m.to === 1)!
+  const id = log.find((m) => m.from === 1 && m.text.startsWith('Build'))!.to as ConversationId
+  const toAsker = async () =>
+    (await f.log())!.messages.filter((m) => m.from === 1 && m.to === f.recipient.id && m.re)
+  return { asked, id, toAsker }
+}
+it('sends no failure notice for a concluded branch that reported', async () => {
+  const f = await fixture()
+  const { asked, id, toAsker } = await branchWorkedOnRequest(f)
+  const before = await toAsker()
+  await sendMessage(f.host, id, { to: '#1', text: 'Built', reply: false }, context, {
+    report: true,
+    note: false,
+  })
+  await until(f.reactorsSettled)
+  await f.opened.root.waitForIdle(context)
+  await conversationActions.conclude({ ids: [id] }, f.action())
+  await until(f.reactorsSettled)
+  await f.opened.harness.waitForIdle(context)
+  expect(await toAsker()).toEqual(before)
+  const { owners } = (await f.opened.harness.snapshot(Serving, ROOT_CONVERSATION_ID, context))!
+  expect(owners[asked.id]).toBeUndefined()
+})
+it('tells the asker a concluded branch that never reported ended without a result', async () => {
+  const f = await fixture()
+  const { asked, id, toAsker } = await branchWorkedOnRequest(f)
+  await conversationActions.conclude({ ids: [id] }, f.action())
+  await until(f.reactorsSettled)
+  await f.opened.harness.waitForIdle(context)
+  expect((await toAsker()).at(-1)).toMatchObject({
+    state: 'failed',
+    text: `Branch #${id}, which worked on your message ${asked.id}, was concluded without reporting to @ultimate; no result will come from it.`,
+  })
 })
 it("sends @ultimate's answer to a branch it concluded to the agent whose request the branch worked on", async () => {
   // danielgriesser.com: @writer asked @ultimate for a briefing, got "I've started branch #14919", and the briefing,
@@ -1895,6 +2125,56 @@ it.each(['automations.fired', 'automations.finished'])(
         text: `Result of automation A8 "ab done", which worked on your message ${asked.id}:\n\nDone`,
       }),
     ])
+  },
+)
+it.each([
+  { concluded: false, delivery: 'steer', input: true, runs: 1 },
+  { concluded: true, delivery: 'note', input: undefined, runs: 0 },
+])(
+  'delivers a result to its asker as a note only once the asker is concluded (concluded: $concluded)',
+  async ({ concluded, delivery, input, runs }) => {
+    // #71022 landed, then @ultimate's result for its earlier request woke it: it answered and stayed open.
+    const f = await fixture()
+    await f.send('@scout', 'SEND ' + JSON.stringify({ to: '#1', text: 'Run the A/B\nHOLD' }), {
+      reply: false,
+    })
+    await until(f.holding)
+    await f.opened.harness.commit((tx) => f.service().owed(tx, ROOT_CONVERSATION_ID, 'A8'), context)
+    f.hold.release()
+    await f.opened.root.waitForIdle(context)
+    if (concluded)
+      await f.opened.harness.commit(async (tx) => {
+        ;(await tx.doc(UiState, ROOT_CONVERSATION_ID))['ext.conversations.concluded'] = [
+          f.recipient.id,
+        ]
+      }, context)
+    await (
+      await f.opened.root.submit(
+        {
+          type: 'input',
+          content: 'Automation A8 "ab done" fired: AB-DONE',
+          entry: {
+            kind: 'automations.fired',
+            data: { id: 'A8', name: 'ab done', text: 'AB-DONE' },
+          },
+        },
+        context,
+      )
+    ).wait(context)
+    const routed = async () =>
+      (await f.log())!.messages.find((m) => m.to === f.recipient.id && m.routed !== undefined)
+    await until(async () => (await routed())?.state === 'delivered')
+    await f.recipient.waitForIdle(context)
+    const { id, text } = (await routed())!
+    expect(text).toContain('Result of automation A8')
+    const view = await f.recipient.context(context)
+    const entry = view.entries.find(
+      (e) => e.kind === 'board.message' && (e.data as { id?: number }).id === id,
+    )!
+    expect([entry.data, entry.input]).toEqual([expect.objectContaining({ delivery }), input])
+    expect(view.entries.filter((e) => e.id > entry.id && e.kind === 'pi.assistant')).toHaveLength(
+      runs,
+    )
   },
 )
 it("routes the answer of a run an automation woke to the branches whose report the automation's creating run read", async () => {
@@ -2220,7 +2500,7 @@ async function remoteFixture(url?: string) {
   return f
 }
 // The sender runs on this machine, so its answer routes back to the local poe2-rust instance.
-const from = { project: 'poe2-rust', machine: hostname() }
+const from = { project: 'poe2-rust', machine: machineHostname() }
 it("delivers another Ultimate's message to @ultimate only, labelled as it, once per key", async () => {
   const other = await otherUltimate(() => [200, { result: 7 }])
   const f = await remoteFixture(other.url)
@@ -2237,7 +2517,7 @@ it("delivers another Ultimate's message to @ultimate only, labelled as it, once 
   expect(f.observed.filter((text) => text.includes('Start a branch that adds X'))).toHaveLength(1)
   const delivered = f.observed.find((text) => text.includes('Start a branch'))!
   expect(delivered).toContain(
-    `Message from @ultimate@poe2-rust on ${hostname()} (another project's Ultimate, not the user):`,
+    `Message from @ultimate@poe2-rust on ${machineHostname()} (another project's Ultimate, not the user):`,
   )
   expect(f.observed.some((text) => text.includes('Start a branch') && text !== delivered)).toBe(
     false,
@@ -3012,7 +3292,7 @@ it('fails a tell at once when the other Ultimate has no route back for its answe
   const tell = (reply: boolean) =>
     asker.service().tell(ROOT_CONVERSATION_ID, { project: 'my-app', text: 'Probe', reply }, context)
   await expect(tell(true)).rejects.toThrow(
-    `my-app on ${hostname()} cannot answer: add asker on ${hostname()} to remotes in its user settings, or tell with reply: false.`,
+    `my-app on ${machineHostname()} cannot answer: add asker on ${machineHostname()} to remotes in its user settings, or tell with reply: false.`,
   )
   expect((await asker.log())!.messages.at(-1)).toMatchObject({ reply: true, state: 'failed' })
   expect((await replier.log())?.messages ?? []).toEqual([])

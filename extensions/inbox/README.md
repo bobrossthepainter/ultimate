@@ -11,7 +11,8 @@ actions of its own.
 Another extension puts its own things to do in the Inbox (a command to run in a terminal, say) by providing the
 `InboxItems` point from its `web.solid.tsx`: `provide(InboxItems, () => items)`, where `items` is an accessor of
 `{ key, at, conversation?, tag, title, gist?, pane }[]`. `key` is unique across providers (`shell:12`), `at` when it
-started waiting, `tag` the row's kind tag, `pane` the reading pane's content below the title, its buttons included;
+started waiting, `tag` the row's kind tag, `title` one line of inline Markdown (rendered without images in the
+reading pane, text only in the list), `pane` the reading pane's content below the title, its buttons included;
 with `conversation` the row names it and the pane offers **Open in branch**. Every provider's items count in the
 sidebar row and the To-dos' "For you" row too: they all read `Waiting` from `ui.solid.tsx`. A provider that throws is left
 out behind its inline error card. Items are entries keyed by string; a question's key is `message:<id>`.
@@ -20,8 +21,10 @@ out behind its inline error card. Items are entries keyed by string; a question'
 
 - **List**: one row per item, the asking branch's feature chip and `#id` as the sidebar draws them, a `preview` tag
   when the text links to a local preview (`http://127.0.0.1:…` or `localhost`), else `question`; the message's bold
-  lead or first line as its title, its first question as the gist, and how long it has waited, amber past an hour.
-- **Reading pane** for the selected item: the title, the rest of the text (messages' `Body`), its forwarded images
+  lead or first line as its title, as plain text (a link's text, never its URL), its first question as the gist,
+  and how long it has waited, amber past an hour.
+- **Reading pane** for the selected item: the title with inline Markdown and working links, without title images,
+  the rest of the text (messages' `Body`), its forwarded images
   (`MessageImages`), **Open preview** (a new tab) when it links one, **Open in branch #id** (messages'
   `messages:open {conversation, message}`), and the answer card itself (questions' `MessageQuestions`). An extension
   providing `QuestionPane` (`ui.solid.tsx`) may take a question's pane over: side-chat shows the question's side chat there
@@ -49,3 +52,7 @@ its key with `at: 0`, so the entry shows when it arrives and the selection takes
   a quiet `Inbox` at zero; a click opens the surface. @ultimate's own row then says only `waits on you`.
 - **To-dos**: the panel's "For you" keeps one `Inbox · N` row, provided items counted, that opens it.
 - ⌘K **Open Inbox**.
+- **App icon**: an installed app shows the same count as a badge on its Dock, taskbar or home-screen icon
+  (`navigator.setAppBadge`), cleared at zero and left alone until the open questions have loaded; a browser without
+  the Badging API shows nothing, and iOS shows it only once notifications are allowed. It follows the open pages, so
+  the last count stays on the icon after the last window closes.

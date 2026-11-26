@@ -1,96 +1,101 @@
-Live voice pairs GPT-Live's audio with a fast Luna agent that decides what to pass to @ultimate.
+Voice mode: talk into its prompt box, and a fork of @ultimate thinks it through with you, speaks its answer and hands the outcome
+back to @ultimate when you agree.
 
-This built-in is off by default. Enable it with `"extensions": { "enable": ["voice-live"] }` in your user or
-project `.ultimate/settings.json`. Its Voice agent loads only while the extension is enabled; user/project agent
-overlays still apply.
+It is off by default. Enable it with `"extensions": { "enable": ["voice-live"] }` in your user or project
+`.ultimate/settings.json`. It needs the voice model's login (by default Claude Code's, for
+`claude-code/claude-opus-5-5`) and an OpenAI API key for transcription (`OPENAI_API_KEY` in ⌘K → Secrets, the key
+dictation uses). Pick another model with `"voice": { "model": "provider/model" }` in `~/.ultimate/settings.json`.
+In an open session, the prompt box's model and thinking chip sets both for that session, and the next session starts
+from the last pick (`model` and `thinking` in `voice.session`); the thinking level defaults to `low`, and a model
+without the picked level uses its closest one.
 
-Nothing is billable until a session starts or the Voice agent receives input. GPT-Live uses `OPENAI_API_KEY` from
-Secrets (⌘K → Secrets), or Pi's OpenAI **API key**, never its OAuth login. The key stays on the server. The Voice
-agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low thinking and the fast tier.
+The empty voice panel shows this setup as a checklist from `status`: the voice model's login, OpenAI transcription (required) and Jev for hands-free send in
+collect mode (optional), each with what to do when it is missing.
 
 ## Flow
 
-1. The browser acquires the microphone, adds its track to a peer connection and creates `oai-events` before its
-   offer. `start` looks up `subagents.standing('voice')` and exchanges SDP through OpenAI's live sessions endpoint
-   (`gpt-live-1`, voice `marin`). It seeds at most ten recent Voice lines, each clipped to 200 characters.
-2. While the session connects, `start` also puts together Voice's **context brief** in code, without a model
-   (`brief.ts`): the project memory a branch starts from (`LineageApi.memoryBrief`), the user's last five requests
-   to @ultimate with the first line of each answer, up to eight open branches with their state, and the open questions
-   to the user, oldest first (`MessagesApi.openQuestions`). It goes into
-   Voice's transcript as a `voice.context` write after the session divider, a quiet folded card ("Context · memory
-   N · N recent requests · N open branches") that opens to the text Voice was given. Every session start, a reopen
-   after the idle-close included, places a fresh one. Its edit omits the previous brief, so only the newest reaches
-   the model; earlier cards stay in the transcript, dimmed. A `heard` line waits for the brief still being put
-   together, and the dock says "Loading context…" meanwhile. Briefs are `transient`: lineage leaves them out of
-   compaction summaries, and when a compaction cut the newest one, Voice's next request places it again after the
-   summary. A brief that fails says so on its card; the session still starts.
-3. After `session.started`, remote audio plays through an autoplay element. GPT-Live only listens, backchannels,
-   answers connection checks and greetings itself, and speaks received commentary. It never handles work questions
-   or decides to delegate; Voice stays silent on the small talk GPT-Live already answered, so a line gets one answer.
-4. `Relay` joins transcript fragments after 1,200 ms quiet when the line ends a sentence, 2,800 ms when it trails
-   off, so a breath mid-thought does not split it. The transcriber's `[unintelligible]` and `[inaudible]` markers
-   become "…". GPT-Live has no transcription, language or turn-detection settings; this is the only place to tune
-   it. The line being said grows at the end of Voice's transcript (`transcript.end`) word by word, its start fading
-   out toward the top, and stays until its `voice.heard` entry arrives. A spoken Voice line fills in word by word as
-   GPT-Live's `output_transcript.delta` reads it out. Every finished user line goes through `heard` as a
-   `voice.heard` input to Voice (`whenBusy: 'steer'`). GPT-Live's own speech can be logged as `live` lines;
-   commentary output is not logged twice. Delegation events are ignored.
-5. `extensions/voice-live/agents/voice.md` configures the standing agent with six deferred tools and codemode:
-   - `voice_say {text}` writes an `ultimate` `voice.line` with `speech: true`. The browser sends it as commentary.
-   - `voice_ask_ultimate {request}` writes a forwarded user line and schedules the durable answer task. It submits a
-     typed `voice.utterance` with the clean request, or, given a `message` by `voice_answer`, answers that open
-     question of @ultimate's through Messages.
-     The task follows that specific input receipt, including Messages delivery, not idle or an arbitrary delay.
-   - `voice_note {text}` writes a quiet `note` line, forwarded by the browser as `session.thinking.append`.
-   - `voice_show {surface | conversation | message, say?}` writes an `action` line with `go`. The page holding the
-     session carries it out the way a click does (`showSurface`, `switchConversation`, `inbox:open` at a question),
-     so every tab and device follows the shared UI state; it also sends the Voice sheet back. A surface the page does
-     not have becomes a notice. With `say` it also speaks and ends Voice's turn: one tool call per navigation.
-   - `voice_question {message?, show?}` lists the open questions, oldest first, or returns one in full (asker, text,
-     numbered questions, lettered options, the asker's picks) and shows its card in the Inbox.
-   - `voice_answer {message, text | dismiss}` settles that card after Voice read the answer back and the user said
-     yes: `MessagesApi.answer` or `dismiss` for a branch's question; @ultimate's own goes through the answer task
-     (below, with `message`), so its reply comes back to speak. No question is ever guessed from spoken words.
-     Tool names are prefixed to avoid colliding with other agents' tools (especially lineage's `note`).
-   - `codemode` answers status questions (what is running, did something land, open to-dos) with one script of
-     `ultimate.*` reads, then `voice_say`, without an @ultimate turn. It stays read-only by instruction, not by a
-     code guard: the definition tells Voice never to start, change, message or write anything, and to pass
-     anything that needs doing or judgement, or that it is unsure about, to @ultimate.
-6. The answer task sends @ultimate's full answer back as a `voice.answer` input to Voice. A tool-terminated message
-   uses its user-facing text and numbered questions/options. Voice speaks the conclusion in 2–4 short sentences,
-   preserving decisions without reading Markdown, paths or code aloud. There is no summary-model speech rewrite.
-   Failed/unanswered inputs leave a notice linked to the forwarded line and tell Voice to explain the failure.
-   `voice_say` derives `re` from the input preceding its own tool round, so speech answers the right forwarded line.
-   Request ids and a transactional scheduling receipt keep forwards and answer delivery safe across task replay.
+1. **Open** Voice from the title bar's `voice` button or `Ctrl/⌘+Shift+V`, on any surface. The panel floats over the
+   page: drag it by its header, fold it to its prompt box; it says whether the session is hot or cold.
+2. **Talk** with the mic in the dock's prompt box, which talks to the voice conversation instead of typing (its
+   `dictation` is the voice sink), or use the talk shortcut (`Ctrl/⌘+Shift+Space` by default) while that box is
+   focused or no other dictation-enabled prompt box is. The page records Opus; a press cue confirms it hears you, and
+   a status line above the box shows the live waveform. Release (or the mic's stop button) sends; its X or Esc
+   cancels. A press shorter than 0.6 s or without voice sends nothing. The cog next to the mic changes the shortcut
+   and the Hold/Tap setting. With Talk set to **Tap** (for VR controllers and phones), one tap of the shortcut starts
+   recording and the next tap sends; closing Voice discards the recording, and a held key's autorepeat never counts
+   as a second tap. The status line shows only while voice has something to say: recording, sending, thinking, the
+   working line, speaking, an error or collected clips.
+3. **The turn**: the recording goes to the server (`record`), which keeps it for the session under
+   `<home>/voice/` and starts a durable `voice-live.transcribe` task. Its result lands in the fork's `voice.fork`
+   document (`transcripts`, or `failed` with the error), so a reload or restart shows the real state.
+   - A model that hears audio (any Gemini model you configure) gets the turn at once: `turn` submits the transcript placeholder as the input,
+     and a `beforeRequest` hook adds the recording to that request only. Stored history stays text, so compaction,
+     renderers and other models never see audio. The transcript arrives in parallel and shows as your message.
+   - Any other model, the default Claude Opus included, waits for that transcript; the turn shows "transcribing…" meanwhile.
+   - Typed text, pasted text and pasted or dropped screenshots go through the same `turn`, with Enter in the prompt box.
+     A video in the box (pasted, or recorded with its screen-record button) goes with the next spoken or typed turn as its
+     `Attached video` line once it is ready, so the fork can ask about it and name its id in a handoff.
+4. **The session** is a fork of @ultimate, made on the first turn from its last finished answer, like a side chat:
+   ownerless, its automatic summaries off. Every fork is recorded in `voice.session` `forks` and kept out of the
+   sidebar's lists (`Unlisted`); while a session is open, one live row under @ultimate (`UnderUltimate`) shows it
+   instead, with a small level that follows the mic while you talk and sways while voice speaks; clicking it shows or
+   hides the panel. It keeps the fork's tools and adds
+   `voice_handoff` and `ui`; `beforeTool` lets it only read (read, memory, web search and fetch), run codemode, drive the UI and hand off: no bash, no file edits.
+   Its first input carries the voice-mode prompt (`prompt.ts`) as a hidden `conversations.identity` entry; each later
+   input carries a short digest of what @ultimate did since the last turn, and every turn says which surface and
+   conversation are on screen. The session stays hot until it hands off or End: after a handoff the next turn
+   concludes it and forks @ultimate afresh; End concludes it and deletes the session's recordings.
+5. **The transcript** in the panel is the core one (`ConversationTranscript` in its compact `dock` column, scoped to
+   the fork), so its own entries show and the history it forked from does not: replies, thinking, every tool call
+   with its extension's card (`video_ask` included), attachment chips and message actions all come from the core. Your
+   turns are `voice.turn` entries, drawn by voice's one turn renderer wherever the fork is read (the panel, the main
+   transcript, a side chat): length and waveform, "transcribing…", a failure, screenshots and "sent as your answer".
+   A turn shows the moment you send it: until the server stores it, voice draws it in the fork's `transcript.end`.
+6. **Replies** stream from the fork's live partial. Each finished sentence is spoken through read-aloud's page-wide
+   speech player (`extensions/read-aloud/README.md`), with the shared Speech setting (voice, speed) that Voice settings
+   shows; read-aloud's highlight marks the sentence being read and plays any sentence on click. Starting a read-aloud elsewhere stops voice's reply, and a new voice
+   reply stops a read-aloud. The highlight follows the spoken sentence across every message of that turn's reply,
+   since a reply with tool calls spans several. Folded, the status line shows the whole paragraph being read with that
+   sentence highlighted, and grows to fit it. The playback bar shows the paragraph, sentence and time left, and skips
+   by sentence or paragraph; each reply message's speaker plays it again.
+7. **Interrupting**: voice never talks over you: a reply that arrives while you hold waits, paused, and no cue plays.
+   A press while it speaks pauses at once. With real speech it cuts: speech stops, the running turn is stopped
+   (`stop`) and the rest of that reply stays silent. Without speech it resumes where it paused.
+8. **The UI and codemode**: voice may use `codemode` (its scripts reach `tools.action`) and a `ui` tool that drives the
+   user's own page. `ui {op: query | act | snapshot}` records the request on the fork's `voice.ui` document and parks
+   durably; the voice panel in the user's page runs it on the page's ui-sdk bridge (`pageAgent()` from `@/sdk/solid`)
+   and answers with `ui-answer`, which signals the parked call with the result. With no answer within 15 s the call
+   fails with a clear message. The prompt has voice say each action in one short line before it runs it; the folded
+   status line names the call running now.
+9. **Handoff**: `voice_handoff {title, outcome, decided, open, instruction, attachments}` submits an input to
+   @ultimate with a `voice.handoff` entry, shown there as a card that links back to the voice session. With
+   `attachments`, the images the user pasted into the session's turns (the latest four) go along with it. With `to`, it
+   goes to the branch conversation on the user's screen instead (each turn records it as the fork's `screen`), as a
+   steer a busy coordinator reads after its current tool round; a conversation that is not on screen, a subagent, a root, @ultimate itself or a concluded one is refused.
 
-## Questions during a session
+## Collect until send
 
-While voice mode is on, the page watches the Messages log; each question to the user that opens then goes to Voice
-through `asked` once the user and GPT-Live have been quiet for two seconds, as a `voice.question` input (once per
-message). Voice announces it in one line and reads it only when asked. The sounds narrator keeps the question's tone
-but leaves its words to Voice while voice mode is on in that tab (`voiceQuestions` in `sounds/ui.solid.tsx`).
+A setting (Voice settings → Collect until send, UI state `ext.voice-live.collect`) keeps every recording instead of
+sending it. `record` with `collect` appends the clip to the fork's `voice.fork` `draft`, so the collection survives a
+reload, and each clip is transcribed as usual. After each clip, `intent` asks Jev (classify) whether the latest
+recording hands the message over: a send command ("send it", "go") or a turn to voice to act on it ("let's
+brainstorm this", "let's think it through", "what do you think?") sends it as a steer, "follow up" or "queue it" as a
+follow-up; a clip that is only a bare send command leaves the draft, a request to act stays in the message.
+When voice's last reply ends with a question (its last paragraph has a `?`), a second call beside it gets that
+paragraph as `assistantLastReply` and asks whether the user has finished a clean, complete answer to it; the send
+question never sees the reply, since it made borderline command verdicts fire on unfinished clips. A probability of 0.85
+or more sends the whole draft as a steer without a command, and the turn shows "sent as your answer". The threshold
+was tuned on past voice turns, where answers cut mid-thought stayed below it. Enter in the prompt box, or the box's send and follow-up
+buttons, send it too; discard drops it. The collected clips go out as one turn (`clips`): a model that hears audio gets
+every recording, a text model their joined transcripts. The panel shows a Collecting box with the clips, their length
+and their transcripts so far; folded, the status line shows "N collected".
 
-## Browser and transcript
+## Cues
 
-`Standing.voice` is the only Voice conversation index. Its `Unlisted` provider removes it from other sidebar lists;
-the Voice row nests under @ultimate. The dock under the transcript says what is happening now in large words: connecting,
-listening, hearing the user, Voice deciding, @ultimate on a request (its phase and time), an answer ready, speaking.
-Each forwarded request is one @ultimate message card (`Bubble` from messages): what was asked, then working (the
-sidebar's phase and elapsed time), then the spoken answer, unfolding to @ultimate's full answer (`voice.answer`, whose
-`source` is the answer entry) with Open in @ultimate; a notice turns it failed. Heard lines and Voice's own small
-talk stay quiet, tool cards are hidden and ordinary agent prose is quiet.
+"Transcribing…" and failures show on the turn itself. Soft cues mark press, send, the thinking pulse, the first word,
+done and errors; Speak replies and Sound cues are UI state (`ext.voice-live.speak`, `ext.voice-live.cues`).
 
-Collapse (or Alt+V) sends Voice back without stopping it: on @ultimate's conversation a small card at the top right
-(full width under the header on phones) shows the step and the words being heard, with Mute, End and expand. Elsewhere
-the title-bar pill says voice is live; on @ultimate the card replaces it, so there is one indicator at a time.
+## Contract
 
-Voice mode outlasts individual sessions. After two quiet minutes the session closes and listening pauses; an answer
-wakes it (or waits for a tap if browser activation blocks it). A pending forwarded request gets a short “Still on it”
-after 20 seconds, then every 45 seconds. Acknowledgements do not clear that pending state. Mute, End, the level meter,
-front/back sheet and tones remain browser-side: a quiet pulsing hum while connecting, stopped by any phase change
-(the ready tone, a low failed tone, End, page hide), and ready/pause/end tones. Closing waits for `session.closed`, records usage
-seconds and releases the microphone even on failure. No session survives its page.
-
-`extensions/voice-live/test/voice-live.test.ts` exercises the agent/Ultimate round trip with faux models, including spoken question answers.
-`extensions/voice-live/test/voice-live-relay.test.ts` exercises quiet-line joining, commentary suppression and idle tracking with a supplied
-clock. Neither contacts OpenAI.
+`refs.ts`: `RecordAction`, `TurnAction`, `StopAction`, `EndAction` (user-only), `StatusAction`, `VoiceSessionDoc`
+(`voice.session` on the root: the open fork) and the `VoiceTurn` and `VoiceHandoff` entry data.

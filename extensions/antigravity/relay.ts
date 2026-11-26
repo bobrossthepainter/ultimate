@@ -2,7 +2,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { inProcess, settled } from '../../lib/errors.ts'
+import { ReadableStream as NodeReadableStream } from 'node:stream/web'
+import { inProcess, meansNone, settled } from '../../lib/errors.ts'
 import { deadline } from '../../lib/timers.ts'
 
 export const CODE_ASSIST = 'https://daily-cloudcode-pa.googleapis.com'
@@ -27,7 +28,11 @@ export type Discovery = {
   models: { id: string; name: string; info: AgyModelInfo | undefined }[]
 }
 
-type AgentRequest = { headers: Record<string, string>; body: { request?: object } & object }
+type AgentRequest = {
+  headers: Record<string, string>
+  body: { request?: { sessionId?: unknown; labels?: unknown } }
+}
+type ErrorEvent = { error?: { code?: unknown; message?: unknown } }
 type Visit = {
   signal: AbortSignal
   stop: () => void
@@ -51,6 +56,8 @@ const HOP_HEADERS = new Set([
 const AGY_PROMPT = 'Reply with ok.'
 const AGY_SETUP_TIMEOUT_MS = 120_000
 const DISCOVERY_TIMEOUT_MS = 60_000
+const ERROR_BODY_LIMIT = 64 * 1024
+const ERROR_MESSAGE_LIMIT = 1000
 const ANSWER_THAT_ENDS_AGYS_TURN = {
   candidates: [{ content: { role: 'model', parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],
 }
@@ -67,6 +74,69 @@ async function read(req: IncomingMessage) {
   const chunks: Buffer[] = []
   for await (const chunk of req) chunks.push(chunk as Buffer)
   return Buffer.concat(chunks)
+}
+
+function isJsonWhitespace(byte: number) {
+  return byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d
+}
+
+async function* signedBody(req: IncomingMessage, agent: AgentRequest['body'], model: string) {
+  const envelope = JSON.stringify({ ...agent, model, request: undefined })
+  yield Buffer.from(`${envelope.slice(0, -1)},"request":`)
+  const { sessionId, labels } = agent.request ?? {}
+  const fields = JSON.stringify({ sessionId, labels }).slice(1, -1)
+  let opened = false
+  let hasMembers = false
+  let tail: Buffer[] = []
+  for await (const value of req.iterator({ destroyOnReturn: false })) {
+    let chunk = value as Buffer
+    if (!opened) {
+      const brace = chunk.findIndex((byte) => !isJsonWhitespace(byte))
+      if (brace === -1) {
+        yield chunk
+        continue
+      }
+      if (chunk[brace] !== 0x7b)
+        throw new RelayError(400, 'Gemini request body must start with `{`')
+      opened = true
+      yield chunk.subarray(0, brace + 1)
+      chunk = chunk.subarray(brace + 1)
+    }
+    if (!chunk.length) continue
+    let last = chunk.length - 1
+    while (last >= 0 && isJsonWhitespace(chunk[last])) last--
+    if (last === -1) {
+      if (tail.length) tail.push(chunk)
+      else yield chunk
+      continue
+    }
+    const beforeLast = chunk.subarray(0, last)
+    hasMembers ||= tail.length > 0 || beforeLast.some((byte) => !isJsonWhitespace(byte))
+    yield* tail
+    if (beforeLast.length) yield beforeLast
+    tail = [chunk.subarray(last)]
+  }
+  if (!opened) throw new RelayError(400, 'Gemini request body must start with `{`')
+  if (tail[0]?.[0] !== 0x7d) throw new RelayError(400, 'Gemini request body must end with `}`')
+  if (fields) yield Buffer.from(hasMembers ? `,${fields}` : fields)
+  yield* tail
+  yield Buffer.from('}')
+}
+
+function postJson(
+  url: string,
+  headers: Record<string, string>,
+  body: AsyncIterable<Uint8Array>,
+  signal: AbortSignal,
+) {
+  const init: RequestInit & { duplex: 'half' } = {
+    method: 'POST',
+    headers: { ...headers, 'content-type': 'application/json' },
+    body: NodeReadableStream.from(body) as BodyInit,
+    duplex: 'half',
+    signal,
+  }
+  return fetch(url, init)
 }
 
 function forwardedHeaders(req: IncomingMessage) {
@@ -93,15 +163,37 @@ function fail(res: ServerResponse, status: number, message: string) {
   res.end(errorBody(status, message))
 }
 
-function upstreamFailure(status: number) {
+function isAuthFailure(status: number) {
+  return status === 401 || status === 403
+}
+
+function upstreamFailure(status: number, detail?: unknown) {
+  if (isAuthFailure(status))
+    return new RelayError(
+      status,
+      `Antigravity refused the request (HTTP ${status}); sign in again with agy`,
+    )
+  const message =
+    status === 429
+      ? 'Antigravity rate limit or quota reached (HTTP 429)'
+      : `Antigravity answered HTTP ${status}`
   return new RelayError(
     status,
-    status === 401 || status === 403
-      ? `Antigravity refused the request (HTTP ${status}); sign in again with agy`
-      : status === 429
-        ? 'Antigravity rate limit or quota reached (HTTP 429)'
-        : `Antigravity answered HTTP ${status}`,
+    typeof detail === 'string' && detail
+      ? `${message}: ${detail.slice(0, ERROR_MESSAGE_LIMIT)}`
+      : message,
   )
+}
+
+async function upstreamErrorMessage(body: ReadableStream<Uint8Array>) {
+  const bytes = Buffer.alloc(ERROR_BODY_LIMIT)
+  let length = 0
+  for await (const chunk of body) {
+    if (length + chunk.length > bytes.length) return undefined
+    bytes.set(chunk, length)
+    length += chunk.length
+  }
+  return (JSON.parse(bytes.toString('utf8', 0, length)) as ErrorEvent | null)?.error?.message
 }
 
 function write(res: ServerResponse, text: string, signal: AbortSignal) {
@@ -123,11 +215,37 @@ function write(res: ServerResponse, text: string, signal: AbortSignal) {
   })
 }
 
+function eventStatus(error: ErrorEvent['error']) {
+  const code = error?.code
+  return typeof code === 'number' && code >= 400 && code < 600 ? code : 502
+}
+
 function piEvent(data: string) {
-  const parsed = JSON.parse(data) as { response?: unknown; error?: { code?: unknown } }
+  const parsed = JSON.parse(data) as { response?: unknown } & ErrorEvent
   if (parsed.response && typeof parsed.response === 'object') return JSON.stringify(parsed.response)
-  const code = typeof parsed.error?.code === 'number' ? parsed.error.code : 502
-  throw upstreamFailure(code >= 400 && code < 600 ? code : 502)
+  throw upstreamFailure(eventStatus(parsed.error), parsed.error?.message)
+}
+
+async function* sseEvents(body: ReadableStream<Uint8Array>) {
+  const decoder = new TextDecoder()
+  let pending = ''
+  let data: string[] = []
+  for await (const chunk of body) {
+    pending += decoder.decode(chunk, { stream: true })
+    let match: RegExpExecArray | null
+    while ((match = /\r\n|\n|\r(?!$)/.exec(pending))) {
+      const text = pending.slice(0, match.index)
+      pending = pending.slice(match.index + match[0].length)
+      if (text.startsWith('data:')) data.push(text.slice(5))
+      else if (text === '' && data.length) {
+        yield data.join('\n')
+        data = []
+      }
+    }
+  }
+  pending += decoder.decode()
+  if (pending.startsWith('data:')) data.push(pending.slice(5).replace(/\r$/, ''))
+  if (data.length) yield data.join('\n')
 }
 
 async function unwrapCodeAssistEvents(
@@ -135,29 +253,16 @@ async function unwrapCodeAssistEvents(
   res: ServerResponse,
   signal: AbortSignal,
 ) {
-  const decoder = new TextDecoder()
-  let pending = ''
-  let data: string[] = []
-  const line = async (text: string) => {
-    if (text === '') {
-      const event = data.length ? piEvent(data.join('\n')) : undefined
-      data = []
-      if (event === undefined) return
+  try {
+    for await (const data of sseEvents(body)) {
+      const event = piEvent(data)
       if (!res.headersSent) res.writeHead(200, { 'content-type': 'text/event-stream' })
       await write(res, `data: ${event}\n\n`, signal)
-    } else if (text.startsWith('data:')) data.push(text.slice(5))
-  }
-  for await (const chunk of body) {
-    pending += decoder.decode(chunk, { stream: true })
-    let match: RegExpExecArray | null
-    while ((match = /\r\n|\n|\r(?!$)/.exec(pending))) {
-      const text = pending.slice(0, match.index)
-      pending = pending.slice(match.index + match[0].length)
-      await line(text)
     }
+  } catch (error) {
+    if (!(error instanceof RelayError) || !res.headersSent) throw error
+    await write(res, `data: ${errorBody(error.status, error.message)}\n\n`, signal)
   }
-  await line(pending.replace(/\r$/, ''))
-  await line('')
 }
 
 function endAgysTurn(res: ServerResponse, streaming: boolean) {
@@ -239,7 +344,6 @@ export async function startRelay(run: RunAgy, upstream = CODE_ASSIST) {
   }
 
   async function fromPi(req: IncomingMessage, res: ServerResponse, model: string) {
-    const body = JSON.parse((await read(req)).toString('utf8')) as object
     const gone = new AbortController()
     res.on('close', () => {
       if (!res.writableFinished) gone.abort()
@@ -263,17 +367,24 @@ export async function startRelay(run: RunAgy, upstream = CODE_ASSIST) {
         const sent = await Promise.race([agentRequest.promise, exitedFirst, stopped]).finally(
           cancelSetupDeadline,
         )
-        const { sessionId, labels } = (sent.body.request ?? {}) as Record<string, unknown>
-        const answer = await fetch(`${upstream}/v1internal:streamGenerateContent?alt=sse`, {
-          method: 'POST',
-          headers: { ...sent.headers, 'content-type': 'application/json' },
-          body: JSON.stringify({ ...sent.body, model, request: { ...body, sessionId, labels } }),
-          signal: visit.signal,
+        const answer = await postJson(
+          `${upstream}/v1internal:streamGenerateContent?alt=sse`,
+          sent.headers,
+          signedBody(req, sent.body, model),
+          visit.signal,
+        ).catch((error: unknown) => {
+          if (error instanceof Error && error.cause instanceof RelayError) throw error.cause
+          throw error
         })
-        if (!answer.ok || !answer.body) {
-          await settled(answer.arrayBuffer())
-          throw upstreamFailure(answer.status)
+        if (!answer.ok) {
+          let detail: unknown
+          if (answer.body) {
+            if (isAuthFailure(answer.status)) await settled(answer.body.cancel())
+            else detail = await upstreamErrorMessage(answer.body).catch(meansNone)
+          }
+          throw upstreamFailure(answer.status, detail)
         }
+        if (!answer.body) throw upstreamFailure(502)
         await unwrapCodeAssistEvents(answer.body, res, visit.signal)
         if (!res.headersSent) res.writeHead(200, { 'content-type': 'text/event-stream' })
         res.end()

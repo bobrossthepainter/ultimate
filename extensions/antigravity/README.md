@@ -20,8 +20,8 @@ model call.
 - For each model call the relay starts `agy -p` with `CLOUD_CODE_URL` pointing back at itself. It passes `agy`'s setup
   calls through to Google's Code Assist endpoint (`https://daily-cloudcode-pa.googleapis.com`), takes `agy`'s first
   agent request, replaces its model and request (contents, system instruction, tools, generation config) with Pi's,
-  and sends it upstream with `agy`'s own headers. Code Assist's `{response}` stream frames are unwrapped back to the
-  Gemini API's shape.
+  and streams it upstream with `agy`'s own headers and session metadata. Code Assist's `{response}` stream frames
+  are unwrapped back to the Gemini API's shape.
 - `agy` itself gets a finished one-word answer, so it never runs a tool, then is stopped.
 - Model discovery runs `agy models` through the same relay and reads the limits Code Assist reports for each model.
 

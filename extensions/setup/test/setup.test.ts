@@ -66,10 +66,11 @@ it('falls back to the cheapest model when no known-good one is available', () =>
   expect(fallbackModel([])).toBeUndefined()
 })
 
-async function checkHost(options: { logins: string[]; oauth?: string[] }) {
+async function checkHost(options: { logins: string[]; oauth?: string[]; openaiBaseUrl?: string }) {
   const userHome = await temp('ultimate-setup-check-')
   const projectRoot = join(userHome, 'project')
   await mkdir(join(userHome, '.ultimate/agents'), { recursive: true })
+  await mkdir(projectRoot)
   await writeFile(
     join(userHome, '.ultimate/agents/scout.md'),
     '---\nname: scout\ndescription: Scouts\nmodel: openai-codex/gpt-6.1-sol\n---\nScout.\n',
@@ -88,6 +89,8 @@ async function checkHost(options: { logins: string[]; oauth?: string[] }) {
         configured: options.logins.includes(provider),
       }),
       isUsingOAuth: (provider: string) => options.oauth?.includes(provider) ?? false,
+      getProvider: () => ({ baseUrl: options.openaiBaseUrl ?? 'https://api.openai.com/v1' }),
+      getAllModels: () => [],
     },
     projectSettings: async () => ({ lander: { checks: ['pnpm check'] } }),
     projectSetup: async () => ({ config: false, decision: null as boolean | null }),
@@ -169,9 +172,9 @@ it("lets a provider's configured auth stand in for the secret that names it", as
   })
 })
 
-it("lets an openai API key stand in for voice's OPENAI_API_KEY, but not an OAuth login", async () => {
-  const voice = {
-    name: 'voice-live',
+it("lets an openai API key stand in for dictation's OPENAI_API_KEY, but not an OAuth login", async () => {
+  const dictation = {
+    name: 'dictation',
     enabled: true,
     layer: 'user',
     server: {
@@ -185,19 +188,22 @@ it("lets an openai API key stand in for voice's OPENAI_API_KEY, but not an OAuth
   const secrets = async (options: Parameters<typeof checkHost>[0], stored?: string) => {
     const host = await checkHost(options)
     if (stored) await writeSecret(host.userHome, 'OPENAI_API_KEY', stored)
-    const issues = await check({ ...host, extensions: () => [voice] as never })
+    const issues = await check({ ...host, extensions: () => [dictation] as never })
     return issues.find((issue) => issue.area === 'Secrets')?.status
   }
   expect(await secrets({ logins: [] }, 'sk-stored')).toBe('ok')
   expect(await secrets({ logins: ['openai'] })).toBe('ok')
   expect(await secrets({ logins: ['openai'], oauth: ['openai'] })).toBe('warn')
   expect(await secrets({ logins: [] })).toBe('warn')
+  expect(await secrets({ logins: ['openai'], openaiBaseUrl: 'https://llm.example.com/v1' })).toBe(
+    'warn',
+  )
 })
 
 it('warns only about the login on a fresh install, and offers default-on secrets as optional', async () => {
   const host = await checkHost({ logins: [] })
-  const voice = {
-    name: 'voice',
+  const dictation = {
+    name: 'dictation',
     enabled: true,
     layer: 'default',
     server: {
@@ -208,18 +214,18 @@ it('warns only about the login on a fresh install, and offers default-on secrets
       secrets: [{ name: 'OPENAI_API_KEY', description: '' }],
     },
   }
-  const issues = await check({ ...host, extensions: () => [voice] as never })
+  const issues = await check({ ...host, extensions: () => [dictation] as never })
   expect(issues.filter((issue) => issue.status === 'warn').map((issue) => issue.area)).toEqual([
     'Login',
   ])
   expect(issues.find((issue) => issue.area === 'Secrets')).toMatchObject({
     status: 'info',
-    summary: 'optional: OPENAI_API_KEY for voice',
+    summary: 'optional: OPENAI_API_KEY for dictation',
   })
   // The user turned it on: its missing key is a real problem again.
   const chosen = await check({
     ...host,
-    extensions: () => [{ ...voice, layer: 'user' }] as never,
+    extensions: () => [{ ...dictation, layer: 'user' }] as never,
   })
   expect(chosen.find((issue) => issue.area === 'Secrets')?.status).toBe('warn')
 })
@@ -277,7 +283,6 @@ it('has no agent warning once the pinned provider has a login', async () => {
 
 it('warns about a missing worktree setup until one is configured', async () => {
   const host = await checkHost({ logins: ['openrouter', 'openai-codex'] })
-  await mkdir(host.projectRoot)
   await writeFile(join(host.projectRoot, 'composer.json'), '{}')
   await git(host.projectRoot, 'init', '-q', '-b', 'main')
   await git(

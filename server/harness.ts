@@ -19,9 +19,11 @@ import { readFamilies } from '../lib/families-settings.ts'
 import { callTrace } from './trace.ts'
 import { projectSkills } from './skills.ts'
 import { writeProject } from './project.ts'
+import { projectName, projectSettings } from '../lib/project-setup.ts'
 import { requestSwap } from './supervisor-protocol.ts'
 import { activeChapter, finishChapterSwitch } from '../lib/chapters.ts'
 import { defaultAgent } from '../lib/agents.ts'
+import { secretsAuthContext } from '../lib/secrets.ts'
 import type {
   ConversationId,
   Cursor,
@@ -124,7 +126,7 @@ export async function prepareHarness(options: HostOptions) {
   const home = options.home ?? process.env.ULTIMATE_HOME ?? projectHome(projectRoot, userHome)
   await mkdir(home, { recursive: true })
   let chapter = await activeChapter(home)
-  const runtime = await ModelRuntime.create()
+  const runtime = await ModelRuntime.create({ authContext: secretsAuthContext(userHome) })
   const settings = SettingsManager.create(projectRoot)
   applyHttpProxySettings(settings.getGlobalSettings().httpProxy)
   configureHttpDispatcher(settings.getHttpIdleTimeoutMs())
@@ -223,7 +225,11 @@ export async function prepareHarness(options: HostOptions) {
           throw new Error(
             `A reset or restore of ${home} was interrupted; rerun pnpm reset or pnpm restore`,
           )
-        await writeProject(home, projectRoot)
+        await writeProject(
+          home,
+          projectRoot,
+          projectName(projectRoot, await projectSettings(projectRoot, userHome)),
+        )
         await finishChapterSwitch(home, async (file) => {
           const created = await openNodeSqliteStorage(file)
           await created.close(context)

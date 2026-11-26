@@ -1,7 +1,16 @@
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { ChevronRight } from '@lucide/solid'
 import type { JSX } from '@solidjs/web'
-import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from 'solid-js'
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  mapArray,
+  Match,
+  Show,
+  Switch,
+} from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
 import {
   Collapsible,
@@ -25,6 +34,7 @@ import {
   notify,
   plural,
   useConversationSummary,
+  useDocOf,
   useSystem,
   writerNow,
   writingAs,
@@ -45,13 +55,14 @@ import {
   stateWord,
   waitingOnUser,
 } from '../messages/ui.solid.tsx'
+import { StartedDoc } from '../messages/refs.ts'
 import { talkToUltimate } from '../subagents/ui.solid.tsx'
 import { PendingAction } from '../workspaces/refs.ts'
 import { Landed, useLandings } from './landed.solid.tsx'
 import { LanderState } from './lander.solid.tsx'
 import { UnderUltimate } from './points.ts'
 import { Project } from './project.solid.tsx'
-import { InFlight, inFlight, MemoryRow } from './root.solid.tsx'
+import { InFlight, inFlight, MemoryRow, StandingFlights } from './root.solid.tsx'
 import { ChildRow, Row, RowMenu, WaitLines } from './rows.solid.tsx'
 import {
   shell,
@@ -115,6 +126,24 @@ function Tree() {
       .filter((c) => open.has(c.id))
       .map((c) => c.id)
   })
+  const starters = mapArray(flights, (id) => {
+    const started = useDocOf(() => id, StartedDoc)
+    return () => ({ id, by: started()?.by })
+  })
+  const standingFlights = createMemo(() => {
+    const standing = new Set(Object.values(data.standingIds() ?? {}))
+    const result = new Map<ConversationId, ConversationId[]>()
+    for (const starter of starters()) {
+      const { id, by } = starter()
+      if (by === undefined || by === data.ultimateId() || !standing.has(by)) continue
+      result.set(by, [...(result.get(by) ?? []), id])
+    }
+    return result
+  })
+  const nested = createMemo(() => new Set([...standingFlights().values()].flat()))
+  const standingName = (id: ConversationId) =>
+    Object.entries(data.standingIds() ?? {}).find(([, standing]) => standing === id)?.[0] ??
+    `#${id}`
   const flightIds = createMemo(() => new Set(flights()))
   const earlier = createMemo(() => {
     const rest = listed().filter((c) => !data.roots().has(c.id) && !flightIds().has(c.id))
@@ -131,7 +160,12 @@ function Tree() {
   const agents = createMemo(() =>
     data
       .topLevel()
-      .filter((c) => standingAgent(c) && c.id !== ultimate())
+      .filter(
+        (c) =>
+          standingAgent(c) &&
+          c.id !== ultimate() &&
+          (data.standingIds() !== undefined || c.label === 'lander'),
+      )
       .toSorted(
         (a, b) => Number(b.label === 'lander') - Number(a.label === 'lander') || a.id - b.id,
       ),
@@ -245,7 +279,20 @@ function Tree() {
               {(agent, index) => (
                 <Show
                   when={agent().label === 'lander' && index() === 0}
-                  fallback={tree(agent().id)}
+                  fallback={
+                    <div>
+                      {tree(agent().id)}
+                      <Show when={standingFlights().get(agent().id)}>
+                        {(ids) => (
+                          <StandingFlights
+                            ids={ids()}
+                            name={standingName(agent().id)}
+                            onConclude={onConclude}
+                          />
+                        )}
+                      </Show>
+                    </div>
+                  }
                 >
                   <div>
                     {tree(agent().id)}
@@ -257,7 +304,7 @@ function Tree() {
           </fieldset>
         </Show>
         <Slot name="sidebar.top" variant="inline" />
-        <InFlight ids={flights()} onConclude={onConclude} />
+        <InFlight ids={flights().filter((id) => !nested().has(id))} onConclude={onConclude} />
       </nav>
       <Show when={summary()}>
         {(row) => (
@@ -359,7 +406,7 @@ function HistoryGroup(props: {
     <Show when={props.count > 0}>
       <Collapsible class="pt-1">
         <CollapsibleTrigger
-          aria-label={props.label}
+          aria-label={`${props.label} conversations`}
           class={cn(
             'group/history flex w-full items-center gap-1 px-4 py-1.5 section-label outline-none hover:text-foreground',
             props.label === 'Concluded' && 'focus-visible:text-foreground',
@@ -369,7 +416,7 @@ function HistoryGroup(props: {
           {props.label} · {props.count}
         </CollapsibleTrigger>
         <CollapsibleContent
-          aria-label={props.label}
+          aria-label={`${props.label} conversations`}
           class="flex flex-col gap-0.5 pt-1"
           render={(panel) => <section {...panel} />}
         >

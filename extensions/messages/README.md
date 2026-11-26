@@ -34,10 +34,22 @@ report.**
 - **Reports.** After each run of a branch, its final answer goes to its starter, unless it already returned as a reply.
   When nothing of the branch is under way (no run, queued input, busy subagent, pending submission or open
   reply-enabled message), it goes as a one-way message with `report: true`, which wakes the starter; otherwise as a
-  note, since the branch will run again. A run that answered only the user's own input (typed or spoken in the
-  branch, or a review of its diff) is a note too: the user read it where they asked, and a report would wake the
-  starter for nothing. Their answer to one of the branch's questions is a decision the starter acts on, so the
-  answer to it reports. A landing concludes the branch and wakes the starter itself, asking through
+  note, since the branch will run again. Before a report goes out, a judge weighs it: back-and-forth the user drives in
+  the branch (an iteration round, an answer to their idea, an acknowledgement) goes as a note instead, while a decision,
+  a result, a blocker or a request for the starter reports. The `messages.judge` point asks it; classify provides it
+  with one Jev `choice` (about 0.2 s, a fraction of a cent), sending the branch's previous answer (last 600 characters),
+  each input's source and first 500 characters, and the final answer's first 1200 to TypeSafe. The `board.route` task
+  marks the call before it asks and memoizes the verdict, so a crash in between reports instead of asking twice. The
+  verdict goes on the message and in the branch's `board.judged` document by answer entry (`{ answer, report }`, the
+  probability it reports; below 0.5 it is a note). Without classify, after 10 s, on any error or a score outside [0, 1]
+  the answer reports, with `{ answer, error }` naming only the cause (an HTTP status, `timed out`, `interrupted`): a
+  wrong wake costs one turn, a lost answer stalls a flow. A branch's routes run one at a time in answer order: each `board.route` waits for the previous
+  one (`board.started.lastRoute`), so a late verdict holds back newer answers rather than being overtaken. In the
+  transaction that sends it the work checks run again; a branch that got busy or concluded meanwhile sends the answer
+  as a note, which its next report promotes like any work update. A judged note is never promoted. The
+  judge's error message is a short cause (classify keeps only `TypeSafe <status>`); a provider's response body never
+  crosses it. The message card and the branch's final answer show the verdict as a
+  chip. A landing concludes the branch and wakes the starter itself, asking through
   the `workspaces.branches` point this extension provides (`starter`, `underway`).
 - **Answers back down.** The primary agent's final answer goes to each branch whose reply or report was an input of
   that run (not concluded, not messaged in the run) with `routed: true`, so a weigh-in reaches the branch. The run's
@@ -45,7 +57,8 @@ report.**
 - **Results to the asker.** A branch, waking automation or reply-expected `tell` started by @ultimate can own a request.
   New work takes it over if the run owes the request, reads its current owner's output or hears from its asker (their
   newest open request). Only the current owner's result goes back. A branch's result is final once it is concluded;
-  local askers receive a normal early answer and then a one-way result.
+  local askers receive a normal early answer and then a one-way result. A local asker that is concluded by then (a
+  branch that landed) gets the result, or the notice that none will come, as a note, so it stays concluded.
 - **Everything else wakes:** reply-enabled messages and one-way messages from anyone who is not the recipient's child or
   branch.
 
@@ -69,8 +82,9 @@ another.
 A reply-expected message to the user stays open, and its sender shows as awaiting reply, until the user answers that
 message: a Reply with `re` (the answer card or a typed Reply). The delivered input reads `Answer to message N:` before
 the reply, so an asker with several cards open never guesses which one it answers; a spoken (voice) reply answers no
-card while several are open. Dismissing it closes it with a one-way note to the sender. A branch's question also puts an attention pointer (`board.asked`) in @ultimate's conversation, and the user's
-answer a `board.answered` note there; neither starts a run. A branch with an open question shows as `waits on you`.
+card while several are open. Dismissing it closes it with a one-way note to the sender. A branch's question also puts an attention pointer (`board.asked`) in the conversation of the standing agent that
+started it (@ultimate when a coordinator, a side chat or no standing agent started it), and the user's answer a
+`board.answered` note there; neither starts a run. A branch with an open question shows as `waits on you`.
 
 `questions` (checked in `questions.ts`) render under the message as the questions extension's answer card; see
 [Questions](../questions/README.md). While a sender has questions open, its next input is preceded by a `board.open`
@@ -128,7 +142,7 @@ the log keeps the newest 300 items, and transcripts retain delivered inputs. `Me
 are a conversation id, `'user'` or `'remote'`; `state` is `sent`, `delivered`, `answered`, `dismissed`, `failed` or
 `stopped`; `re`, `entry`, `answer`, `error`, `via`, `remote`, `report`, `questions` and `call` are optional.
 
-- `board.message` data: `{ id, from, text, reply, delivery: 'steer' | 'followUp' | 'note', images?, remote? }`.
+- `board.message` data: `{ id, from, text, reply, delivery: 'steer' | 'followUp' | 'note', images?, remote?, judged? }`.
 - `board.reply` data: `{ id, re, from, text, failed, stopped?, images?, remote?, interim? }`; `stopped` also sets
   `failed`; an `interim` reply is placed as a note (`delivery: 'note'`).
 - Each post emits `board.sent` `{ message, from, to, reply, steer }` (`MessageSent`), never the text; replies emit
@@ -158,7 +172,8 @@ Server side, imported in one direction (`log`, `images`, `addresses`, `questions
   point.
 - `send.ts`: `send()`, validation, receipts, and turning a message to a sender you owe into that answer.
 - `delivery.ts`: the `board.delivery` task, owner-output admission and the `board.settle` task that waits for that input.
-- `route.ts`: the `board.route` task: notes, reports and answers back down.
+- `route.ts`: the `board.route` task: notes, reports (weighed by the judge) and answers back down.
+- `judged.solid.tsx`: the judge's verdict chip on a message card and a branch's final answer.
 - `outcomes.ts`: fail requests whose owner has stopped, failed or been deleted.
 - `remote.ts`: `tell`, the `remote` and `remoteReply` actions.
 - `branch.ts`: the `branch` tool.

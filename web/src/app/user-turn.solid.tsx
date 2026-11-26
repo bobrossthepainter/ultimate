@@ -14,8 +14,8 @@ import { FileChip } from '@/components/file-chip.solid.tsx'
 import { typeLabel } from '@/components/file-kind.ts'
 import { Markdown, MentionText } from '@/components/markdown/markdown.solid.tsx'
 import { FileUpload, formatAgo, messageItems, useExtensions } from '../sdk/hooks.ts'
-import { Contribution, useProvided } from '../sdk/contribution.solid.tsx'
-import { splitAttachments, uploadedAt } from './attachments.ts'
+import { Contribution, useAllProvided } from '../sdk/contribution.solid.tsx'
+import { splitAttachments, uploadedAt, uploadFor } from './attachments.ts'
 import type { AttachedFile } from './attachments.ts'
 import { ContributionError } from './contribution-error.solid.tsx'
 import { MessageActions } from './message-actions.solid.tsx'
@@ -47,7 +47,16 @@ function SkillRun(props: { name: string; location: string; body: string }) {
 }
 
 function SentFile(props: { file: AttachedFile; at?: number }) {
-  const upload = useProvided(FileUpload, () => null)
+  const uploads = useAllProvided(FileUpload, () => null)
+  const upload = () =>
+    uploadFor(
+      uploads().filter((value) => value !== undefined),
+      props.file.mimeType,
+    )
+  const preview = createMemo(() => {
+    const line = props.file.line
+    return line ? upload()?.preview?.(line) : undefined
+  })
   const uploaded = () => uploadedAt(props.file.path) ?? props.at
   const gone = () => {
     const kept = upload()?.keptMs
@@ -57,6 +66,7 @@ function SentFile(props: { file: AttachedFile; at?: number }) {
   return (
     <FileChip
       gone={gone()}
+      image={gone() ? undefined : preview()?.()}
       mimeType={props.file.mimeType}
       name={props.file.name}
       note={
@@ -64,16 +74,35 @@ function SentFile(props: { file: AttachedFile; at?: number }) {
           ? `Removed after ${Math.round(upload()!.keptMs / 86_400_000)} days`
           : `${props.file.size} · ${typeLabel(props.file.name, props.file.mimeType)}`
       }
-      title={`${props.file.path}${uploaded() ? `\nattached ${formatAgo(uploaded()!, Date.now(), { ago: true })}` : ''}`}
+      title={`${props.file.path || props.file.name}${uploaded() ? `\nattached ${formatAgo(uploaded()!, Date.now(), { ago: true })}` : ''}`}
     />
   )
 }
 
-export function UserText(props: { text: string; class?: string }) {
+export function UserText(props: { text: string; class?: string; at?: number }) {
+  const parts = createMemo(() => splitAttachments(props.text))
   return (
-    <p class={cn('break-words whitespace-pre-wrap', props.class)}>
-      <MentionText text={props.text} />
-    </p>
+    <Show
+      when={parts().files.length}
+      fallback={
+        <p class={cn('break-words whitespace-pre-wrap', props.class)}>
+          <MentionText text={props.text} />
+        </p>
+      }
+    >
+      <div class={cn('flex flex-col gap-2', props.class)}>
+        <Show when={parts().text}>
+          {(text) => (
+            <p class="break-words whitespace-pre-wrap">
+              <MentionText text={text()} />
+            </p>
+          )}
+        </Show>
+        <div class="flex flex-wrap gap-2">
+          <For each={parts().files}>{(file) => <SentFile at={props.at} file={file} />}</For>
+        </div>
+      </div>
+    </Show>
   )
 }
 

@@ -75,13 +75,17 @@ export interface ExtensionActionRequest {
   conversationId?: ConversationId
 }
 export interface ExtensionActionResponse {
-  result: JsonValue
+  result?: JsonValue
+  rev?: number
+  superseded?: true
 }
 type AlwaysEnabledCore = true
 export interface ExtensionInfo {
   name: string
   enabled: boolean
   core?: AlwaysEnabledCore
+  requires?: string[]
+  offForMissing?: string[]
   source: 'builtin' | 'user' | 'project'
   replaces?: 'builtin'
   layer: 'default' | 'user' | 'project' | 'folder'
@@ -215,12 +219,14 @@ export interface ReadSpec {
 }
 export type ViewSubscription = { sub: number; conversation?: number; docs: string[]; view: boolean }
 export type ReadSubscription = { sub: number; read: ReadSpec; every?: ReadAgainAfterMs }
+export const MAX_SUBSCRIPTION_BATCH_BYTES = 1024 * 1024
 export interface SubscriptionsRequest {
   subscribe: (ViewSubscription | ReadSubscription)[]
   unsubscribe: number[]
 }
 type ReadAgainAfterMs = number
-export type ReadEvent = { result: JsonValue } | { error: string; status: number }
+export type ReadPayload = { result: JsonValue } | { error: string; status: number }
+export type ReadEvent = ReadPayload & { rev: number }
 export interface SubscriptionsAnswer {
   ok: true
   refused: Record<number, HttpStatusOfRefusedOpen>

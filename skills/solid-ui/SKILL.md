@@ -142,8 +142,8 @@ Icons come from `@lucide/solid`. `extensions/keep-warm/chip.solid.tsx` is a smal
   args keeps the args its key was made from. A poll that pauses while the tab is hidden is `every: () => (visible() ?
   ms : undefined)` on a visibility signal, refetching when the tab is shown (`extensions/projects/rail.solid.tsx`).
 - **Many owners, one lifetime:** a recording, a capture or a subscription that several handlers and effects must end
-  hangs off one `AbortController`: listeners take its `signal`, the effect keyed on what ends it calls `abort()`
-  (`extensions/voice/button.solid.tsx`), instead of a ref mirroring state for a cleanup to read.
+  hangs off one `AbortController`: listeners take its `signal`, and the effect keyed on what ends it calls `abort()`
+  instead of a ref mirroring state for a cleanup to read.
 - **The conversation's model:** `useAgent()`, not a whole conversation replica.
 - **Formatting:** `formatAgo`, `formatDuration`, `formatTime`, `formatBytes`, `formatTokens`, `plural`, `shortenPath`,
   `elidePath` and `prettyName` come from `@/sdk/solid`; a shared `.ts` helper takes `formatAgo` and `plural` from
@@ -163,6 +163,23 @@ Icons come from `@lucide/solid`. `extensions/keep-warm/chip.solid.tsx` is a smal
 - **A component that reads a shared service** can take it through a factory at module scope (`readAloudAction(player)`
   in `extensions/read-aloud/web.solid.tsx`). The returned component owns its subscription.
 - **Derived values:** a value that depends on an answer is a function of it, never a signal an effect copies it into.
+- **Async in the graph:** a one-shot fetch a component owns is a memo returning the Promise, read under `<Errored>`
+  and `<Loading on={key}>`. Read every input before the first `await`: later reads are not tracked
+  (`UNTRACKED_READ_AFTER_AWAIT`). A newer run only drops the older answer, so abort the request yourself:
+  register an `AbortController`'s `abort` with `onCleanup` before the `await` (`MessageImages` in
+  `extensions/messages/message-images.solid.tsx`).
+- **Server reads stay on `useAction`,** not async memos. It is an external store on purpose: one call per action, args and
+  conversation for every reader, polling, revision order, a refetch after a restart, and the readiness the agent bridge
+  waits on. Its `loading()` is that store's flag; don't rebuild it on `<Loading>`.
+- **Pending:** `isPending(() => value())` is true only while a _new_ answer is in flight; the first load is loading
+  (a `<Loading>` fallback or the memo's placeholder), never pending. A widget that must not wait for slower async
+  neighbours is a `createDeferred`. A press's own pending belongs to the kit `Button`: return the Promise from
+  `onClick`. Keep a `busy` signal only when it also locks other controls.
+- **Every change is a transition.** Writes in one tick, and an `action()`'s writes, land together with the async they
+  touch. So actions that write shared signals tie independent rows together: optimistic switches over one shared
+  list kept a failed row on until another row's request settled, and were reverted (`40fc6170`). Use
+  `createOptimistic` + `action` only for a single control with its own state (the rail pin in
+  `extensions/projects/rail.solid.tsx`); independent rows keep their own lock and error.
 - **Effects:** the apply half is untracked, so reading an accessor there trips `STRICT_READ_UNTRACKED` and never
   updates. Read each field you use in the compute half and hand the apply half a plain value
   (`extensions/sounds/player.solid.tsx`); never `snapshot()` there, it subscribes to nothing nested.
@@ -195,6 +212,12 @@ Icons come from `@lucide/solid`. `extensions/keep-warm/chip.solid.tsx` is a smal
 
 Solid 2:
 
+- An error no `<Errored>` catches (a render or an effect throwing, apply half included) halts every update on the page.
+  Each contribution has its own boundary (`web/src/sdk/contribution.solid.tsx`) and the page has a root one
+  (`PageBoundary` in `web/src/app/page-failure.solid.tsx`) with a Reload card; core code under it still freezes until
+  reload. Don't catch a reactive read's throw in `try/catch` (`CAUGHT_REACTIVE_READ`).
+- The page runs Solid's production build, so `[CODE]` diagnostics show only in tests and the dev server: run the
+  tests to see them.
 - A write inside an owned scope (a component body, a memo, `createRoot(() => …)`) throws
   `REACTIVE_WRITE_IN_OWNED_SCOPE`, tests included: create the store in the root, write from outside it.
 - A context without a default throws when nothing provides it, and providing `undefined` counts as nothing. An optional

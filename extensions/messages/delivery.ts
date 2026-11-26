@@ -94,6 +94,7 @@ export function delivery(host: ExtensionHost) {
             ...questionLinkOutsideLog(m),
             ...(m.routed !== undefined ? { routed: true } : {}),
             ...(m.echo ? { echo: true } : {}),
+            ...(m.judged ? { judged: m.judged } : {}),
             delivery: task.input.note ? 'note' : task.input.steer ? 'steer' : 'followUp',
             ...(replayStableImages.length ? { images: replayStableImages.length } : {}),
             ...(m.remote ? { remote: m.remote } : {}),
@@ -657,12 +658,15 @@ export async function sendResult(
       reply: false,
       steer: true,
     })
+  const askerConcluded =
+    typeof request.from === 'number' &&
+    (await host.need(ConversationsApi).concludedIn(tx)).has(request.from)
   await tx.createTask(
     delivery(host),
     {
       message: remote ? (original ?? message) : message,
       steer: true,
-      note: false,
+      note: askerConcluded,
       fromLabel: `#${from} (@ultimate)`,
       toLabel: remote ? remoteLabel(remote) : `#${request.from}`,
       ...(remote ? { reply: { message, failed: failed ?? false } } : {}),

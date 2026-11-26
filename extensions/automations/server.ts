@@ -34,7 +34,7 @@ import { MessagesApi } from '../messages/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { LineageApi } from '../lineage/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
-import { AutomationsApi } from './api.ts'
+import { AutomationsApi, Hold } from './api.ts'
 import {
   CreateAction,
   DeleteAction,
@@ -258,6 +258,7 @@ function backend(host: ExtensionHost) {
     ) {
       const script = sub.script!
       prepared.previousAsk = script.ask
+      prepared.previousOnce = script.once
       await writeJson(
         join(projectDir(id), MANIFEST),
         committedManifest({
@@ -632,6 +633,7 @@ function backend(host: ExtensionHost) {
     const abort = a.scheduler
     const oldSchedule = a.schedule && { ...a.schedule }
     const preDiscoveryAsk = prepared.previousAsk ?? a.script?.ask
+    const preDiscoveryOnce = prepared.previousOnce ?? a.script?.once
     delete a.scheduler
     if (args.action !== 'update') delete a.nextAt
     if (args.action === 'delete') {
@@ -695,14 +697,21 @@ function backend(host: ExtensionHost) {
       }
       if (args.model !== undefined) a.model = args.model
       if (args.thinking !== undefined) a.thinking = args.thinking
-      if (a.script && a.script.ask !== preDiscoveryAsk) {
+      if (a.script && (a.script.ask !== preDiscoveryAsk || a.script.once !== preDiscoveryOnce)) {
+        const { pid } = a.script
+        a.enabled = true
         a.script.state = 'writing'
-        delete a.script.error
-        effect = {
-          id,
-          action: 'pause',
-          ...(a.script.pid ? { previousPid: a.script.pid } : {}),
-        }
+        for (const key of [
+          'error',
+          'failures',
+          'pid',
+          'startedAt',
+          'exitedAt',
+          'exitCode',
+          'lastOutputAt',
+        ] as const)
+          delete a.script[key]
+        effect = { id, action: 'pause', ...(pid ? { previousPid: pid } : {}) }
       }
     } else if (args.action === 'pause') {
       a.enabled = false
@@ -714,7 +723,11 @@ function backend(host: ExtensionHost) {
       await trigger.evaluate(tx, a, prepared.target)
     else if (args.action === 'update') await trigger.schedule(tx, a)
     a.updatedAt = Date.now()
-    if (effect) await deliver(tx, a, `update:${a.updatedAt}`, 'writing', a.script!.ask)
+    if (effect)
+      await deliver(tx, a, `update:${a.updatedAt}`, 'writing', a.script!.ask, {
+        ...(effect.previousPid ? { previousPid: effect.previousPid } : {}),
+        stopWatcher: caller !== a.script!.conversationId,
+      })
     if (!isDeepStrictEqual(a.schedule, oldSchedule)) delete a.nextAt
     if (a.enabled && a.schedule) {
       a.nextAt ??= nextAt(a.schedule, Date.now(), a.lastFireAt ?? Date.now())
@@ -844,6 +857,7 @@ export default function automations(host: ExtensionHost) {
   host.need(SubagentsApi)
   host.need(MessagesApi)
   host.need(WorkspacesApi)
+  host.want(Hold)
   host.need(ConversationsApi)
   const api = backend(host)
   host.implement(AutomationsApi, {

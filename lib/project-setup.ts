@@ -45,7 +45,7 @@ export function decisionRoot(projectRoot: string) {
   return basename(common) === '.git' ? realpathSync(dirname(common)) : root
 }
 
-function readDecision(projectRoot: string, userHome: string) {
+export function readDecision(projectRoot: string, userHome = homedir()) {
   try {
     const root = decisionRoot(projectRoot)
     const entry = new ProjectTrustStore(join(userHome, '.ultimate')).getEntry(root)
@@ -57,6 +57,11 @@ function readDecision(projectRoot: string, userHome: string) {
 
 export function projectDecision(projectRoot: string, userHome = homedir()) {
   return readDecision(projectRoot, userHome).decision
+}
+
+export function projectName(projectRoot: string, settings: JsonObject) {
+  const name = typeof settings.name === 'string' ? settings.name.trim() : ''
+  return name || basename(projectRoot)
 }
 
 export function useProjectSetup(projectRoot: string, userHome?: string) {

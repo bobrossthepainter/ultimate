@@ -1,5 +1,6 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { ReadableStream } from 'node:stream/web'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { Model } from '@earendil-works/pi-ai'
 import { googleGenerativeAIApi } from '@earendil-works/pi-ai/api/google-generative-ai.lazy'
@@ -7,30 +8,43 @@ import { streamSimple } from '@earendil-works/pi-ai/api/google-generative-ai'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import { startRelay } from '../relay.ts'
 import { noProxyWithLoopback, officialCost, withPromptUpdatesInPlace } from '../server.ts'
-import type { RunAgy } from '../relay.ts'
+import type { Relay, RunAgy } from '../relay.ts'
 
 const closers: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const close of closers.splice(0)) await close()
 })
 
-type Seen = { path: string; authorization?: string; body: Record<string, unknown> }
+type Seen = { path: string; authorization?: string; raw: Buffer; body: Record<string, unknown> }
 
 async function codeAssist(
   events: object[],
   frame = (event: object) => `data: ${JSON.stringify({ response: event, traceId: 't' })}\r\n\r\n`,
+  status = 200,
+  onUpload?: (chunk: Buffer) => void,
 ) {
   const seen: Seen[] = []
   const server = createServer((req, res) => {
-    let raw = ''
-    req.on('data', (chunk: Buffer) => (raw += chunk.toString('utf8')))
+    const streaming = req.url!.includes(':streamGenerateContent')
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => {
+      chunks.push(chunk)
+      if (streaming) onUpload?.(chunk)
+    })
     req.on('end', () => {
+      const raw = Buffer.concat(chunks)
       seen.push({
         path: req.url!,
         authorization: req.headers.authorization,
-        body: raw ? (JSON.parse(raw) as Record<string, unknown>) : {},
+        raw,
+        body: raw.length ? (JSON.parse(raw.toString('utf8')) as Record<string, unknown>) : {},
       })
-      if (req.url!.includes(':streamGenerateContent')) {
+      if (streaming) {
+        if (status !== 200) {
+          res.writeHead(status, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(events[0]))
+          return
+        }
         res.writeHead(200, { 'content-type': 'text/event-stream' })
         for (const event of events) res.write(frame(event))
         res.end()
@@ -52,7 +66,11 @@ async function codeAssist(
   return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen }
 }
 
-function fakeAgy(agentAnswers: string[], aborted: AbortSignal[]): RunAgy {
+function fakeAgy(
+  agentAnswers: string[],
+  aborted: AbortSignal[],
+  metadata: { sessionId?: string; labels?: object } = { sessionId: 's1' },
+): RunAgy {
   return async (args, env, signal) => {
     const base = env.CLOUD_CODE_URL
     const post = (path: string, body: object) =>
@@ -70,7 +88,7 @@ function fakeAgy(agentAnswers: string[], aborted: AbortSignal[]): RunAgy {
       project: 'p',
       model: 'agy-default',
       requestType: 'agent',
-      request: { contents: [{ role: 'user', parts: [{ text: 'agy prompt' }] }], sessionId: 's1' },
+      request: { contents: [{ role: 'user', parts: [{ text: 'agy prompt' }] }], ...metadata },
     })
     agentAnswers.push(await answer.text())
     await new Promise<void>((resolve) => {
@@ -94,6 +112,16 @@ const model = (baseUrl: string): Model<'google-generative-ai'> => ({
   contextWindow: 1_000_000,
   maxTokens: 1234,
 })
+
+function callRelay(relay: Relay, body: string | AsyncIterable<Uint8Array> = '{}') {
+  const request: RequestInit & { duplex: 'half' } = {
+    method: 'POST',
+    headers: { 'x-goog-api-key': relay.key, 'content-type': 'application/json' },
+    body: typeof body === 'string' ? body : (ReadableStream.from(body) as BodyInit),
+    duplex: 'half',
+  }
+  return fetch(`${relay.url}/models/gemini-x:streamGenerateContent?alt=sse`, request)
+}
 
 it('discovers models through agy and runs a Pi turn with Pi’s request and agy’s login', async () => {
   const upstream = await codeAssist([
@@ -161,6 +189,97 @@ it('discovers models through agy and runs a Pi turn with Pi’s request and agy�
   expect(agentAnswers[0]).toContain('"finishReason":"STOP"')
   expect(upstream.seen.filter((one) => one.path.includes(':streamGenerateContent'))).toHaveLength(1)
   expect(aborted).toHaveLength(1)
+})
+
+it('streams the Gemini JSON bytes unchanged apart from agy’s session fields, including an empty object', async () => {
+  const upstream = await codeAssist([])
+  const relay = await startRelay(
+    fakeAgy([], [], { sessionId: 's1', labels: { tag: 'agy' } }),
+    upstream.url,
+  )
+  closers.push(() => relay.close())
+  const send = async (json: string) => {
+    const bytes = Buffer.from(json)
+    async function* body() {
+      for (let i = 0; i < bytes.length; i++) yield bytes.subarray(i, i + 1)
+    }
+    const answer = await callRelay(relay, body())
+    expect(answer.status).toBe(200)
+    expect(await answer.text()).toBe('')
+    return upstream.seen.at(-1)!
+  }
+  const body =
+    ' \t\r\n{ \n"contents" : [ { "text": "café 🍿 \\u0061" } ], "sessionId":"caller","labels":{"tag":"caller"} '
+  const fields = '"sessionId":"s1","labels":{"tag":"agy"}'
+  const prefix = '{"project":"p","model":"gemini-x","requestType":"agent","request":'
+  const full = await send(`${body}}\r\n`)
+  expect(full.raw).toEqual(Buffer.from(`${prefix}${body},${fields}}\r\n}`))
+  expect(full.body).toMatchObject({
+    model: 'gemini-x',
+    request: { sessionId: 's1', labels: { tag: 'agy' } },
+  })
+  expect((await send('{}')).raw).toEqual(Buffer.from(`${prefix}{${fields}}}`))
+  expect((await send(' \r\n{ \n}\t ')).raw).toEqual(Buffer.from(`${prefix} \r\n{ \n${fields}}\t }`))
+})
+
+it('sends the caller’s first data upstream before receiving the end of the request', async () => {
+  const received = Promise.withResolvers<void>()
+  const first = '{"contents": [{"parts":[{"text":"upload marker"}]}'
+  let uploaded = ''
+  const upstream = await codeAssist([], undefined, 200, (chunk) => {
+    uploaded += chunk.toString('utf8')
+    if (uploaded.includes('upload marker')) received.resolve()
+  })
+  const relay = await startRelay(fakeAgy([], []), upstream.url)
+  closers.unshift(async () => {
+    received.resolve()
+    await relay.close()
+  })
+  async function* body() {
+    yield Buffer.from(first)
+    await received.promise
+    yield Buffer.from(']}')
+  }
+  const answer = await callRelay(relay, body())
+  expect(answer.status).toBe(200)
+  expect(await answer.text()).toBe('')
+  expect(upstream.seen.at(-1)?.body.request).toEqual({
+    contents: [{ parts: [{ text: 'upload marker' }] }],
+    sessionId: 's1',
+  })
+})
+
+it.each([
+  [' \t\n', 'start', '{'],
+  [' \n[]', 'start', '{'],
+  ['{"contents": [] \n', 'end', '}'],
+])('rejects Gemini JSON without an object boundary: %j', async (json, edge, brace) => {
+  const upstream = await codeAssist([])
+  const relay = await startRelay(fakeAgy([], []), upstream.url)
+  closers.unshift(() => relay.close())
+  const answer = await callRelay(relay, json)
+  expect(answer.status).toBe(400)
+  expect(await answer.json()).toMatchObject({
+    error: { code: 400, message: `Gemini request body must ${edge} with \`${brace}\`` },
+  })
+})
+
+it.each([
+  [400, 'Unsupported media resolution', 'Antigravity answered HTTP 400'],
+  [429, 'Daily limit for this model reached', 'Antigravity rate limit or quota reached (HTTP 429)'],
+])('passes HTTP %i and Google’s message to the caller', async (status, detail, context) => {
+  const upstream = await codeAssist(
+    [{ error: { message: detail, details: [{ reason: 'x'.repeat(8 * 1024) }] } }],
+    undefined,
+    status,
+  )
+  const relay = await startRelay(fakeAgy([], []), upstream.url)
+  closers.push(() => relay.close())
+  const answer = await callRelay(relay)
+  expect(answer.status).toBe(status)
+  expect(await answer.json()).toMatchObject({
+    error: { code: status, message: `${context}: ${detail}` },
+  })
 })
 
 it('reports agy as signed out when it lists no models', async () => {
@@ -249,6 +368,7 @@ it('splits events on mixed line endings and ends a turn with an in-stream error 
   } as never)
   const message = await streamSimple(model(relay.url), context, { apiKey: relay.key }).result()
   expect(message.stopReason).toBe('error')
+  expect(message.errorMessage).toContain('sign in again')
   expect(message.errorMessage).not.toContain('ya29')
   n = 0
   const clean = await codeAssist([text('a'), text('b', 'STOP')], (event) =>
@@ -261,6 +381,25 @@ it('splits events on mixed line endings and ends a turn with an in-stream error 
   const ok = await streamSimple(model(second.url), context, { apiKey: second.key }).result()
   expect(ok.stopReason).toBe('stop')
   expect(ok.content).toMatchObject([{ type: 'text', text: 'ab' }])
+})
+
+it('keeps the status and message of an error after Gemini has started streaming text', async () => {
+  const upstream = await codeAssist(
+    [
+      { response: { candidates: [{ content: { parts: [{ text: 'partial' }] } }] } },
+      { error: { code: 429, message: 'Daily limit reached during the turn' } },
+    ],
+    (event) => `data: ${JSON.stringify(event)}\n\n`,
+  )
+  const relay = await startRelay(fakeAgy([], []), upstream.url)
+  closers.push(() => relay.close())
+  const answer = await callRelay(relay)
+  expect(answer.status).toBe(200)
+  const events = (await answer.text()).trim().split('\n\n')
+  expect(events[0]).toContain('partial')
+  expect(JSON.parse(events[1].slice('data: '.length))).toMatchObject({
+    error: { code: 429, message: expect.stringContaining('Daily limit reached during the turn') },
+  })
 })
 
 it('lets a turn accepted before close finish while refusing new ones', async () => {

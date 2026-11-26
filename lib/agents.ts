@@ -12,7 +12,7 @@ import type { MarkTint } from './marks.ts'
 import { DEFAULT_FAMILY, definitionRuns, isFamilyName, refName, refOf } from './families.ts'
 import type { Families } from './families.ts'
 import { readFamilies } from './families-settings.ts'
-import { projectDecision, useProjectSetup } from './project-setup.ts'
+import { projectDecision, readDecision, useProjectSetup } from './project-setup.ts'
 import { discoverExtensions } from './discovery.ts'
 import { isMissing } from './errors.ts'
 
@@ -436,17 +436,44 @@ function readDefinition(text: string, path: string, modelRuntime: ModelRuntime):
 }
 
 export async function agentRoots(ultimateRoot: string, projectRoot: string, userHome: string) {
-  const extensions = await discoverExtensions(ultimateRoot, projectRoot, userHome)
-  return [
+  const extensions = (await discoverExtensions(ultimateRoot, projectRoot, userHome)).filter(
+    (extension) => extension.enabled,
+  )
+  const trust = readDecision(projectRoot, userHome)
+  const projectAgents = join(projectRoot, '.ultimate/agents')
+  const errors: AgentDiscovery['errors'] = [
+    ...extensions.flatMap((extension) =>
+      extension.error === undefined
+        ? []
+        : [
+            {
+              name: extension.name,
+              path: extension.path,
+              source: extension.source,
+              error: extension.error,
+            },
+          ],
+    ),
+    ...(trust.error === undefined
+      ? []
+      : [
+          {
+            name: projectAgents,
+            path: projectAgents,
+            source: 'project' as const,
+            error: trust.error,
+          },
+        ]),
+  ]
+  const roots = [
     { source: 'builtin' as const, path: join(ultimateRoot, 'agents') },
     ...extensions
-      .filter((extension) => extension.enabled && extension.files.includes('agents'))
+      .filter((extension) => extension.files.includes('agents'))
       .map((extension) => ({ source: 'builtin' as const, path: join(extension.path, 'agents') })),
     { source: 'user' as const, path: join(userHome, '.ultimate/agents') },
-    ...(useProjectSetup(projectRoot, userHome)
-      ? [{ source: 'project' as const, path: join(projectRoot, '.ultimate/agents') }]
-      : []),
+    ...(trust.decision === true ? [{ source: 'project' as const, path: projectAgents }] : []),
   ]
+  return Object.assign(roots, { errors })
 }
 
 export async function discoverAgents(
@@ -457,10 +484,11 @@ export async function discoverAgents(
   skipOverlayToReadItsBase?: string,
 ): Promise<AgentDiscovery> {
   const definitions = new Map<string, AgentDefinition & { source: Source }>()
-  const errors: AgentDiscovery['errors'] = []
+  const roots = await agentRoots(ultimateRoot, projectRoot, userHome)
+  const errors: AgentDiscovery['errors'] = [...roots.errors]
   const builtins = new Set<string>()
   const replaced: AgentDiscovery['replaced'] = []
-  for (const { source, path: directory } of await agentRoots(ultimateRoot, projectRoot, userHome)) {
+  for (const { source, path: directory } of roots) {
     let files: string[]
     try {
       files = await readdir(directory)
@@ -681,10 +709,15 @@ export async function saveOverlay(
 
   if (!base.tools && form.tools) throw cannot('limit the tools of a definition that inherits all')
   if (base.tools && !form.tools) throw cannot('make it inherit every tool')
+  const baseDeny = base.denyTools ?? []
+  const undenied = baseDeny.filter((tool) => !form.denyTools?.includes(tool))
+  if (undenied.length) throw cannot(`allow ${undenied.join(', ')} again`)
   const removed = base.tools?.filter((tool) => !form.tools?.includes(tool)) ?? []
-  if (removed.length) throw cannot(`remove ${removed.join(', ')}`)
+  const denyTools = [...new Set([...(form.denyTools ?? []), ...removed])].filter(
+    (tool) => !baseDeny.includes(tool),
+  )
   const addTools =
-    form.tools?.filter((tool) => !base.tools?.includes(tool)) ??
+    form.tools?.filter((tool) => !base.tools?.includes(tool) && !denyTools.includes(tool)) ??
     (await readFile(path, 'utf8').then(
       (text) => {
         const kept = parseFrontmatter(text).frontmatter.addTools
@@ -695,10 +728,6 @@ export async function saveOverlay(
         throw error
       },
     ))
-  const baseDeny = base.denyTools ?? []
-  const undenied = baseDeny.filter((tool) => !form.denyTools?.includes(tool))
-  if (undenied.length) throw cannot(`allow ${undenied.join(', ')} again`)
-  const denyTools = (form.denyTools ?? []).filter((tool) => !baseDeny.includes(tool))
   if (denyTools.length) settings.push(`denyTools: ${toolList(denyTools)}`)
 
   const start = base.instructions.trim()
@@ -706,7 +735,7 @@ export async function saveOverlay(
   if (!text.startsWith(start)) throw cannot('change the instructions it starts with')
   const heading = `## ${scope === 'user' ? 'User' : 'Project'} additions`
   let body = text.slice(start.length).trim()
-  if (body.startsWith(heading)) body = body.slice(heading.length).trim()
+  if (body.split(/\r?\n/, 1)[0] === heading) body = body.slice(heading.length).trim()
 
   const overlay = `---\n${[`name: ${scalar(name)}`, `addTools: ${toolList(addTools)}`, ...settings].join('\n')}\n---\n${body ? `\n${body}\n` : ''}`
   parseOverlay(overlay, path, modelRuntime)

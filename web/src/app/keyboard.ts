@@ -28,6 +28,9 @@ export function installShortcuts() {
     const composer =
       event.target instanceof HTMLTextAreaElement &&
       !!event.target.closest('[data-composer-target]')
+    const draftOnly =
+      event.target instanceof HTMLElement &&
+      !!event.target.closest('[data-composer-target="draft"]')
     const emptyPalette =
       store.getState().ui.paletteOpen &&
       event.target instanceof HTMLInputElement &&
@@ -37,6 +40,7 @@ export function installShortcuts() {
       const continuingCapturedSequence = sequence.length > 1
       if (continuingCapturedSequence) return !typing || emptyPalette
       if (/\b(mod|alt|ctrl)\+/.test(keys[0] ?? '')) return true
+      if (draftOnly) return false
       if (command.whileTyping) return !dialogOpen && (!typing || composer)
       return !typing
     }
@@ -59,9 +63,17 @@ export function installShortcuts() {
       resetPending()
     }
   }
-  window.addEventListener('keydown', onKeyDown, { capture: true })
+  const onShortcut = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') onKeyDown(event)
+  }
+  const onEscape = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') onKeyDown(event)
+  }
+  window.addEventListener('keydown', onShortcut, { capture: true })
+  window.addEventListener('keydown', onEscape)
   return () => {
     resetPending.cancel()
-    window.removeEventListener('keydown', onKeyDown, { capture: true })
+    window.removeEventListener('keydown', onShortcut, { capture: true })
+    window.removeEventListener('keydown', onEscape)
   }
 }

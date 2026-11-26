@@ -19,6 +19,7 @@ import { Standing } from '../../subagents/api.ts'
 import { ContextUsageDoc } from '../../conversations/api.ts'
 import { SubmitAfter, submitAfter } from '../../conversations/submit.ts'
 import automations, { actions as automationActions, Automations } from '../../automations/server.ts'
+import { Hold } from '../../automations/api.ts'
 import dream, { actions, branched, Next, toolStats, userActions } from '../server.ts'
 import { buildSeed } from '../seed.ts'
 import {
@@ -276,6 +277,25 @@ it("asks @ultimate to dream on a built-in's fire, beside the fire's own wake-up,
   expect(await f.requests()).toHaveLength(1)
 })
 
+it('dreams once per chapter: neither built-in fires after a dream ran in it', async () => {
+  const f = await fixture()
+  const id = (await f.own())!
+  const pause = (await f.ownPause())!
+  f.host.harness().resume()
+  // A dream branch ran in this chapter and was concluded; nothing is prepared yet.
+  await f.harness.commit(async (tx) => {
+    const doc = await tx.doc(Next, ROOT_CONVERSATION_ID)
+    doc.dream = { branch: 9 as ConversationId, requested: 1 as EntryId, at: Date.now() }
+  }, context)
+  await f.usage(71)
+  await until(async () => (await f.record(id)).condition?.value === 71)
+  await f.settle()
+  // The crossing counts (it re-arms below 60 as usual) but fires nothing: no wake-up, no dream ask.
+  expect(await f.record(id)).toMatchObject({ fires: 0, condition: { armed: false } })
+  expect(await f.requests()).toEqual([])
+  expect(await f.harness.commit((tx) => f.host.need(Hold).held(tx, pause), context)).toBe(true)
+})
+
 it("asks @ultimate to dream on the user's Dream, prepares the next chapter, and replaces it", async () => {
   const f = await fixture()
   expect(userActions).toEqual(['start', 'ready', 'dismiss', 'asleep', 'switch'])
@@ -384,16 +404,37 @@ it('reads tool numbers from the trace, with unused tools and frequent errors', a
   )
   insert.run('3', 300, 5, 'tool', 'read', 1, null, null, null, null)
   insert.run('4', 50, 5, 'action', 'dream/stats', 1, null, null, null, null)
+  const cause =
+    'RangeError: store("t") value has 384250 characters of JSON, more than the limit of 262144.'
+  insert.run(
+    '5',
+    400,
+    40,
+    'tool',
+    'codemode',
+    0,
+    `Script failed\nOutput:\n${'x'.repeat(200)}\nScript error:\n${cause}`,
+    null,
+    8,
+    43,
+  )
   db.close()
   expect(toolStats(file, ['edit', 'read', 'notify'])).toEqual({
     since: 100,
-    calls: 3,
+    calls: 4,
     tools: [
       { name: 'edit', calls: 2, failed: 1, avgMs: 20 },
+      { name: 'codemode', calls: 1, failed: 1, avgMs: 40 },
       { name: 'read', calls: 1, failed: 0, avgMs: 5 },
     ],
     unused: ['notify'],
     errors: [
+      {
+        name: 'codemode',
+        error: `Script error:\n${cause}`,
+        count: 1,
+        examples: [{ at: '#8/43' }],
+      },
       {
         name: 'edit',
         error: 'Could not find the exact text',
