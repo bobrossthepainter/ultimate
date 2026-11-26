@@ -508,6 +508,7 @@ function pinger(host: ExtensionHost, replay: Replay) {
             return end()
           }
           if (!open(host)) return again
+          if (runtime.now() > lateRefreshCutoff(planned.situation)) return end()
           const run = (await tx.doc(LiveDoc, id)).run
           if (Boolean(run) !== planned.situation.runActive) return again
           if (!prepared) {
@@ -772,7 +773,7 @@ async function state(host: ExtensionHost, replay: Replay, id: ConversationId): P
         }
       : {}),
   }
-  const planned = await planFor(host, replay, id, 'due', definitions)
+  const planned = await planOf(host, replay, id, 'due', definitions)
   if ('stop' in planned) return { ...described, idle: planned.stop }
   const kept = keptBy(doc.streak, planned.situation.realRequestAt)
   const live = {
