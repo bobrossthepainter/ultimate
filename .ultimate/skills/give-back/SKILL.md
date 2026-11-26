@@ -77,6 +77,11 @@ justified dependency in its commit message). Commit once, describing the concept
 git commit -m "<Title>" -m "<what and why>"
 ```
 
+`give-back/<slug>` stays this one commit until its first push, so nothing pushed is ever rewritten. A refinement
+round first (a draft pull request on the fork) runs on a separate review branch (`review/<slug>`) that may collect
+any number of commits; when the user approves it, squash its result onto a fresh `give-back/<slug>` off
+`upstream/main` as one commit, and open the upstream pull request from that.
+
 ## 5. Verify as upstream would
 
 ```bash
@@ -90,18 +95,22 @@ or improvement, or a feature ("Feature: …").
 ## 6. Draft and ask
 
 Write the title and a body in `.github/pull_request_template.md`'s shape (what and why, how it was verified, what it
-touches). No real names, machines or addresses; agent names in backticks. Ask the user with one card, showing the
+touches). No real names, machines or addresses; agent names in backticks (`` `@ultimate` ``), since a bare `@ultimate`
+pings the GitHub user `ultimate`. Ask the user with one card, showing the
 diff stat, the full diff (`git diff upstream/main`), the check results and the draft. One go covers both pushing the
 branch to the fork and opening the pull request.
 
 ## 7. After the go
 
 ```bash
-git fetch upstream && git rebase upstream/main   # only if upstream moved; rerun step 5 after
+git fetch upstream && git rebase upstream/main   # not pushed yet: only if upstream moved; rerun step 5 after
 git push origin give-back/<slug>
 gh pr create --repo HazAT/ultimate --head "$(gh api user -q .login):give-back/<slug>" --base main \
   --title "<title>" --body-file /tmp/give-back-<slug>.md
 ```
+
+Once pushed, the branch only moves forward: if upstream moved, `git merge upstream/main`, rerun step 5 and push
+normally. A rebase or squash of a pushed branch is a force-push, which needs the user's explicit OK each time.
 
 A fork contributor usually cannot set labels; upstream labels features itself. Never comment, close or retitle
 afterwards without the user's OK.
