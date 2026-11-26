@@ -16,6 +16,7 @@ import type {
   SummaryRequest,
 } from './summary.ts'
 import type { SummaryModel, SummaryModelStatus } from './summary-model.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 export type ConversationsService = {
   /** What conversation `id` is about now: its title, summary and feature, for a record that outlives a retitle. */
@@ -108,13 +109,17 @@ export type PreviewsService = {
 }
 /** The extension point the Conclude action stops previews through; instance provides it. */
 export const Previews = defineApi<PreviewsService>()('conversations.previews')
+/** Stop external sessions and prevent them from restarting until the caller disposes the hold. */
+export const ExternalSessions = defineApi<{
+  stop(ids: readonly ConversationId[]): Promise<Disposable>
+}>()('conversations.external-sessions')
 /**
  * How full a conversation's context is, on that conversation: the one measure the status line and automations' context
  * triggers read. The conversations extension keeps it; a fork starts empty until its first answer.
  */
 export const ContextUsageDoc = defineDoc<ContextUsage>({
   kind: ContextDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -125,7 +130,7 @@ export type { ContextUsage } from './refs.ts'
 /** Each conversation's run state, summary and feature, on conversation 1; the sidebar and notifications read it. */
 export const Overview = defineDoc<OverviewState>({
   kind: OverviewDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -136,7 +141,7 @@ export { Concluded } from './refs.ts'
 /** How each standing agent's mark looks, on conversation 1; subagents writes it from the definitions. */
 export const Marks = defineDoc<Record<string, AgentMarkStyle>>({
   kind: MarksDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',

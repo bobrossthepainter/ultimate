@@ -61,10 +61,11 @@ import {
 import type { Situation } from './due.ts'
 import { WarmDoc, SetAction, StateAction } from './refs.ts'
 import type { WarmDocState, WarmState, Compaction, Ping } from './refs.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 const State = defineDoc<WarmDocState>({
   kind: WarmDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',

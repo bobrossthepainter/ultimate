@@ -12,10 +12,12 @@ const harness = vi.hoisted(() => ({
 vi.mock('@/sdk/solid', async () => {
   const solid = await import('solid-js')
   return {
+    writerNow: () => 'person',
+    writingAs: <T,>(_who: unknown, write: () => T) => write(),
     api: {
       action: (ref: { name: string }, args: Record<string, unknown>) => {
         if (ref.name === 'status')
-          return Promise.resolve({ model: 'antigravity/gemini-4-neon-low', route: 'audio' })
+          return Promise.resolve({ model: 'google/gemini-4-neon', thinking: 'low', route: 'audio' })
         if (ref.name === 'stop') harness.stops++
         if (ref.name !== 'turn') return Promise.resolve({})
         harness.sent.push(args)
