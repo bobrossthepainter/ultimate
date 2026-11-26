@@ -34,6 +34,12 @@ afterEach(async () => {
 })
 
 type Request = { messages: number; maxTokens?: number; replay: boolean }
+type Body = { max_tokens: number; messages: unknown[] }
+
+const textOf = (message: Context['messages'][number]) =>
+  typeof message.content === 'string'
+    ? message.content
+    : message.content.map((block) => ('text' in block ? block.text : block.type)).join('')
 
 async function fixture(options: { short?: boolean } = {}) {
   vi.useFakeTimers({ toFake: ['Date'] })
@@ -45,8 +51,11 @@ async function fixture(options: { short?: boolean } = {}) {
   })
   models.setProvider(faux.provider)
   const requests: Request[] = []
+  const bodies: Body[] = []
+  const sent: string[][] = []
   const next: boolean[] = []
   let streaming: Promise<void> | undefined
+  let held: (() => void) | undefined
   const reply = async (request: Context, streamOptions?: { maxTokens?: number }) => {
     requests.push({
       messages: request.messages.length,
@@ -76,11 +85,11 @@ async function fixture(options: { short?: boolean } = {}) {
       const [model, ctx, streamOptions] = args
       const outer = createAssistantMessageEventStream()
       const piped = (async () => {
-        const replaced = await streamOptions?.onPayload?.(
-          { max_tokens: 64_000, messages: ctx.messages },
-          model,
-        )
-        const maxTokens = (replaced as { max_tokens?: number } | undefined)?.max_tokens
+        const built = { max_tokens: 64_000, messages: ctx.messages.map(textOf) }
+        const body = ((await streamOptions?.onPayload?.(built, model)) ?? built) as Body
+        bodies.push(body)
+        sent.push(ctx.messages.map(textOf))
+        const maxTokens = body === built ? undefined : body.max_tokens
         const inner = models.streamSimple(getModel(model.provider, model.id)!, ctx, {
           ...streamOptions,
           ...(maxTokens === undefined ? {} : { maxTokens }),
@@ -163,6 +172,7 @@ async function fixture(options: { short?: boolean } = {}) {
   harness.resume()
   cleanups.push(async () => {
     release?.()
+    held?.()
     await Promise.all(pipes)
     await events.stop()
     await lifecycle.close()
@@ -182,6 +192,8 @@ async function fixture(options: { short?: boolean } = {}) {
   return {
     id,
     requests,
+    bodies,
+    sent,
     doc,
     tasks,
     sleeping,
@@ -189,8 +201,11 @@ async function fixture(options: { short?: boolean } = {}) {
     warm: (on: boolean) => actions.set({ id, warm: on }, action),
     state: () => actions.state({ id }, action),
     nextCallsTool: () => next.push(true),
-    holdReplies: (answered: Promise<void>) => {
-      streaming = answered
+    holdReplies: () => {
+      const answered = Promise.withResolvers<void>()
+      streaming = answered.promise
+      held = answered.resolve
+      return answered.resolve
     },
     release: () => {
       release?.()
@@ -240,13 +255,6 @@ it('sleeps as a durable task until the ping is due, survives a restart, and send
   await f.warm(true)
   await f.input(f.id)
   const answeredAt = Date.now()
-  console.log(
-    'DBG',
-    JSON.stringify(await f.doc()),
-    JSON.stringify((await f.tasks()).map((t) => t.state)),
-    f.requests,
-    JSON.stringify(await f.state()),
-  )
   const [waker] = await f.sleeping()
   expect(waker.state).toMatchObject({ until: answeredAt + minutes(54) })
   expect((await f.doc()).waker).toBe(waker.id)
@@ -257,8 +265,14 @@ it('sleeps as a durable task until the ping is due, survives a restart, and send
   expect(f.requests).toHaveLength(1)
   await f.advance(1)
   await until(async () => (await f.doc()).pings === 1 && (await f.doc()).last?.read === 1000)
-  expect(f.requests[1].replay).toBe(false)
-  expect(f.requests[1].messages).toBeGreaterThan(f.requests[0].messages)
+  const [real, ping] = f.sent
+  expect(ping).toEqual([
+    real[0],
+    `You are conversation #${f.id}.`,
+    ...real.slice(1),
+    'ok',
+    'Cache keep-warm check from Ultimate, not from the user. Reply with just: ok',
+  ])
   const [next] = await f.sleeping()
   expect(next.state).toMatchObject({ until: answeredAt + 2 * minutes(54) })
 })
@@ -274,6 +288,7 @@ it('replays the in-flight request at one token while a long tool call blocks the
   await f.advance(minutes(4.5))
   await until(async () => (await f.doc()).pings === 1 && (await f.doc()).last?.read === 1000)
   expect(f.requests[1]).toEqual({ messages: 0, maxTokens: 1, replay: true })
+  expect(f.bodies[1]).toEqual({ ...f.bodies[0], max_tokens: 1 })
   expect((await f.doc()).last?.at).toBe(sentAt + minutes(4.5))
   const [next] = await f.sleeping()
   expect(next.state).toMatchObject({ until: sentAt + 2 * minutes(4.5) })
@@ -288,8 +303,7 @@ it('skips the due ping when a real request refreshed the cache first, even while
   const [waker] = await f.sleeping()
   expect(waker.state).toMatchObject({ until: Date.now() + minutes(4.5) })
   await f.advance(minutes(4))
-  const answer = Promise.withResolvers<void>()
-  f.holdReplies(answer.promise)
+  const answer = f.holdReplies()
   f.release()
   await until(async () => f.requests.length === 2)
   const sentAt = Date.now()
@@ -298,7 +312,7 @@ it('skips the due ping when a real request refreshed the cache first, even while
   expect((await f.doc()).pings).toBeUndefined()
   const [replanned] = await f.sleeping()
   expect(replanned.state).toMatchObject({ until: sentAt + minutes(4.5) })
-  answer.resolve()
+  answer()
   await until(async () => (await f.doc()).request?.at === sentAt)
   expect(f.requests).toHaveLength(2)
   expect((await f.doc()).pings).toBeUndefined()

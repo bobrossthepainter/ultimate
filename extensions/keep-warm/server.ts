@@ -2,6 +2,7 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord/context'
 import { copyJson } from '@earendil-works/chord/json'
 import {
+  AgentDoc,
   CompactionTask,
   defineDoc,
   defineExtension,
@@ -85,12 +86,9 @@ const DEFAULT_MAX_WARM = 5
 const PING_QUESTION = 'Cache keep-warm check from Ultimate, not from the user. Reply with just: ok'
 const UNSETTLED = ['pending', 'running', 'waiting', 'sleeping', 'completing'] as const
 
-type Sent = { model: Model<Api>; payload: unknown; at: number }
+type Sent = { model: Model<Api>; at: number; payload?: unknown }
 
-type Replay = {
-  inFlight: Map<ConversationId, Sent>
-  last: Map<ConversationId, Sent>
-}
+type Replay = Map<ConversationId, Sent>
 
 type Kind = 'standing' | 'coordinator'
 
@@ -221,7 +219,7 @@ async function withinMaxWarm(
   definitions: Definitions,
 ) {
   const concluded = await host.need(ConversationsApi).concluded(context)
-  const warming = [{ id, at: realRequestAt }]
+  const warming: { id: ConversationId; at: number }[] = [{ id, at: realRequestAt }]
   for (const other of await warmedBranches(host)) {
     if (other === id || concluded.has(other)) continue
     if ((await warmedKind(host, other)) !== 'coordinator') continue
@@ -229,7 +227,7 @@ async function withinMaxWarm(
     if (effective.warm && doc.request) warming.push({ id: other, at: doc.request.at })
   }
   return warming
-    .toSorted((a, b) => b.at - a.at)
+    .toSorted((a, b) => b.at - a.at || a.id - b.id)
     .slice(0, await maxWarmBranches(host))
     .some((entry) => entry.id === id)
 }
@@ -240,8 +238,10 @@ type Plan =
       model: Model<Api>
       situation: Situation
       step: ReturnType<typeof decide>
+      dueStep: ReturnType<typeof decide>
       nextAt: number
       warmUntil: number
+      renewal: string
       replay?: Sent
     }
 
@@ -263,11 +263,9 @@ async function planFor(
   const { doc, effective } = await policyFor(host, id, timing.ttl, definitions)
   const known = timeline(doc.request, doc.last, model)
   if ('stop' in known) return known
-  const sent = replay.inFlight.get(id)
-  const lastCacheRequestAt = Math.max(
-    known.lastCacheRequestAt,
-    sent?.model.id === model.id ? sent.at : 0,
-  )
+  const latest = replay.get(id)
+  const sent = latest?.model.id === model.id ? latest : undefined
+  const lastCacheRequestAt = Math.max(known.lastCacheRequestAt, sent?.at ?? 0)
   const nextAt = lastCacheRequestAt + timing.delayBeforeRefresh
   const usage = await host.harness().snapshot(ContextUsageDoc, id, context)
   const fromInput = kind === 'standing'
@@ -284,16 +282,20 @@ async function planFor(
     tokens: usage?.tokens ?? 0,
     compactedSinceRequest: (doc.compaction?.at ?? 0) >= known.realRequestAt,
   }
-  const last = replay.last.get(id)
   return {
     model,
     situation,
     step: decide(situation, effective),
+    dueStep: decide({ ...situation, now: nextAt }, effective),
     nextAt,
     warmUntil: warmWindowEnd(situation, effective),
-    ...(last?.model.id === model.id ? { replay: last } : {}),
+    renewal: renewalKey(doc, sent),
+    ...(sent?.payload !== undefined ? { replay: sent } : {}),
   }
 }
+
+const renewalKey = (doc: WarmDocState, sent: Sent | undefined) =>
+  `${doc.request?.at}:${doc.last?.at}:${doc.last?.error}:${sent?.at}`
 
 function receipt(answer: AssistantMessage): ResponseReceipt {
   return {
@@ -340,7 +342,7 @@ async function sendPing(
   prepared: Prepared,
   at: number,
   signal: AbortSignal,
-): Promise<{ ping: Ping; answer?: AssistantMessage }> {
+): Promise<{ ping?: Ping; answer?: AssistantMessage }> {
   const attempt = {
     at,
     provider: prepared.model.provider,
@@ -348,7 +350,7 @@ async function sendPing(
   }
   const timeout = AbortSignal.any([signal, AbortSignal.timeout(PING_TIMEOUT_MS)])
   try {
-    if (!open(host)) return { ping: { ...attempt, error: 'skipped: paused' } }
+    if (!open(host)) return {}
     const answer =
       prepared.kind === 'replay'
         ? await host.modelRuntime
@@ -437,14 +439,27 @@ function pinger(host: ExtensionHost, replay: Replay) {
                   : {}),
               }))
         let sending: number | undefined
+        let previous: Ping | undefined
         await runtime.commit(async (tx) => {
           const doc = await tx.doc(State, id)
           if (doc.waker !== task.id) return stopped
+          const again: NextTaskState<Checkpoint, null> = {
+            status: 'sleeping',
+            until: runtime.now(),
+            checkpoint: { phase: 'plan' },
+          }
+          const latest = replay.get(id)
+          const renewed =
+            !('stop' in planned) &&
+            renewalKey(doc, latest?.model.id === planned.model.id ? latest : undefined) !==
+              planned.renewal
+          if (renewed) return again
           const end = () => {
             delete doc.waker
             return stopped
           }
           if ('stop' in planned) return end()
+          if (!due && typeof planned.dueStep !== 'string') return end()
           if (!due)
             return {
               status: 'sleeping',
@@ -463,19 +478,9 @@ function pinger(host: ExtensionHost, replay: Replay) {
             }
             return end()
           }
-          if (!open(host))
-            return {
-              status: 'sleeping',
-              until: runtime.now(),
-              checkpoint: { phase: 'plan' },
-            }
+          if (!open(host)) return again
           const run = (await tx.doc(LiveDoc, id)).run
-          if (run && !planned.situation.runActive)
-            return {
-              status: 'sleeping',
-              until: runtime.now(),
-              checkpoint: { phase: 'plan' },
-            }
+          if (Boolean(run) !== planned.situation.runActive) return again
           if (!prepared) {
             if (run)
               return {
@@ -484,13 +489,10 @@ function pinger(host: ExtensionHost, replay: Replay) {
                 policy: 'any',
                 checkpoint: { phase: 'plan' },
               }
-            return {
-              status: 'sleeping',
-              until: runtime.now(),
-              checkpoint: { phase: 'plan' },
-            }
+            return again
           }
           sending = runtime.now()
+          previous = doc.last && { ...doc.last }
           doc.last = {
             at: sending,
             provider: planned.model.provider,
@@ -504,6 +506,13 @@ function pinger(host: ExtensionHost, replay: Replay) {
         const { ping, answer } = await sendPing(host, prepared, sending, runtime.signal)
         await runtime.commit(async (tx) => {
           const doc = await tx.doc(State, id)
+          if (!ping) {
+            if (previous) doc.last = previous
+            else delete doc.last
+            if (doc.pings && doc.pings > 1) doc.pings -= 1
+            else delete doc.pings
+            return { status: 'running', checkpoint: { phase: 'attempted' } }
+          }
           doc.last = ping
           if (answer) {
             await host.need(ConversationsApi).accountResponse(tx, id, receipt(answer))
@@ -748,14 +757,19 @@ async function state(host: ExtensionHost, replay: Replay, id: ConversationId): P
   }
   if (typeof planned.step !== 'string') return { ...live, idle: planned.step.stop }
   if (planned.step === 'ping' && !open(host)) return { ...live, idle: 'Ultimate is paused' }
+  const waker = await wakerOf(host, doc)
+  if (!waker) return { ...live, idle: 'Waiting for the next request' }
+  if (waker.status === 'waiting') return { ...live, idle: 'Waiting for the run to end' }
   return { ...live, next: { at: planned.nextAt, step: planned.step } }
 }
 
-const replayOf = (host: ExtensionHost) =>
-  host.resource<Replay>('keep-warm.replay', () => ({
-    inFlight: new Map(),
-    last: new Map(),
-  }))
+async function wakerOf(host: ExtensionHost, doc: WarmDocState) {
+  if (doc.waker === undefined) return undefined
+  const task = await host.harness().commit((tx) => tx.task(doc.waker!), context)
+  return task && task.state.status !== 'terminal' ? task.state : undefined
+}
+
+const replayOf = (host: ExtensionHost) => host.resource<Replay>('keep-warm.replay', () => new Map())
 
 export default function keepWarm(host: ExtensionHost) {
   host.need(ConversationsApi)
@@ -784,26 +798,28 @@ export default function keepWarm(host: ExtensionHost) {
     tasks: [Pinger],
     hooks: [
       hook(GenerationTask, {
-        beforeProviderRequest: ({ model, payload }, api) => {
+        beforeProviderRequest: async ({ model, payload }, api, ctx) => {
           const now = Date.now()
-          for (const [id, sent] of replay.last)
-            if (now - sent.at > CACHE_WARMING_MAX_AGE_MS) replay.last.delete(id)
-          replay.inFlight.set(api.conversationId, { model, payload, at: now })
+          for (const [id, sent] of replay)
+            if (now - sent.at > CACHE_WARMING_MAX_AGE_MS) replay.delete(id)
+          const thinking = (await api.snapshot(AgentDoc, api.conversationId, ctx))?.thinkingLevel
+          const reasoning = thinking === undefined || thinking === 'off' ? undefined : thinking
+          const capped = isCacheWarmingReplayable(model, { reasoning })
+            ? oneTokenPayload(model.api, payload)
+            : undefined
+          replay.set(api.conversationId, { model, at: now, ...(capped ? { payload: capped } : {}) })
           return undefined
         },
         afterResponse: async (message, api, ctx) => {
-          const sent = replay.inFlight.get(api.conversationId)
-          replay.inFlight.delete(api.conversationId)
-          replay.last.delete(api.conversationId)
-          if (message.stopReason === 'error' || message.stopReason === 'aborted') return
-          if (!(await warmedKind(host, api.conversationId))) return
-          const thinking = (await agentOf(host, api.conversationId))?.thinkingLevel
-          const reasoning = thinking === undefined || thinking === 'off' ? undefined : thinking
-          const capped =
-            sent &&
-            isCacheWarmingReplayable(sent.model, { reasoning }) &&
-            oneTokenPayload(sent.model.api, sent.payload)
-          if (sent && capped) replay.last.set(api.conversationId, { ...sent, payload: capped })
+          const sent = replay.get(api.conversationId)
+          if (message.stopReason === 'error' || message.stopReason === 'aborted') {
+            replay.delete(api.conversationId)
+            return
+          }
+          if (!(await warmedKind(host, api.conversationId))) {
+            replay.delete(api.conversationId)
+            return
+          }
           await host.harness().commit(async (tx) => {
             ;(await tx.doc(State, api.conversationId)).request = requestOf(message, sent?.at)
             await arm(tx, host, api.conversationId)
@@ -812,8 +828,7 @@ export default function keepWarm(host: ExtensionHost) {
       }),
       hook(CompactionTask, {
         beforeCompact: async (_compaction, api, ctx) => {
-          replay.inFlight.delete(api.conversationId)
-          replay.last.delete(api.conversationId)
+          replay.delete(api.conversationId)
           const doc = await api.snapshot(State, api.conversationId, ctx)
           if (doc?.compaction?.task !== api.taskId) return undefined
           const kept = await api.memo<string>('keep-warm.summary', ctx)
