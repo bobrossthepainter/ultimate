@@ -74,7 +74,7 @@
     "extensions/status-line/context.ts",
     "extensions/status-line/turns.ts",
     "extensions/sounds/cues.ts",
-    "extensions/keep-warm/due.ts",
+    "extensions/keep-warm/duration.ts",
     "extensions/inbox/items.ts",
     "extensions/questions/open.ts",
     "extensions/questions/state.ts",
