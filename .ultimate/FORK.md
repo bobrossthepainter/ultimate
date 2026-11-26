@@ -236,7 +236,11 @@ so branches adding divergences in parallel do not edit the same lines.
   merge moved `keep-warm` to a sleeping task, still @ultimate + Claude Code only, and moved `cache-warming`'s release
   cleanup onto `opened.defer`). Since the 2026-11-23 merge the chips are Solid (`web.solid.tsx`, modelled on
   keep-warm's chip; minutes save on commit)
-- Upstream: candidate (replaces keep-warm; send with the cache findings in memory upstream-cache-feedback)
+- Upstream: given back as PR #410 (https://github.com/HazAT/ultimate/pull/410; supersedes closed #275)
+- Follow-up: #410's hybrid design (upstream's `keep-warm.ping` task: durable transcript `ok` pings while idle,
+  in-memory replay mid-run on 5-minute caches) differs from main's `extensions/cache-warming`; if upstream merges
+  #410, the next upstream merge switches the fork to upstream's keep-warm and retires `extensions/cache-warming`.
+  Its screenshots live on the fork's `pr-assets/keep-warm` branch, which must stay
 
 ### Projects rail over Caddy
 
