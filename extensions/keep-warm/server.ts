@@ -570,8 +570,11 @@ async function newestAnswer(host: ExtensionHost, id: ConversationId, after: numb
   return undefined
 }
 
-const requestOf = (answer: AssistantMessage): NonNullable<WarmDocState['request']> => ({
-  at: answer.timestamp,
+const requestOf = (
+  answer: AssistantMessage,
+  sentAt = answer.timestamp,
+): NonNullable<WarmDocState['request']> => ({
+  at: sentAt,
   provider: answer.provider,
   model: answer.model,
   ...(answer.usage.cacheRead + answer.usage.cacheWrite === 0 ? { uncached: true } : {}),
@@ -802,7 +805,7 @@ export default function keepWarm(host: ExtensionHost) {
             oneTokenPayload(sent.model.api, sent.payload)
           if (sent && capped) replay.last.set(api.conversationId, { ...sent, payload: capped })
           await host.harness().commit(async (tx) => {
-            ;(await tx.doc(State, api.conversationId)).request = requestOf(message)
+            ;(await tx.doc(State, api.conversationId)).request = requestOf(message, sent?.at)
             await arm(tx, host, api.conversationId)
           }, ctx)
         },

@@ -46,12 +46,14 @@ async function fixture(options: { short?: boolean } = {}) {
   models.setProvider(faux.provider)
   const requests: Request[] = []
   const next: boolean[] = []
-  const reply = (request: Context, streamOptions?: { maxTokens?: number }) => {
+  let streaming: Promise<void> | undefined
+  const reply = async (request: Context, streamOptions?: { maxTokens?: number }) => {
     requests.push({
       messages: request.messages.length,
       ...(streamOptions?.maxTokens === undefined ? {} : { maxTokens: streamOptions.maxTokens }),
       replay: request.messages.length === 0,
     })
+    if (request.messages.length > 0) await streaming
     return next.shift()
       ? fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
       : fauxAssistantMessage('ok')
@@ -187,6 +189,9 @@ async function fixture(options: { short?: boolean } = {}) {
     warm: (on: boolean) => actions.set({ id, warm: on }, action),
     state: () => actions.state({ id }, action),
     nextCallsTool: () => next.push(true),
+    holdReplies: (answered: Promise<void>) => {
+      streaming = answered
+    },
     release: () => {
       release?.()
       release = undefined
@@ -274,25 +279,29 @@ it('replays the in-flight request at one token while a long tool call blocks the
   expect(next.state).toMatchObject({ until: sentAt + 2 * minutes(4.5) })
 })
 
-it('skips the due ping when a real request refreshed the cache first', async () => {
+it('skips the due ping when a real request refreshed the cache first, even while it still streams', async () => {
   const f = await fixture({ short: true })
   await f.warm(true)
   f.nextCallsTool()
   await f.input(f.id, false)
   await f.holding()
   const [waker] = await f.sleeping()
-  const firstDue = Date.now() + minutes(4.5)
-  expect(waker.state).toMatchObject({ until: firstDue })
+  expect(waker.state).toMatchObject({ until: Date.now() + minutes(4.5) })
   await f.advance(minutes(4))
+  const answer = Promise.withResolvers<void>()
+  f.holdReplies(answer.promise)
   f.release()
   await until(async () => f.requests.length === 2)
-  const answeredAt = Date.now()
-  await until(async () => (await f.doc()).request?.at === answeredAt)
+  const sentAt = Date.now()
   await f.advance(minutes(0.5))
   expect(f.requests).toHaveLength(2)
   expect((await f.doc()).pings).toBeUndefined()
-  const [next] = await f.sleeping()
-  expect(next.state).toMatchObject({ until: answeredAt + minutes(4.5) })
+  const [replanned] = await f.sleeping()
+  expect(replanned.state).toMatchObject({ until: sentAt + minutes(4.5) })
+  answer.resolve()
+  await until(async () => (await f.doc()).request?.at === sentAt)
+  expect(f.requests).toHaveLength(2)
+  expect((await f.doc()).pings).toBeUndefined()
 })
 
 it('parks while paused and pings once the pause lifts inside the cache lifetime', async () => {
