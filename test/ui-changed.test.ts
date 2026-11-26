@@ -1,11 +1,12 @@
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import { context } from '../server/harness.ts'
 import { EventFeed } from '../server/events.ts'
 import { ChangedEvent } from '../shared/events.ts'
 import { UiState } from '../shared/ui-state.ts'
+import { Metadata } from '../server/metadata.ts'
+import { Standing } from '../extensions/subagents/api.ts'
 import { SOURCE_HEADER } from '../shared/protocol.ts'
 import { fauxServer, removeTemp, temp } from './helpers.ts'
 
@@ -19,11 +20,6 @@ async function serve(home?: string) {
     const made = await temp()
     cleanup.push(() => removeTemp(made))
     home = made
-    await mkdir(join(home, '.ultimate'), { recursive: true })
-    await writeFile(
-      join(home, '.ultimate/settings.json'),
-      JSON.stringify({ extensions: { enable: ['keep-warm'] } }),
-    )
   }
   const server = await fauxServer({
     ultimateRoot: resolve('.'),
@@ -115,23 +111,31 @@ it('keeps drafts out of the event history: only booleans, numbers and null are r
 })
 
 it('records keep-warm’s switch as a UI change in its own commit, by the agent only when the page says so', async () => {
-  const { post, changes } = await serve()
-  const set = (on: boolean, headers?: Record<string, string>) =>
-    post('/api/extensions/keep-warm/actions/set', { args: { on } }, headers)
+  const { server, post, changes } = await serve()
+  const ultimate = await server.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Metadata, ultimate.id)).label = 'agent'
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ultimate.id
+  }, context)
+  const set = (warm: boolean | null, headers?: Record<string, string>) =>
+    post('/api/extensions/keep-warm/actions/set', { args: { id: ultimate.id, warm } }, headers)
   await set(false, { [SOURCE_HEADER]: 'agent' })
   await set(false)
   await set(true)
   await set(false, { [SOURCE_HEADER]: 'app' })
-  await set(true)
+  await set(null)
   expect(await changes()).toEqual([
-    expect.objectContaining({ key: 'keep-warm.on', value: false, previous: true, source: 'agent' }),
+    expect.objectContaining({ key: 'keep-warm.warm', value: false, source: 'agent' }),
     expect.objectContaining({
-      key: 'keep-warm.on',
+      key: 'keep-warm.warm',
       value: true,
       previous: false,
       source: 'person',
     }),
-    expect.objectContaining({ key: 'keep-warm.on', value: true, previous: false }),
+    expect.objectContaining({ key: 'keep-warm.warm', previous: false, source: 'person' }),
   ])
 })
 

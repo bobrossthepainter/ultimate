@@ -222,29 +222,20 @@ so branches adding divergences in parallel do not edit the same lines.
 
 ### Cache warming per agent
 
-- Touches: `extensions/cache-warming/` (new, grown from the fork's branch-cache: server, `due.ts`, `refs.ts`, the
-  `@ultimate` and `branch` chips, README, tests), `lib/agents.ts` (`cache:` definition field: parse, serialize,
-  overlay diff and merge), `extensions/subagents/` (`refs.ts` type, `server.ts` save, test; since the 2026-11-22
-  merge the Prompt cache field is `CacheField` in upstream's Solid `fields.solid.tsx`, wired into its Solid
-  `definitions.solid.tsx` Agents editor), `agents/ultimate.md` and `agents/coordinator.md` (`cache:` defaults),
-  `shared/extension-api.ts` (`keep-warm` in `defaultOff`), `test/ui-changed.test.ts` (enables `keep-warm` for
-  upstream's `ui.changed` test of its switch, 2026-11-20 merge)
-- Why: one warmer for @ultimate and branch coordinators, configured per agent in the Agents panel and overridden per
-  conversation from its chip (#40606, Robert's answers on card 527). Upstream's `keep-warm` warmed only hour-long
-  caches (Claude Code), so @ultimate on Copilot Claude was never warmed. Lifetime from the model's `promptCache`
-  (Claude Code: one hour), a timer at 90 % of it, the last request replayed with a one-token cap (Claude Code: an
-  `ok` ping on the next context, identity after the leading system message); @ultimate's window counts from the
-  user's last input (480 min, 90 on caches under an hour), a coordinator's from its last request (30 min).
-  Compaction before cold stays, off by default. `branchCache.models` is gone. `keep-warm`'s folder stays untouched
-  so merges stay cheap; re-check on each merge whether upstream changed it or the definition fields (the 2026-11-23
-  merge moved `keep-warm` to a sleeping task, still @ultimate + Claude Code only, and moved `cache-warming`'s release
-  cleanup onto `opened.defer`; the 2026-11-26 merge only gave its doc `checkpointEvery(100)`, #410 still open). Since the 2026-11-23 merge the chips are Solid (`web.solid.tsx`, modelled on
-  keep-warm's chip; minutes save on commit)
+- Touches: `extensions/keep-warm/` (exactly PR #410's version: per-conversation `keep-warm.ping` tasks, lifetime from
+  `promptCache`, idle transcript `ok` pings, mid-run one-token replay kept in memory only, the `@ultimate` and
+  `branch` chips, README, tests), `lib/agents.ts` (`cache:` definition field), `extensions/subagents/` (`CachePolicy`
+  type, save, Prompt cache field in the Agents editor, test), `agents/ultimate.md` and `agents/coordinator.md`
+  (`cache:` defaults), `tsconfig.web.json` (`keep-warm/duration.ts`), `test/ui-changed.test.ts` (`set { id, warm }`)
+- Why: one warmer for @ultimate and branch coordinators on any cache lifetime, configured per agent and overridden
+  per conversation from its chip, so 5-minute caches such as Copilot's stay warm idle and through long tool runs.
+  Since 2026-11-26 the fork runs PR #410's code as is; the fork's own `extensions/cache-warming` is gone (no
+  per-chat overrides existed to migrate) and `keep-warm` is on by default again, as upstream has it.
 - Upstream: given back as PR #410 (https://github.com/HazAT/ultimate/pull/410; supersedes closed #275)
-- Follow-up: #410's hybrid design (upstream's `keep-warm.ping` task: durable transcript `ok` pings while idle,
-  in-memory replay mid-run on 5-minute caches) differs from main's `extensions/cache-warming`; if upstream merges
-  #410, the next upstream merge switches the fork to upstream's keep-warm and retires `extensions/cache-warming`.
-  Its screenshots live on the fork's `pr-assets/keep-warm` branch, which must stay
+- Follow-up: keep `extensions/keep-warm/` identical to the PR branch `give-back/cache-warming`: a fix goes into the
+  PR branch first, then here. If upstream merges #410, the divergence ends. If upstream changes keep-warm
+  meanwhile, resolve towards #410 and update the PR. Its screenshots live on the fork's `pr-assets/keep-warm`
+  branch, which must stay
 
 ### Projects rail over Caddy
 
