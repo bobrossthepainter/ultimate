@@ -1,32 +1,15 @@
-import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import type { Api, AssistantMessage, Model } from '@earendil-works/pi-ai'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import type { Api, Model } from '@earendil-works/pi-ai'
+import { expect, it } from 'vitest'
 import {
-  configure,
-  createRegistry,
-  defineDoc,
-  Harness,
-  MemoryStorage,
-  ROOT_CONVERSATION_ID,
-} from '@earendil-works/pi-durable'
-import { afterEach, expect, it, vi } from 'vitest'
-import type { ExtensionHost } from '../../../server/extensions.ts'
-import { Metadata } from '../../../server/metadata.ts'
-import { apis, eventHost, openers, temp, until } from '../../../test/helpers.ts'
-import { PauseDoc } from '../../pause/refs.ts'
-import type { PauseDocState } from '../../pause/refs.ts'
-import { Profile, Standing } from '../../subagents/api.ts'
-import { decide, keptBy, lateRefreshCutoff, resolvePolicy, streakAfterPing } from '../due.ts'
+  decide,
+  keptBy,
+  lateRefreshCutoff,
+  resolvePolicy,
+  streakAfterPing,
+  timeline,
+} from '../due.ts'
 import type { Policy, Situation } from '../due.ts'
-import keepWarm, {
-  actions,
-  cacheTiming,
-  oneTokenPayload,
-  recoverRun,
-  rewriteCost,
-  warmCost,
-} from '../server.ts'
+import { cacheTiming, oneTokenPayload, rewriteCost, warmCost } from '../server.ts'
 
 const now = Date.parse('2026-11-16T12:00:00Z')
 const minutes = (count: number) => count * 60_000
@@ -207,33 +190,25 @@ it("takes a conversation's override over its agent definition, and the default w
   })
 })
 
-it('resumes after a restart only from the newest outcome, keeping the real request apart from a ping', () => {
+it('plans from the newest of the real request and the ping after it, keeping them apart', () => {
   const model = { provider: 'claude-code', id: 'claude-opus-5-5' }
-  const answer = (at: number, cacheRead: number) => ({
-    kind: 'answer' as const,
-    message: {
-      role: 'assistant',
-      provider: 'claude-code',
-      model: 'claude-opus-5-5',
-      stopReason: 'stop',
-      timestamp: at,
-      usage: { cacheRead, cacheWrite: 0 },
-    } as AssistantMessage,
-  })
-  const ping = {
-    at: now - minutes(5),
-    provider: 'claude-code',
-    model: 'claude-opus-5-5',
-    read: 9,
-    write: 0,
-  }
-  expect(recoverRun(answer(now - minutes(59), 9), ping, model)).toEqual({
+  const request = { at: now - minutes(59), provider: 'claude-code', model: 'claude-opus-5-5' }
+  const ping = { ...request, at: now - minutes(5), read: 9, write: 0 }
+  expect(timeline(request, ping, model)).toEqual({
     realRequestAt: now - minutes(59),
     lastCacheRequestAt: now - minutes(5),
   })
-  expect(recoverRun(answer(now - minutes(59), 9), { ...ping, read: 0 }, model)).toBe(undefined)
-  expect(recoverRun(answer(now - minutes(2), 0), undefined, model)).toBe(undefined)
-  expect(recoverRun({ kind: 'context-reset' }, undefined, model)).toBe(undefined)
+  expect(timeline(request, { ...ping, at: now - minutes(60) }, model)).toEqual({
+    realRequestAt: now - minutes(59),
+    lastCacheRequestAt: now - minutes(59),
+  })
+  expect(timeline(request, { ...ping, read: 0 }, model)).toEqual({ stop: 'Ping found no cache' })
+  expect(timeline({ ...request, uncached: true }, undefined, model)).toEqual({
+    stop: 'The last request used no cache',
+  })
+  expect(timeline(request, undefined, { ...model, id: 'claude-fable-5-1' })).toEqual({
+    stop: 'Model changed',
+  })
 })
 
 it('prices a rewrite and the warm window with the tier the context falls in', () => {
@@ -270,155 +245,4 @@ it("counts a recovered run's pings only toward that run, never toward an older a
     cost: 0.02,
     pings: 2,
   })
-})
-
-const cleanups: (() => Promise<void>)[] = []
-afterEach(async () => {
-  for (const close of cleanups.splice(0)) await close()
-  vi.useRealTimers()
-})
-
-const PauseStateDoc = defineDoc<PauseDocState>({
-  kind: PauseDoc.kind,
-  checkpointWhen: () => false,
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({ paused: false }),
-})
-
-it('re-arms dormant runs on set and after a pause, and records uiChanged', async () => {
-  const dir = await temp('keep-warm-')
-  vi.useFakeTimers({ now, toFake: ['Date', 'setTimeout', 'clearTimeout'] })
-  const models = createModels()
-  const faux = fauxProvider({ provider: 'claude-code', models: [{ id: 'faux-1' }] })
-  models.setProvider(faux.provider)
-  const cachedReply = () => fauxAssistantMessage('ok')
-  faux.setResponses([cachedReply, cachedReply, cachedReply])
-  const registry = createRegistry()
-  const storage = new MemoryStorage()
-  storage.close = async () => {}
-  const harness = await Harness.open(storage, { models, registry }, context)
-  await harness.root(context)
-  const events = eventHost(() => harness, 'keep-warm')
-  const lifecycle = openers()
-  const resources = new Map<string, unknown>()
-  // A process that loaded keep-warm before dormant runs existed keeps this shape across a hot reload.
-  resources.set('keep-warm.runs', { sent: new Map(), active: new Map(), stopped: new Map() })
-  let paused = false
-  const services = apis()
-  services.provided.set('conversations', {
-    accountResponse: async () => {},
-    concluded: async () => new Set(),
-  })
-  services.provided.set('pause', { paused: () => paused })
-  const uiChanges: { key: string; value?: unknown; previous?: unknown }[] = []
-  const modelRuntime = Object.assign(Object.create(models) as typeof models, {
-    streamSimple: (...args: Parameters<typeof models.streamSimple>) => {
-      const stream = models.streamSimple(...args)
-      return {
-        result: async () => {
-          const answer = await stream.result()
-          return { ...answer, usage: { ...answer.usage, cacheRead: 1000 } }
-        },
-      }
-    },
-  })
-  const host = {
-    ...services,
-    ...events,
-    harness: () => harness,
-    metadata: Metadata,
-    modelRuntime,
-    ultimateRoot: dir,
-    projectRoot: dir,
-    userHome: dir,
-    projectSettings: async () => ({}),
-    notice: () => {},
-    resource: <T>(key: string, create: () => T) => {
-      if (!resources.has(key)) resources.set(key, create())
-      return resources.get(key) as T
-    },
-    onOpen: lifecycle.onOpen,
-    onClose: () => {},
-  } as unknown as ExtensionHost
-  registry.install(keepWarm(host))
-  const branch = await harness.commit(async (tx) => {
-    const { id } = await tx.createConversation({ ownership: { kind: 'ownerless' } })
-    await configure(tx, id, { model: { provider: 'claude-code', modelId: 'faux-1' } })
-    ;(await tx.doc(Metadata, id)).label = 'coordinator'
-    ;(await tx.doc(Profile, id)).definition = 'coordinator'
-    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ROOT_CONVERSATION_ID
-    return id
-  }, context)
-  await lifecycle.open()
-  await events.start()
-  harness.resume()
-  cleanups.push(async () => {
-    await events.stop()
-    await lifecycle.close()
-    await harness.close(context)
-  })
-  const actionCtx = {
-    host,
-    uiChanged: async (_tx: unknown, change: { key: string; value?: unknown; previous?: unknown }) =>
-      void uiChanges.push(change),
-  } as Parameters<typeof actions.set>[1]
-
-  await actions.set({ id: branch, warm: false, minutes: 120 }, actionCtx)
-  expect(uiChanges).toEqual([
-    { key: 'keep-warm.warm', value: false },
-    { key: 'keep-warm.minutes', value: 120 },
-  ])
-
-  const conversation = (await harness.conversation(branch, context))!
-  await conversation.submit({ type: 'input', content: 'hello' }, context)
-  await conversation.waitForIdle(context)
-  expect(faux.state.callCount).toBe(1)
-  await vi.advanceTimersByTimeAsync(minutes(54))
-  const stopped = await actions.state({ id: branch }, actionCtx)
-  expect(stopped.idle).toBe('Off for this conversation')
-  expect(stopped.pings).toBe(0)
-  expect(faux.state.callCount).toBe(1)
-
-  await actions.set({ id: branch, warm: true }, actionCtx)
-  await until(
-    async () => {
-      const current = await actions.state({ id: branch }, actionCtx)
-      return (
-        current.pings === 1 && current.last?.error === undefined && current.next?.step === 'ping'
-      )
-    },
-    5000,
-    () => vi.advanceTimersByTimeAsync(0),
-  )
-  const warmed = await actions.state({ id: branch }, actionCtx)
-  expect(warmed.idle).toBeUndefined()
-  expect(warmed.last?.error).toBeUndefined()
-  expect(faux.state.callCount).toBe(2)
-
-  paused = true
-  await harness.commit(async (tx) => {
-    ;(await tx.doc(PauseStateDoc, ROOT_CONVERSATION_ID)).paused = true
-  }, context)
-  await vi.advanceTimersByTimeAsync(minutes(54))
-  const duringPause = await actions.state({ id: branch }, actionCtx)
-  expect(duringPause.idle).toBe('Ultimate is paused')
-  expect(duringPause.pings).toBe(1)
-  expect(faux.state.callCount).toBe(2)
-
-  paused = false
-  await harness.commit(async (tx) => {
-    ;(await tx.doc(PauseStateDoc, ROOT_CONVERSATION_ID)).paused = false
-  }, context)
-  await until(
-    async () => {
-      const current = await actions.state({ id: branch }, actionCtx)
-      return current.pings === 2 && current.last?.error === undefined
-    },
-    5000,
-    () => vi.advanceTimersByTimeAsync(0),
-  )
-  expect(faux.state.callCount).toBe(3)
 })

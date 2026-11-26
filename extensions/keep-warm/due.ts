@@ -28,7 +28,12 @@ export type Situation = {
 
 export type Decision = Step | { stop: string }
 
-export const DEFAULTS = { warm: false, compact: false, minutes: 30, compactTokens: 150_000 }
+export const DEFAULTS = {
+  warm: false,
+  compact: false,
+  minutes: 30,
+  compactTokens: 150_000,
+}
 const HOUR_MS = 3_600_000
 
 export function resolvePolicy(
@@ -98,9 +103,27 @@ export function decide(situation: Situation, policy: Policy): Decision {
           : `No request for ${duration(policy.warmMs)}`,
     }
   if (situation.tokens < policy.minCompactTokens)
-    return { stop: `Too small to compact (under ${Math.round(policy.minCompactTokens / 1000)}k)` }
+    return {
+      stop: `Too small to compact (under ${Math.round(policy.minCompactTokens / 1000)}k)`,
+    }
   if (situation.compactedSinceRequest) return { stop: 'Compacted' }
   return 'compact'
+}
+
+export function timeline(
+  request: WarmDocState['request'],
+  last: WarmDocState['last'],
+  model: { provider: string; id: string },
+): Pick<Situation, 'realRequestAt' | 'lastCacheRequestAt'> | { stop: string } {
+  if (!request) return { stop: 'Waiting for the next request' }
+  if (request.provider !== model.provider || request.model !== model.id)
+    return { stop: 'Model changed' }
+  if (request.uncached) return { stop: 'The last request used no cache' }
+  if (!last || last.at < request.at || last.provider !== model.provider || last.model !== model.id)
+    return { realRequestAt: request.at, lastCacheRequestAt: request.at }
+  if (last.error !== undefined) return { stop: `Ping failed: ${last.error}` }
+  if ((last.read ?? 0) + (last.write ?? 0) === 0) return { stop: 'Ping found no cache' }
+  return { realRequestAt: request.at, lastCacheRequestAt: last.at }
 }
 
 type Streak = NonNullable<WarmDocState['streak']>

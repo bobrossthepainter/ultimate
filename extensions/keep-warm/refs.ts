@@ -31,6 +31,10 @@ export type WarmDocState = {
   off?: true
   /** The user's latest input to this standing agent (ms): its warm window counts from here. */
   inputAt?: number
+  /** Its latest answered request: when it was sent, on which model, and whether it read or wrote the cache. */
+  request?: { at: number; provider: string; model: string; uncached?: true }
+  /** The `keep-warm.ping` task that sleeps until its next step; any other one that wakes ends. */
+  waker?: TaskId
   /** The latest ping attempt, failed or not. */
   last?: Ping
   pings?: number
