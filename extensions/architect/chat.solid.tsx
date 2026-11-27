@@ -8,8 +8,8 @@ import {
   api,
   cn,
   Conversation,
-  ConversationScope,
   errorMessage,
+  ScopedConversation,
   useConversationSummary,
   useDocOf,
 } from '@/sdk/solid'
@@ -160,14 +160,10 @@ export function ChatPanel(props: {
         </Match>
         <Match when={!(starting() && !stale()) && chat()?.id}>
           {(id) => (
-            <Show when={id()} keyed>
-              {(scoped) => (
-                <ConversationScope value={scoped}>
-                  <Intro version={chat()?.version} />
-                  <Conversation variant="dock" />
-                </ConversationScope>
-              )}
-            </Show>
+            <ScopedConversation id={id()}>
+              <Intro version={chat()?.version} />
+              <Conversation variant="dock" />
+            </ScopedConversation>
           )}
         </Match>
       </Switch>
