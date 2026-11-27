@@ -120,6 +120,7 @@ export function cleanEnv(extra: NodeJS.ProcessEnv = {}) {
     ...Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !key.startsWith('ULTIMATE_')),
     ),
+    ULTIMATE_AGY_COMMAND: process.env.ULTIMATE_AGY_COMMAND,
     ...extra,
   }
 }

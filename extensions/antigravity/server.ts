@@ -44,8 +44,7 @@ export function noProxyWithLoopback(env: NodeJS.ProcessEnv): string | undefined 
 function keepLoopbackOffProxies() {
   const value = noProxyWithLoopback(process.env)
   if (value === undefined) return
-  process.env.no_proxy = value
-  process.env.NO_PROXY = value
+  process.env[process.env.no_proxy === undefined ? 'NO_PROXY' : 'no_proxy'] = value
 }
 
 type Cost = Model<'google-generative-ai'>['cost']
