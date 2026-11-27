@@ -331,3 +331,15 @@ so branches adding divergences in parallel do not edit the same lines.
 - Why: the user runs workers on the lead family; this was an untracked local override until upstream began tracking
   the overlay file
 - Upstream: local-only
+
+### Antigravity provider kept
+
+- Touches: `extensions/antigravity/` (restored from upstream's `fe1c9caa^`, its executable read from `acp`'s
+  `ULTIMATE_AGY_COMMAND`), `shared/extension-api.ts` (`antigravity` in `defaultOff`), `docs/settings.md`; the
+  host-local exec allowlist in `vite.config.ts` still names it
+- Why: the user decided to keep running Gemini models from the `agy` login as normal Ultimate models (card 751,
+  "Restore, separate account"). Wrapping `agy` this way is against Google's consumer terms, which is why upstream
+  removed it; the user accepts that risk and runs it only with a separate Google account signed into `agy`, which can
+  be suspended. Each upstream merge must re-check it against `agy` and relay changes (`agy -p`, `agy models`,
+  `CLOUD_CODE_URL`, Code Assist frames) and against `acp`, which shares the login
+- Upstream: local-only (never a give-back candidate)

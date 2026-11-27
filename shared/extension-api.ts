@@ -50,6 +50,7 @@ export const defaultOff: readonly string[] = [
   'voice-live',
   'voice-chatgpt',
   'acp',
+  'antigravity',
   'push',
   'wire',
   'diagrams',
